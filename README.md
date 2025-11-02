@@ -35,19 +35,15 @@ DACLE solves the information overload problem for crypto traders by:
 
 ## 📚 Documentation Structure
 
-### **Start Here:**
+### **Essential Documents:**
 
-1. **[START_HERE.md](START_HERE.md)** - Complete overview and quick start guide
-2. **[UPDATE_SUMMARY.md](UPDATE_SUMMARY.md)** - Latest changes and improvements
-3. **[README_CLEAN.md](README_CLEAN.md)** - Full system analysis and design
+1. **[IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)** - Step-by-step build guide with phases and timeline
+2. **[SYSTEM_SPECIFICATION.md](SYSTEM_SPECIFICATION.md)** - Complete technical specifications and architecture
+3. **[DACLE_INTEGRATION_GUIDE.md](DACLE_INTEGRATION_GUIDE.md)** - Knowledge management integration guide
 
-### **Deep Dive:**
+### **Archive:**
 
-4. **[DACLE_INTEGRATION_GUIDE.md](DACLE_INTEGRATION_GUIDE.md)** - Complete knowledge management integration
-5. **[CRITICAL_UPDATE_davids_real_strategy_CLEAN.md](CRITICAL_UPDATE_davids_real_strategy_CLEAN.md)** - Trading strategy analysis
-6. **[QUICK_DECISION_GUIDE_CLEAN.md](QUICK_DECISION_GUIDE_CLEAN.md)** - Implementation decision framework
-7. **[COMPLETE_SYSTEM_ANALYSIS_FINAL.md](COMPLETE_SYSTEM_ANALYSIS_FINAL.md)** - Technical specifications
-8. **[DAVID_REAL_WORKFLOW_ANALYSIS.md](DAVID_REAL_WORKFLOW_ANALYSIS.md)** - Workflow documentation
+Historical documentation and analysis available in `/archive/` folder
 
 ---
 
@@ -126,24 +122,25 @@ Research Project → Store in Knowledge Base → Recall Instantly → Learn from
 
 ### **Time Savings:**
 - Current: 4-6 hours/day on research
-- With DACLE: 1 hour/day reading briefing + executing
-- **Saved: 3-5 hours/day** (90-150 hours/month)
+- With DACLE: 1-2 hours/day (briefing + execution)
+- **Saved: 2-4 hours/day** (60-120 hours/month)
 
 ### **Performance Improvement:**
-- Opportunity catch rate: 50% → 90%
-- Win rate: 70% → 85% (macro-aware timing)
-- Monthly trades: 7 → 14-18 (better filtering)
-- Average profit per trade: $5,000 → $5,500+
+- Execution rate: 50% → 75-90% (actually trade your own calls)
+- Win rate: 50% → 65-70% (better entry timing + position sizing)
+- Prevented catastrophic losses: No more $5K wipeouts
+- Pattern recognition: Learn from every trade
 
-### **Financial Impact:**
-- **Conservative**: +$31,000/month
-- **Realistic**: +$49,000/month
-- **Optimistic**: +$90,000/month (with newsletter)
-- **ROI**: 3,500% - 10,000%+
+### **Financial Impact (Realistic Projections):**
+- **Phase 1 (Month 3)**: $2,500 → $3,500-4,000/month (+40-60%)
+- **Phase 2 (Month 6)**: $2,500 → $5,000/month (+100%)
+- **Phase 3 (Month 12)**: $2,500 → $8,000-10,000/month (+220-300%)
+- **ROI**: 1,500% - 2,000%+ monthly return on tool costs
 
-### **Cost:**
-- Essential tools: $150/month
-- Premium tools: $870/month (add later)
+### **Cost (Start Small, Scale Up):**
+- **Phase 1**: $150/month (Discord bot, database, APIs)
+- **Phase 2**: $200-300/month (add automation tools)
+- **Phase 3**: $400-500/month (premium features if justified)
 - Economic calendars: **FREE** (all 4)
 
 ---
@@ -224,58 +221,59 @@ Research Project → Store in Knowledge Base → Recall Instantly → Learn from
 
 ## 📈 Implementation Phases
 
-### **Phase 1: Foundation (Week 1-2)**
-- ✅ Knowledge base setup
-- ✅ Economic calendar monitoring
-- ✅ Discord bot for alerts
-- ✅ Basic data pipeline
+### **Phase 1: Core Engine (Months 1-3)**
+**Goal**: Double income from $2,500 → $5,000/month • Budget: $150/month
 
-### **Phase 2: Core Automation (Week 3-4)**
-- [ ] Discord monitoring (Austin, Seb, Phobia)
-- [ ] Twitter tracking
-- [ ] DeFiLlama integration
-- [ ] Daily opportunity digest
+- [ ] **Discord Aggregation Engine** (Week 1-2) - Monitor 8 researchers, save 40 min/day
+- [ ] **Conviction Scoring System** (Week 2-3) - 1-10 scale for all opportunities
+- [ ] **Position Size Calculator** (Week 3-4) - Prevent catastrophic losses
+- [ ] **Market Sentiment Dashboard** (Week 4-5) - BTC.D, USDT.D, OTHERS.D tracking
+- [ ] **Daily Briefing** (Week 5-6) - 10-minute read replaces 4 hours research
 
-### **Phase 3: Intelligence Layer (Week 5-6)**
-- [ ] Pattern recognition engine
-- [ ] Semantic search implementation
-- [ ] Conviction scoring algorithm
-- [ ] Performance tracking
+### **Phase 2: Automation Layer (Months 4-6)**
+**Goal**: Triple income to $7,500/month • Budget: $200-300/month
 
-### **Phase 4: Optimization (Week 7-8+)**
-- [ ] Technical analysis automation
-- [ ] Advanced pattern discovery
-- [ ] Newsletter automation (optional)
-- [ ] Community features (optional)
+- [ ] TA Level Detection - Auto-detect S/R, supply/demand zones
+- [ ] Entry/Exit Alerts - Real-time price notifications
+- [ ] Alphabot Integration - Aggregate all signals
+- [ ] Notion Auto-Population - Sync research automatically
+- [ ] Execution Tracker - Track calls vs. actual trades
+
+### **Phase 3: Intelligence Layer (Months 7-12)**
+**Goal**: 4-5x income to $10-12K/month • Budget: $400-500/month
+
+- [ ] Pattern Recognition - Identify winning setups from history
+- [ ] Missed Opportunity Analysis - Learn from untaken trades
+- [ ] Performance Analytics - Win rate by setup type, researcher, sector
+- [ ] Advanced TA (Optional) - FVG, OB, liquidity sweeps
 
 ---
 
 ## 🎯 Success Metrics
 
-### **Month 1-2 (Foundation):**
-- System aggregates 50+ signals/day ✅
-- Daily briefing delivered every morning ✅
-- Macro alerts working ✅
-- Time saved: 1-2 hours/day
+### **Phase 1 (Month 3):**
+- Execution rate: 50% → 65-75% of own calls
+- Win rate: 50% → 55-60%
+- Monthly income: $2,500 → $3,500-4,000
+- Time saved: 1.5-2 hours/day
+- No catastrophic losses (>$1,000)
+- System pays for itself
 
-### **Month 3-4 (Optimization):**
-- Catch 70% of opportunities (up from 50%)
-- Monthly profit: $45K+ (up from $35K)
-- Win rate maintained: 70%+
-- ROI on system: 5x+
+### **Phase 2 (Month 6):**
+- Execution rate: 75-85% of calls
+- Win rate: 60-65%
+- Monthly income: $2,500 → $5,000 (100% increase)
+- Time saved: 2-3 hours/day
+- Portfolio: $10K → $15-20K
+- ROI: 1,566%+
 
-### **Month 5-6 (Mastery):**
-- Catch 85% of opportunities
-- Monthly profit: $55K-65K
-- Win rate improved: 75%+
-- ROI on system: 30x+
-
-### **Month 7-12 (Scale):**
-- Catch 90% of opportunities
-- Monthly profit: $75K+
-- Win rate improved: 78-80%
-- Newsletter/community launched
-- ROI on system: 50x+
+### **Phase 3 (Month 12):**
+- Execution rate: 85-90% of calls
+- Win rate: 65-70%
+- Monthly income: $2,500 → $8,000-10,000 (220-300% increase)
+- Time saved: 3-4 hours/day
+- Portfolio: $30-50K
+- ROI: 1,733%+
 
 ---
 
@@ -303,19 +301,17 @@ This is a personal knowledge management system. While the codebase is open for l
 
 ## 🚀 Getting Started
 
-### **For David (Project Owner):**
-1. Read [START_HERE.md](START_HERE.md) (5 minutes)
-2. Review [DACLE_INTEGRATION_GUIDE.md](DACLE_INTEGRATION_GUIDE.md) (20 minutes)
-3. Choose implementation option (A, B, or C)
-4. Confirm budget and timeline
-5. Let's build! 🔥
+### **Quick Start (10 minutes):**
+1. Read this README for project overview
+2. Review [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) for phased build plan
+3. Check [SYSTEM_SPECIFICATION.md](SYSTEM_SPECIFICATION.md) for technical details
 
 ### **For Developers:**
 1. Clone this repository
-2. Read [COMPLETE_SYSTEM_ANALYSIS_FINAL.md](COMPLETE_SYSTEM_ANALYSIS_FINAL.md)
-3. Review technical specifications
-4. Check implementation checklist
-5. See `/schemas` and `/workflows` for details
+2. Review [SYSTEM_SPECIFICATION.md](SYSTEM_SPECIFICATION.md) for complete architecture
+3. Follow [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md) for phase-by-phase development
+4. Check implementation checklist in the guides
+5. See [DACLE_INTEGRATION_GUIDE.md](DACLE_INTEGRATION_GUIDE.md) for knowledge base integration
 
 ---
 
@@ -340,10 +336,31 @@ A second brain for crypto trading that remembers everything, learns from every t
 
 ---
 
-**Status**: Foundation established • Knowledge base designed • Ready to build
-**Next**: Phase 1 implementation • Economic calendar integration • Signal aggregation
+---
+
+## 📂 Project Structure
+
+```
+dacle/
+├── README.md                      # This file - project overview
+├── IMPLEMENTATION_GUIDE.md        # Phase-by-phase build guide
+├── SYSTEM_SPECIFICATION.md        # Complete technical specs
+├── DACLE_INTEGRATION_GUIDE.md     # Knowledge management integration
+├── LICENSE                        # MIT License
+├── archive/                       # Historical documentation
+│   ├── README_CLEAN.md           # Previous README version
+│   ├── START_HERE.md             # Original start guide
+│   └── ...                       # Other archived docs
+└── docs/                          # Additional documentation
+
+```
+
+---
+
+**Status**: Foundation phase • Documentation complete • Ready for Phase 1 development
+**Next Steps**: Discord bot development • Conviction scoring system • Position calculator
 
 ---
 
 *Last Updated: November 2, 2025*
-*Version: 1.0.0 - Initial Foundation*
+*Version: 1.0.0 - Foundation & Planning Complete*
