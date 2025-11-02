@@ -59,20 +59,28 @@ class DiscordConfig:
 
 
 @dataclass
-class AnthropicConfig:
-    """Anthropic API configuration"""
+class TogetherConfig:
+    """Together.ai API configuration"""
 
     api_key: str
+    model: str
+    embedding_model: str
 
     @classmethod
-    def from_env(cls) -> "AnthropicConfig":
-        """Load Anthropic config from environment variables"""
-        api_key = os.getenv("ANTHROPIC_API_KEY")
+    def from_env(cls) -> "TogetherConfig":
+        """Load Together.ai config from environment variables"""
+        api_key = os.getenv("TOGETHER_API_KEY")
 
         if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY not set in environment")
+            raise ValueError("TOGETHER_API_KEY not set in environment")
 
-        return cls(api_key=api_key)
+        # Default models - can be overridden in .env
+        model = os.getenv("TOGETHER_MODEL", "meta-llama/Llama-3.3-70B-Instruct-Turbo")
+        embedding_model = os.getenv(
+            "TOGETHER_EMBEDDING_MODEL", "togethercomputer/m2-bert-80M-8k-retrieval"
+        )
+
+        return cls(api_key=api_key, model=model, embedding_model=embedding_model)
 
 
 @dataclass
@@ -96,7 +104,7 @@ class AppConfig:
     log_level: str
     supabase: SupabaseConfig
     discord: DiscordConfig
-    anthropic: AnthropicConfig
+    together: TogetherConfig
     redis: RedisConfig
 
     @classmethod
@@ -107,7 +115,7 @@ class AppConfig:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             supabase=SupabaseConfig.from_env(),
             discord=DiscordConfig.from_env(),
-            anthropic=AnthropicConfig.from_env(),
+            together=TogetherConfig.from_env(),
             redis=RedisConfig.from_env(),
         )
 
@@ -153,9 +161,9 @@ def get_discord_config() -> DiscordConfig:
     return get_config().discord
 
 
-def get_anthropic_config() -> AnthropicConfig:
-    """Get Anthropic configuration"""
-    return get_config().anthropic
+def get_together_config() -> TogetherConfig:
+    """Get Together.ai configuration"""
+    return get_config().together
 
 
 def get_redis_config() -> RedisConfig:
