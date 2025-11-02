@@ -222,7 +222,7 @@ Research Project → Store in Knowledge Base → Recall Instantly → Learn from
 ## 📈 Implementation Phases
 
 ### **Phase 1: Core Engine (Months 1-3)**
-**Goal**: Double income from $2,500 → $5,000/month • Budget: $150/month
+**Goal**: Increase income to $3,500-4,000/month (+40-60%) • Budget: $150/month
 
 - [ ] **Discord Aggregation Engine** (Week 1-2) - Monitor 8 researchers, save 40 min/day
 - [ ] **Conviction Scoring System** (Week 2-3) - 1-10 scale for all opportunities
@@ -231,7 +231,7 @@ Research Project → Store in Knowledge Base → Recall Instantly → Learn from
 - [ ] **Daily Briefing** (Week 5-6) - 10-minute read replaces 4 hours research
 
 ### **Phase 2: Automation Layer (Months 4-6)**
-**Goal**: Triple income to $7,500/month • Budget: $200-300/month
+**Goal**: Double income to $5,000/month • Budget: $200-300/month
 
 - [ ] TA Level Detection - Auto-detect S/R, supply/demand zones
 - [ ] Entry/Exit Alerts - Real-time price notifications
