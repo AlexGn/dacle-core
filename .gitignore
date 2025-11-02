@@ -1,0 +1,72 @@
+# DACLE - Second Brain Knowledge Base
+# Git Ignore File
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Temporary files
+*.tmp
+*.temp
+*~
+.#*
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+.atom/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dependencies
+node_modules/
+jspm_packages/
+
+# Build outputs
+dist/
+build/
+out/
+
+# Database files (if local instances created)
+*.db
+*.sqlite
+*.sqlite3
+
+# API keys and secrets
+secrets/
+credentials/
+*.key
+*.pem
+
+# Personal notes (if you want to keep some things private)
+PRIVATE/
+personal-notes/
+
+# Backup files
+*.bak
+*.backup
+*_backup
+
+# Vector embeddings (can be regenerated)
+embeddings/
+*.vec
+
+# Cache
+.cache/
+*.cache
