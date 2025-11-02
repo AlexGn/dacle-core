@@ -168,12 +168,13 @@ Research Project → Store in Knowledge Base → Recall Instantly → Learn from
 │                   │                                       │
 │      ┌────────────┼────────────┐                        │
 │      ▼            ▼             ▼                        │
-│  ┌────────┐  ┌────────┐  ┌──────────────┐            │
-│  │ Vector │  │  Main  │  │    Cache     │            │
-│  │Database│  │Database│  │   (Redis)    │            │
-│  └────┬───┘  └────┬───┘  └──────┬───────┘            │
-│       │           │              │                       │
-│       └───────────┼──────────────┘                       │
+│  ┌─────────────────────────────┐  ┌──────────────┐   │
+│  │  Supabase (PostgreSQL)      │  │    Cache     │   │
+│  │  • Tables (main data)       │  │   (Redis)    │   │
+│  │  • pgvector (embeddings)    │  │              │   │
+│  └──────────────┬──────────────┘  └──────┬───────┘   │
+│                 │                         │             │
+│                 └─────────────────────────┘             │
 │                   │                                       │
 │                   ▼                                       │
 │  ┌────────────────────────────────────────────────┐    │
@@ -201,11 +202,11 @@ Research Project → Store in Knowledge Base → Recall Instantly → Learn from
 ## 🛠️ Tech Stack
 
 ### **Core Components:**
-- **Knowledge Base**: MongoDB (main storage) + ChromaDB (vectors)
-- **Search**: Semantic search with embeddings (OpenAI/Anthropic)
+- **Knowledge Base**: Supabase (PostgreSQL + pgvector for unified storage & vectors)
+- **Search**: Semantic search with pgvector embeddings (Anthropic)
 - **Processing**: Python-based data pipelines
 - **Caching**: Redis for performance
-- **Monitoring**: Discord bots + Twitter API
+- **Monitoring**: Discord bots (manual forward) + Twitter API
 - **LLM Integration**: Claude (Anthropic) for analysis
 
 ### **Data Sources:**
