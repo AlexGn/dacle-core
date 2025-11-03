@@ -4,8 +4,9 @@ Monitors Discord messages for crypto project mentions and stores them in Supabas
 """
 
 import re
-from datetime import datetime
-from typing import Dict, List, Optional
+from collections import deque
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
 import discord
 from discord.ext import commands
@@ -30,12 +31,99 @@ class MessageMonitor(commands.Cog):
         "seb": {"name": "Sebastien", "tier": 1},  # Alias
     }
 
+    # Message context settings
+    CONTEXT_WINDOW_SECONDS = 30  # Look back 30 seconds for related messages
+    MAX_CACHED_MESSAGES_PER_USER = 5  # Keep last 5 messages per user
+
     def __init__(self, bot: commands.Bot):
         """Initialize the monitor cog"""
         self.bot = bot
         self.together = get_together_client()
         self.kb = get_knowledge_base()
+
+        # Message cache: {user_id: deque([(timestamp, content), ...])}
+        self.message_cache: Dict[int, deque] = {}
+
         logger.info("MessageMonitor cog initialized")
+
+    def _cache_message(self, user_id: int, content: str):
+        """
+        Cache a message for context aggregation
+
+        Args:
+            user_id: Discord user ID
+            content: Message content
+        """
+        if user_id not in self.message_cache:
+            self.message_cache[user_id] = deque(maxlen=self.MAX_CACHED_MESSAGES_PER_USER)
+
+        # Add message with timestamp
+        self.message_cache[user_id].append((datetime.now(), content))
+
+    def _get_recent_context(
+        self, user_id: int, current_message: str, time_window_seconds: int = None
+    ) -> str:
+        """
+        Get aggregated context from recent messages by the same user
+
+        Args:
+            user_id: Discord user ID
+            current_message: Current message content
+            time_window_seconds: Time window to look back (default: CONTEXT_WINDOW_SECONDS)
+
+        Returns:
+            Aggregated message content from recent context
+        """
+        if time_window_seconds is None:
+            time_window_seconds = self.CONTEXT_WINDOW_SECONDS
+
+        # Start with current message
+        aggregated_content = current_message
+
+        # Check if user has cached messages
+        if user_id not in self.message_cache:
+            return aggregated_content
+
+        # Get cutoff time
+        cutoff_time = datetime.now() - timedelta(seconds=time_window_seconds)
+
+        # Collect recent messages within time window (excluding current one)
+        recent_messages = []
+        for timestamp, content in self.message_cache[user_id]:
+            if timestamp >= cutoff_time and content != current_message:
+                recent_messages.append(content)
+
+        # If we have recent messages (other than current), prepend them
+        if recent_messages:
+            logger.info(
+                f"Found {len(recent_messages)} recent message(s) from user {user_id} "
+                f"within {time_window_seconds}s window"
+            )
+            # Combine: older messages first, then current message
+            aggregated_content = "\n".join(recent_messages + [current_message])
+
+        return aggregated_content
+
+    def _cleanup_old_messages(self):
+        """
+        Clean up messages older than 5 minutes from cache to prevent memory bloat
+        """
+        cutoff_time = datetime.now() - timedelta(minutes=5)
+        cleaned_users = []
+
+        for user_id, messages in self.message_cache.items():
+            # Filter out old messages
+            messages_to_keep = deque(
+                [(ts, content) for ts, content in messages if ts >= cutoff_time],
+                maxlen=self.MAX_CACHED_MESSAGES_PER_USER,
+            )
+
+            if len(messages_to_keep) < len(messages):
+                self.message_cache[user_id] = messages_to_keep
+                cleaned_users.append(user_id)
+
+        if cleaned_users:
+            logger.debug(f"Cleaned old messages from {len(cleaned_users)} user(s)")
 
     def _detect_researcher(self, author_name: str, content: str) -> Optional[str]:
         """
@@ -205,7 +293,15 @@ If no crypto projects mentioned, return: []
         if not message.guild or message.guild.id != self.bot.private_server_id:
             return
 
-        # Detect researcher
+        # Cache this message for context aggregation
+        self._cache_message(message.author.id, message.content)
+
+        # Periodically clean up old messages (every ~20th message)
+        import random
+        if random.randint(1, 20) == 1:
+            self._cleanup_old_messages()
+
+        # Detect researcher (check both username and content)
         researcher_name = self._detect_researcher(
             message.author.name, message.content
         )
@@ -218,11 +314,23 @@ If no crypto projects mentioned, return: []
             f"📨 Message from {researcher_name} in #{message.channel.name}: {message.content[:100]}"
         )
 
-        # Extract projects using AI
-        projects = await self._extract_projects_with_ai(message.content)
+        # Get aggregated context (current message + recent messages from same user)
+        aggregated_content = self._get_recent_context(
+            message.author.id, message.content
+        )
+
+        # Log if we're using context from multiple messages
+        if aggregated_content != message.content:
+            logger.info(
+                f"🔗 Using aggregated context from multiple messages "
+                f"(length: {len(aggregated_content)} chars)"
+            )
+
+        # Extract projects using AI (from aggregated content)
+        projects = await self._extract_projects_with_ai(aggregated_content)
 
         if not projects:
-            logger.debug(f"No projects found in message from {researcher_name}")
+            logger.debug(f"No projects found in message(s) from {researcher_name}")
             return
 
         # Store each mention
@@ -234,7 +342,7 @@ If no crypto projects mentioned, return: []
                 await self._store_mention(
                     project_name=project_name,
                     researcher_name=researcher_name,
-                    content=message.content,
+                    content=aggregated_content,  # Store full context
                     symbol=symbol,
                 )
 
