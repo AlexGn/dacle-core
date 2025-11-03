@@ -94,3 +94,12 @@ env/
 
 # Redis dump
 dump.rdb
+
+# Bot runtime files
+bot.log
+bot.pid
+test_manual.py
+
+# Temporary test files
+test_*.py
+scratch_*.py
