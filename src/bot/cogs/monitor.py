@@ -316,9 +316,9 @@ If no crypto projects mentioned, return: []
             logger.info(f"  type: {message.type}")
             logger.info(f"  flags: {message.flags}")
 
-            # Check if this is a forwarded message
-            if message.flags.is_forwarded:
-                logger.info("  ⚠️  IS_FORWARDED_MESSAGE flag detected!")
+            # Check if this is a forwarded message (flag value 16384)
+            if message.flags.value & 16384:
+                logger.info("  ⚠️  IS_FORWARDED_MESSAGE flag (16384) detected!")
 
             # Try to log ALL attributes of the message object
             logger.info("  --- ALL MESSAGE ATTRIBUTES ---")
