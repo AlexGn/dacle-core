@@ -303,9 +303,10 @@ If no crypto projects mentioned, return: []
         # Extract actual message content (handle forwarded messages)
         message_content = message.content
 
-        # Check if this is a forwarded message (log for tracking)
+        # Skip forwarded messages - researchers will use copy-paste workflow
         if not message_content.strip() and message.flags.value & 16384:
-            logger.info(f"📨 Forwarded message detected from {message.author.name} - will send help reply")
+            logger.debug(f"Ignoring forwarded message from {message.author.name} (no content accessible)")
+            return
 
         # Try to get referenced message content (for replies, not forwards)
         # Note: Forwards from other servers will fail with 404 - this is expected
@@ -328,21 +329,7 @@ If no crypto projects mentioned, return: []
                     logger.info(f"📎 Extracted content from embed: {message_content[:100]}")
                     break
 
-        # If message is a forward (flag 16384) with no content, send helpful reply
-        if not message_content.strip() and message.flags.value & 16384:
-            try:
-                await message.reply(
-                    "⚠️ **I can't read forwarded messages** (Discord API limitation).\n\n"
-                    "Instead, please:\n"
-                    "1️⃣ **Copy** the message content\n"
-                    "2️⃣ **Paste** it here\n"
-                    "3️⃣ Add your tag: `#austin`, `#phobia`, or `#sebastien`\n\n"
-                    "Then I'll capture it! 🤖",
-                    mention_author=False
-                )
-                logger.info(f"📤 Sent forwarded message help reply to {message.author.name}")
-            except Exception as e:
-                logger.warning(f"Failed to send help reply: {e}")
+        # Note: Forwarded messages (flag 16384) are ignored - researchers use copy-paste workflow
 
         # Cache this message for context aggregation (use extracted content)
         self._cache_message(message.author.id, message_content)
