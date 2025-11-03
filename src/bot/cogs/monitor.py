@@ -303,69 +303,22 @@ If no crypto projects mentioned, return: []
         # Extract actual message content (handle forwarded messages)
         message_content = message.content
 
-        # Debug: Log ALL message properties when content is empty (to diagnose forwards)
-        if not message_content.strip():
-            logger.info("=" * 60)
-            logger.info("🔍 EMPTY MESSAGE - DEBUGGING ALL PROPERTIES")
-            logger.info(f"  content: '{message.content}'")
-            logger.info(f"  system_content: '{message.system_content}'")
-            logger.info(f"  clean_content: '{message.clean_content}'")
-            logger.info(f"  reference: {message.reference}")
-            logger.info(f"  embeds: {len(message.embeds)} embed(s)")
-            logger.info(f"  attachments: {len(message.attachments)} attachment(s)")
-            logger.info(f"  type: {message.type}")
-            logger.info(f"  flags: {message.flags}")
+        # Check if this is a forwarded message (log for tracking)
+        if not message_content.strip() and message.flags.value & 16384:
+            logger.info(f"📨 Forwarded message detected from {message.author.name} - will send help reply")
 
-            # Check if this is a forwarded message (flag value 16384)
-            if message.flags.value & 16384:
-                logger.info("  ⚠️  IS_FORWARDED_MESSAGE flag (16384) detected!")
-
-            # Try to log ALL attributes of the message object
-            logger.info("  --- ALL MESSAGE ATTRIBUTES ---")
-            for attr in dir(message):
-                if not attr.startswith('_'):
-                    try:
-                        value = getattr(message, attr)
-                        if not callable(value):
-                            logger.info(f"    {attr}: {repr(value)[:100]}")
-                    except:
-                        pass
-
-            if message.embeds:
-                for i, embed in enumerate(message.embeds):
-                    logger.info(f"  --- Embed {i} ---")
-                    logger.info(f"    type: {embed.type}")
-                    logger.info(f"    title: {embed.title}")
-                    logger.info(f"    description: {embed.description}")
-                    logger.info(f"    url: {embed.url}")
-                    logger.info(f"    author: {embed.author}")
-                    logger.info(f"    fields: {len(embed.fields or [])} field(s)")
-            logger.info("=" * 60)
-
-        # Debug: Check if message has reference (forwarded/replied) or embeds
-        if message.reference:
-            logger.info(
-                f"🔗 Message has reference: resolved={'Yes' if message.reference.resolved else 'No'}, "
-                f"content_empty={not message_content.strip()}"
-            )
-
-        # If message is forwarded (has reference) and content is empty, get referenced content
-        if message.reference and not message_content.strip():
+        # Try to get referenced message content (for replies, not forwards)
+        # Note: Forwards from other servers will fail with 404 - this is expected
+        if message.reference and not message_content.strip() and not (message.flags.value & 16384):
             try:
-                # Try to fetch the referenced message if not auto-resolved
-                if not message.reference.resolved:
-                    logger.info("📥 Fetching referenced message...")
-                    referenced_msg = await message.channel.fetch_message(message.reference.message_id)
-                else:
+                # Only try for non-forwarded messages (replies)
+                if message.reference.resolved:
                     referenced_msg = message.reference.resolved
-
-                if referenced_msg and referenced_msg.content:
-                    message_content = referenced_msg.content
-                    logger.info(
-                        f"📨 Forwarded message detected, extracted content: {message_content[:100]}"
-                    )
+                    if referenced_msg and referenced_msg.content:
+                        message_content = referenced_msg.content
+                        logger.info(f"📨 Extracted content from reply reference: {message_content[:100]}")
             except Exception as e:
-                logger.warning(f"⚠️  Failed to extract forwarded message content: {e}")
+                logger.debug(f"Could not extract referenced message content: {e}")
 
         # If still no content, check embeds (forwarded messages might use embeds)
         if not message_content.strip() and message.embeds:
@@ -374,6 +327,22 @@ If no crypto projects mentioned, return: []
                     message_content = embed.description
                     logger.info(f"📎 Extracted content from embed: {message_content[:100]}")
                     break
+
+        # If message is a forward (flag 16384) with no content, send helpful reply
+        if not message_content.strip() and message.flags.value & 16384:
+            try:
+                await message.reply(
+                    "⚠️ **I can't read forwarded messages** (Discord API limitation).\n\n"
+                    "Instead, please:\n"
+                    "1️⃣ **Copy** the message content\n"
+                    "2️⃣ **Paste** it here\n"
+                    "3️⃣ Add your tag: `#austin`, `#phobia`, or `#sebastien`\n\n"
+                    "Then I'll capture it! 🤖",
+                    mention_author=False
+                )
+                logger.info(f"📤 Sent forwarded message help reply to {message.author.name}")
+            except Exception as e:
+                logger.warning(f"Failed to send help reply: {e}")
 
         # Cache this message for context aggregation (use extracted content)
         self._cache_message(message.author.id, message_content)
