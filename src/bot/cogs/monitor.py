@@ -143,6 +143,13 @@ class MessageMonitor(commands.Cog):
                 logger.info(f"Detected researcher via hashtag: #{key} -> {info['name']}")
                 return info["name"]
 
+        # Also check for @mention (e.g., @austin, @phobia)
+        # Note: @ alone is enough, as Discord converts @austin to <@USER_ID> but user might type it
+        for key, info in self.RESEARCHERS.items():
+            if f"@{key}" in content_lower:
+                logger.info(f"Detected researcher via @mention: @{key} -> {info['name']}")
+                return info["name"]
+
         # Then check username
         author_lower = author_name.lower()
         for key, info in self.RESEARCHERS.items():
