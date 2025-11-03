@@ -296,11 +296,24 @@ If no crypto projects mentioned, return: []
         # Extract actual message content (handle forwarded messages)
         message_content = message.content
 
+        # Debug: Check if message has reference (forwarded/replied)
+        if message.reference:
+            logger.info(
+                f"🔗 Message has reference: resolved={'Yes' if message.reference.resolved else 'No'}, "
+                f"content_empty={not message_content.strip()}"
+            )
+
         # If message is forwarded (has reference) and content is empty, get referenced content
-        if message.reference and message.reference.resolved and not message_content.strip():
+        if message.reference and not message_content.strip():
             try:
-                referenced_msg = message.reference.resolved
-                if hasattr(referenced_msg, 'content') and referenced_msg.content:
+                # Try to fetch the referenced message if not auto-resolved
+                if not message.reference.resolved:
+                    logger.info("📥 Fetching referenced message...")
+                    referenced_msg = await message.channel.fetch_message(message.reference.message_id)
+                else:
+                    referenced_msg = message.reference.resolved
+
+                if referenced_msg and referenced_msg.content:
                     message_content = referenced_msg.content
                     logger.info(
                         f"📨 Forwarded message detected, extracted content: {message_content[:100]}"
