@@ -316,6 +316,21 @@ If no crypto projects mentioned, return: []
             logger.info(f"  type: {message.type}")
             logger.info(f"  flags: {message.flags}")
 
+            # Check if this is a forwarded message
+            if message.flags.is_forwarded:
+                logger.info("  ⚠️  IS_FORWARDED_MESSAGE flag detected!")
+
+            # Try to log ALL attributes of the message object
+            logger.info("  --- ALL MESSAGE ATTRIBUTES ---")
+            for attr in dir(message):
+                if not attr.startswith('_'):
+                    try:
+                        value = getattr(message, attr)
+                        if not callable(value):
+                            logger.info(f"    {attr}: {repr(value)[:100]}")
+                    except:
+                        pass
+
             if message.embeds:
                 for i, embed in enumerate(message.embeds):
                     logger.info(f"  --- Embed {i} ---")
