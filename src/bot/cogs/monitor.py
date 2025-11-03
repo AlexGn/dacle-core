@@ -293,17 +293,32 @@ If no crypto projects mentioned, return: []
         if not message.guild or message.guild.id != self.bot.private_server_id:
             return
 
-        # Cache this message for context aggregation
-        self._cache_message(message.author.id, message.content)
+        # Extract actual message content (handle forwarded messages)
+        message_content = message.content
+
+        # If message is forwarded (has reference) and content is empty, get referenced content
+        if message.reference and message.reference.resolved and not message_content.strip():
+            try:
+                referenced_msg = message.reference.resolved
+                if hasattr(referenced_msg, 'content') and referenced_msg.content:
+                    message_content = referenced_msg.content
+                    logger.info(
+                        f"📨 Forwarded message detected, extracted content: {message_content[:100]}"
+                    )
+            except Exception as e:
+                logger.warning(f"⚠️  Failed to extract forwarded message content: {e}")
+
+        # Cache this message for context aggregation (use extracted content)
+        self._cache_message(message.author.id, message_content)
 
         # Periodically clean up old messages (every ~20th message)
         import random
         if random.randint(1, 20) == 1:
             self._cleanup_old_messages()
 
-        # Detect researcher (check both username and content)
+        # Detect researcher (check both username and content - use extracted content)
         researcher_name = self._detect_researcher(
-            message.author.name, message.content
+            message.author.name, message_content
         )
 
         # Only process if from known researcher
@@ -311,16 +326,16 @@ If no crypto projects mentioned, return: []
             return
 
         logger.info(
-            f"📨 Message from {researcher_name} in #{message.channel.name}: {message.content[:100]}"
+            f"📨 Message from {researcher_name} in #{message.channel.name}: {message_content[:100]}"
         )
 
         # Get aggregated context (current message + recent messages from same user)
         aggregated_content = self._get_recent_context(
-            message.author.id, message.content
+            message.author.id, message_content
         )
 
         # Log if we're using context from multiple messages
-        if aggregated_content != message.content:
+        if aggregated_content != message_content:
             logger.info(
                 f"🔗 Using aggregated context from multiple messages "
                 f"(length: {len(aggregated_content)} chars)"
