@@ -296,12 +296,16 @@ If no crypto projects mentioned, return: []
         # Extract actual message content (handle forwarded messages)
         message_content = message.content
 
-        # Debug: Check if message has reference (forwarded/replied)
+        # Debug: Check if message has reference (forwarded/replied) or embeds
         if message.reference:
             logger.info(
                 f"🔗 Message has reference: resolved={'Yes' if message.reference.resolved else 'No'}, "
                 f"content_empty={not message_content.strip()}"
             )
+        if message.embeds:
+            logger.info(f"📎 Message has {len(message.embeds)} embed(s)")
+            for i, embed in enumerate(message.embeds):
+                logger.info(f"  Embed {i}: type={embed.type}, description_len={len(embed.description or '')}")
 
         # If message is forwarded (has reference) and content is empty, get referenced content
         if message.reference and not message_content.strip():
@@ -320,6 +324,14 @@ If no crypto projects mentioned, return: []
                     )
             except Exception as e:
                 logger.warning(f"⚠️  Failed to extract forwarded message content: {e}")
+
+        # If still no content, check embeds (forwarded messages might use embeds)
+        if not message_content.strip() and message.embeds:
+            for embed in message.embeds:
+                if embed.description:
+                    message_content = embed.description
+                    logger.info(f"📎 Extracted content from embed: {message_content[:100]}")
+                    break
 
         # Cache this message for context aggregation (use extracted content)
         self._cache_message(message.author.id, message_content)
