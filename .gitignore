@@ -104,3 +104,10 @@ bot.pid
 test_*.py
 scratch_*.py
 # Note: scripts/test_manual.py is tracked (proper script, not temporary)
+
+# Temporary markdown files at root (docs should be in docs/)
+/*_DIAGNOSIS.md
+/*_NOW.md
+/*_PLAN.md
+/TEMP_*.md
+/TODO_*.md
