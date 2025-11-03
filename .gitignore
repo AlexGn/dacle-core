@@ -98,8 +98,9 @@ dump.rdb
 # Bot runtime files
 bot.log
 bot.pid
-test_manual.py
+*.pid
 
 # Temporary test files
 test_*.py
 scratch_*.py
+# Note: scripts/test_manual.py is tracked (proper script, not temporary)
