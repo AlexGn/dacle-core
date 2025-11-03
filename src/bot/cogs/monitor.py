@@ -303,16 +303,36 @@ If no crypto projects mentioned, return: []
         # Extract actual message content (handle forwarded messages)
         message_content = message.content
 
+        # Debug: Log ALL message properties when content is empty (to diagnose forwards)
+        if not message_content.strip():
+            logger.info("=" * 60)
+            logger.info("🔍 EMPTY MESSAGE - DEBUGGING ALL PROPERTIES")
+            logger.info(f"  content: '{message.content}'")
+            logger.info(f"  system_content: '{message.system_content}'")
+            logger.info(f"  clean_content: '{message.clean_content}'")
+            logger.info(f"  reference: {message.reference}")
+            logger.info(f"  embeds: {len(message.embeds)} embed(s)")
+            logger.info(f"  attachments: {len(message.attachments)} attachment(s)")
+            logger.info(f"  type: {message.type}")
+            logger.info(f"  flags: {message.flags}")
+
+            if message.embeds:
+                for i, embed in enumerate(message.embeds):
+                    logger.info(f"  --- Embed {i} ---")
+                    logger.info(f"    type: {embed.type}")
+                    logger.info(f"    title: {embed.title}")
+                    logger.info(f"    description: {embed.description}")
+                    logger.info(f"    url: {embed.url}")
+                    logger.info(f"    author: {embed.author}")
+                    logger.info(f"    fields: {len(embed.fields or [])} field(s)")
+            logger.info("=" * 60)
+
         # Debug: Check if message has reference (forwarded/replied) or embeds
         if message.reference:
             logger.info(
                 f"🔗 Message has reference: resolved={'Yes' if message.reference.resolved else 'No'}, "
                 f"content_empty={not message_content.strip()}"
             )
-        if message.embeds:
-            logger.info(f"📎 Message has {len(message.embeds)} embed(s)")
-            for i, embed in enumerate(message.embeds):
-                logger.info(f"  Embed {i}: type={embed.type}, description_len={len(embed.description or '')}")
 
         # If message is forwarded (has reference) and content is empty, get referenced content
         if message.reference and not message_content.strip():
