@@ -71,6 +71,17 @@ class DACLEBot(commands.Bot):
         private_server = self.get_guild(self.private_server_id)
         if private_server:
             logger.info(f"✅ Found private server: {private_server.name}")
+
+            # List all channels the bot can see
+            logger.info(f"📋 Channels in {private_server.name}:")
+            for channel in private_server.text_channels:
+                perms = channel.permissions_for(private_server.me)
+                logger.info(
+                    f"  - #{channel.name}: "
+                    f"view={perms.view_channel}, "
+                    f"read_history={perms.read_message_history}, "
+                    f"send={perms.send_messages}"
+                )
         else:
             logger.warning(
                 f"⚠️  Private server (ID: {self.private_server_id}) not found!"
@@ -94,12 +105,17 @@ class DACLEBot(commands.Bot):
         if message.author.bot:
             return
 
+        # Log ALL messages for debugging (changed from debug to info)
+        logger.info(
+            f"📨 Message received from {message.author.name} in "
+            f"{'#' + message.channel.name if message.guild else 'DM'}: {message.content[:100]}"
+        )
+
         # Only process messages from the private server
         if message.guild and message.guild.id == self.private_server_id:
-            # Log for debugging (we'll process this in the monitor cog later)
-            logger.debug(
-                f"Message from {message.author.name} in #{message.channel.name}: {message.content[:100]}"
-            )
+            logger.info(f"✅ Message is from private server, will be processed")
+        else:
+            logger.warning(f"⚠️  Message NOT from private server (guild_id: {message.guild.id if message.guild else 'None'})")
 
         # Process commands (if any)
         await self.process_commands(message)
