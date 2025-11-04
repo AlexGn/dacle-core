@@ -15,6 +15,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from briefing.daily_briefing import DailyBriefingGenerator
 from knowledge.supabase_client import get_knowledge_base
 from knowledge.trade_logger import TradeLogger
 
@@ -31,6 +32,7 @@ class TradeCommands(commands.Cog):
         self.bot = bot
         self.kb = get_knowledge_base()
         self.trade_logger = TradeLogger(self.kb)
+        self.briefing_generator = DailyBriefingGenerator(self.kb)
         logger.info("TradeCommands cog initialized")
 
     @app_commands.command(name="trade-entry", description="Log a trade entry")
@@ -394,6 +396,64 @@ class TradeCommands(commands.Cog):
             logger.exception("Full traceback:")
             await interaction.followup.send(
                 f"❌ Error getting stats: {str(e)}", ephemeral=True
+            )
+
+    @app_commands.command(name="briefing", description="Get daily trading briefing")
+    @app_commands.describe(
+        hours="How many hours back to scan (default: 24)"
+    )
+    async def briefing(
+        self, interaction: discord.Interaction, hours: Optional[int] = 24
+    ):
+        """Generate and display daily trading briefing."""
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            # Generate briefing
+            briefing_data = self.briefing_generator.generate_briefing(
+                hours_lookback=hours,
+                max_opportunities=5,
+                min_conviction=6.0,
+            )
+
+            # Format as markdown
+            markdown = self.briefing_generator.format_as_markdown(briefing_data)
+
+            # Discord has 2000 char limit per message, so we might need to split
+            if len(markdown) <= 2000:
+                await interaction.followup.send(markdown, ephemeral=True)
+            else:
+                # Split into chunks
+                chunks = []
+                current_chunk = ""
+
+                for line in markdown.split("\n"):
+                    if len(current_chunk) + len(line) + 1 > 1900:  # Leave buffer
+                        chunks.append(current_chunk)
+                        current_chunk = line + "\n"
+                    else:
+                        current_chunk += line + "\n"
+
+                if current_chunk:
+                    chunks.append(current_chunk)
+
+                # Send first chunk as response
+                await interaction.followup.send(chunks[0], ephemeral=True)
+
+                # Send remaining chunks as follow-ups
+                for chunk in chunks[1:]:
+                    await interaction.followup.send(chunk, ephemeral=True)
+
+            logger.info(
+                f"Briefing generated for {interaction.user.name} "
+                f"({len(briefing_data['top_opportunities'])} opportunities)"
+            )
+
+        except Exception as e:
+            logger.error(f"Error generating briefing: {e}")
+            logger.exception("Full traceback:")
+            await interaction.followup.send(
+                f"❌ Error generating briefing: {str(e)}", ephemeral=True
             )
 
 

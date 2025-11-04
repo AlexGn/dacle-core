@@ -67,6 +67,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load trades cog: {e}")
 
+        # Load CryptoRank commands cog
+        try:
+            await self.load_extension("bot.cogs.cryptorank_commands")
+            logger.info("✅ Loaded cryptorank_commands cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load cryptorank_commands cog: {e}")
+
         # Sync slash commands with Discord
         try:
             synced = await self.tree.sync()
