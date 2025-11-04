@@ -39,6 +39,7 @@ packaging==25.0
 pandas==2.1.4
 pgvector==0.2.4
 pillow==11.3.0
+playwright==1.40.0
 pluggy==1.6.0
 postgrest==2.23.0
 propcache==0.4.1
