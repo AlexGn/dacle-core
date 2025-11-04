@@ -60,6 +60,20 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load monitor cog: {e}")
 
+        # Load trade commands cog
+        try:
+            await self.load_extension("bot.cogs.trades")
+            logger.info("✅ Loaded trades cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load trades cog: {e}")
+
+        # Sync slash commands with Discord
+        try:
+            synced = await self.tree.sync()
+            logger.info(f"✅ Synced {len(synced)} slash command(s)")
+        except Exception as e:
+            logger.error(f"❌ Failed to sync commands: {e}")
+
         logger.info("Setup complete")
 
     async def on_ready(self):
