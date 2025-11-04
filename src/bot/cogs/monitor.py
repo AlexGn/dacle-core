@@ -12,7 +12,9 @@ import discord
 from discord.ext import commands
 
 from ai.together_client import get_together_client
+from knowledge.knowledge_base import KnowledgeBase
 from knowledge.supabase_client import get_knowledge_base
+from scoring.mention_conviction_scorer import MentionConvictionScorer
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -41,10 +43,18 @@ class MessageMonitor(commands.Cog):
         self.together = get_together_client()
         self.kb = get_knowledge_base()
 
+        # Initialize conviction scorer with knowledge base
+        knowledge_base = KnowledgeBase(self.together, self.kb)
+        self.conviction_scorer = MentionConvictionScorer(
+            together_client=self.together,
+            knowledge_base=knowledge_base,
+            researcher_tiers={"Austin": 1, "Phobia": 1, "Sebastien": 1},
+        )
+
         # Message cache: {user_id: deque([(timestamp, content), ...])}
         self.message_cache: Dict[int, deque] = {}
 
-        logger.info("MessageMonitor cog initialized")
+        logger.info("MessageMonitor cog initialized with conviction scoring")
 
     def _cache_message(self, user_id: int, content: str):
         """
@@ -231,7 +241,7 @@ If no crypto projects mentioned, return: []
         symbol: Optional[str] = None,
     ):
         """
-        Store project mention in Supabase
+        Store project mention in Supabase with conviction scoring
 
         Args:
             project_name: Name of the project
@@ -257,14 +267,41 @@ If no crypto projects mentioned, return: []
                 logger.warning(f"Researcher not found: {researcher_name}")
                 return
 
-            # Create mention record
+            # Calculate conviction score using AI + knowledge base
+            logger.info(f"🤖 Calculating conviction score for {project_name}...")
+            conviction_score = self.conviction_scorer.score_mention(
+                message_text=content,
+                researcher_name=researcher_name,
+                project_name=project_name,
+                project_symbol=symbol,
+            )
+
+            logger.info(
+                f"📊 Conviction: {conviction_score.final_score}/10 "
+                f"(confidence: {conviction_score.confidence}, "
+                f"position: {conviction_score.position_size}%)"
+            )
+
+            # Prepare conviction data for database
+            conviction_data = {
+                "conviction_score": float(conviction_score.final_score),
+                "conviction_confidence": float(conviction_score.confidence),
+                "position_size": float(conviction_score.position_size),
+                "conviction_signals": conviction_score.conviction_signals,
+                "red_flags": conviction_score.red_flags,
+                "green_flags": conviction_score.green_flags,
+                "knowledge_citations": conviction_score.knowledge_citations,
+                "scoring_reasoning": conviction_score.reasoning,
+            }
+
+            # Create mention record with conviction scoring
             mention = self.kb.create_project_mention(
                 project_id=project["id"],
                 researcher_id=researcher["id"],
                 mentioned_at=datetime.now(),
                 context=content[:500],  # Limit context length
                 source="discord",
-                data={},
+                data=conviction_data,
             )
 
             # Generate and store embedding for semantic search
@@ -276,13 +313,23 @@ If no crypto projects mentioned, return: []
             self.kb.update_project(project["id"], {"embedding": embedding})
 
             logger.info(
-                f"✅ Stored mention: {project_name} by {researcher_name} (mention ID: {mention['id']})"
+                f"✅ Stored mention: {project_name} by {researcher_name} "
+                f"(mention ID: {mention['id']}, score: {conviction_score.final_score}/10)"
             )
+
+            # Log conviction details for visibility
+            if conviction_score.conviction_signals:
+                logger.info(f"  Signals: {', '.join(conviction_score.conviction_signals[:2])}")
+            if conviction_score.green_flags:
+                logger.info(f"  ✅ Green: {', '.join(conviction_score.green_flags[:2])}")
+            if conviction_score.red_flags:
+                logger.warning(f"  🚩 Red: {', '.join(conviction_score.red_flags[:2])}")
 
         except Exception as e:
             logger.error(
                 f"Error storing mention for {project_name} by {researcher_name}: {e}"
             )
+            logger.exception("Full traceback:")
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
