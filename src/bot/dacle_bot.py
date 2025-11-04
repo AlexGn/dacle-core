@@ -81,6 +81,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load otc_commands cog: {e}")
 
+        # Load daily briefing cog
+        try:
+            await self.load_extension("bot.cogs.briefing")
+            logger.info("✅ Loaded briefing cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load briefing cog: {e}")
+
         # Sync slash commands with Discord
         try:
             synced = await self.tree.sync()
