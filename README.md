@@ -85,6 +85,10 @@ dacle/
 │       └── logger.py                # Logging setup
 ├── docs/
 │   ├── PRD.md                       # Product requirements
+│   ├── analysis/
+│   │   ├── MASTER_AIRDROP_DATABASE.md           # 121 airdrop projects
+│   │   ├── AIRDROP_PRIORITY_MATRIX.md           # Prioritization framework
+│   │   └── AIRDROP_STRATEGY_EXTRACTION_TRACKER.md  # Progress tracking
 │   └── database/
 │       ├── schema.sql               # Database schema
 │       └── enable_rls.sql           # Security policies
