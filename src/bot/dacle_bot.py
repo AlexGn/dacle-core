@@ -40,9 +40,17 @@ class DACLEBot(commands.Bot):
             help_command=None,  # We'll create custom help
         )
 
-        # Load Discord config
-        self.config = get_discord_config()
-        self.private_server_id = int(self.config.private_server_id)
+        # Load Discord config with error handling
+        try:
+            self.config = get_discord_config()
+            self.private_server_id = int(self.config.private_server_id)
+        except ValueError as e:
+            logger.error(f"❌ Failed to load Discord config: {e}")
+            logger.error("Ensure DISCORD_BOT_TOKEN and DISCORD_PRIVATE_SERVER_ID are set in .env")
+            raise
+        except Exception as e:
+            logger.error(f"❌ Unexpected error loading config: {e}")
+            raise
 
         logger.info("DACLE Bot initialized")
 
@@ -164,15 +172,19 @@ def run_bot():
     """Main entry point to run the bot"""
     logger.info("Starting DACLE Discord Bot...")
 
-    # Create bot instance
-    bot = DACLEBot()
-
-    # Get Discord token
-    config = get_discord_config()
-
     try:
+        # Create bot instance (will load config in __init__)
+        bot = DACLEBot()
+
+        # Get Discord token
+        config = get_discord_config()
+
         # Run the bot
         bot.run(config.bot_token, log_handler=None)  # We use our own logger
+    except ValueError as e:
+        logger.error(f"❌ Configuration error: {e}")
+        logger.error("Please check your .env file and ensure all required variables are set")
+        sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
