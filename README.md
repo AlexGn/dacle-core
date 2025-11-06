@@ -6,6 +6,22 @@
 
 ## 🚀 Quick Start
 
+### For Development Sessions
+
+**Starting a new Claude Code session?**
+```bash
+bash scripts/start
+```
+
+This displays:
+- Infrastructure status (bot, dashboard, DB)
+- Recent git activity
+- Ready-to-copy context prompt for Claude Code
+
+See [.claude/session_start.md](.claude/session_start.md) for details.
+
+---
+
 ### Prerequisites
 - Python 3.9+
 - Discord bot configured (token in `.env`)
