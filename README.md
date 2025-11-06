@@ -180,9 +180,15 @@ LOG_LEVEL=INFO
 ## 📚 Documentation
 
 - **[PRD.md](docs/PRD.md)** - Product Requirements Document
-- **[STATUS.md](STATUS.md)** - Current project status
+- **[STATUS.md](docs/STATUS.md)** - Current project status
+- **[CHANGELOG.md](docs/CHANGELOG.md)** - Version history and updates
 - **[SYSTEM_SPECIFICATION.md](docs/references/SYSTEM_SPECIFICATION.md)** - Technical architecture
 - **[IMPLEMENTATION_GUIDE.md](docs/references/IMPLEMENTATION_GUIDE.md)** - Build guide
+
+### TGE Analysis System
+- **[5-Agent System README](.claude/agents/README.md)** - Complete agent workflow guide
+- **[MONAD Analysis Report](reports/MONAD_TGE_ANALYSIS_2025-11-06.md)** - First real-world analysis
+- **[HTML Report Viewer](reports/report-viewer.html)** - Apple-style interactive viewer
 
 ---
 
