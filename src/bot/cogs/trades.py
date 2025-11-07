@@ -14,7 +14,9 @@ from typing import Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
+from pydantic import ValidationError
 
+from bot.validation import TradeEntryInput, TradeExitInput
 from briefing.daily_briefing import DailyBriefingGenerator
 from knowledge.supabase_client import get_knowledge_base
 from knowledge.trade_logger import TradeLogger
@@ -56,53 +58,58 @@ class TradeCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True)
 
         try:
-            # Validate inputs
-            if entry_price <= 0:
-                await interaction.followup.send(
-                    "❌ Entry price must be greater than 0", ephemeral=True
-                )
-                return
-
-            if position_size <= 0:
-                await interaction.followup.send(
-                    "❌ Position size must be greater than 0", ephemeral=True
-                )
-                return
-
-            if conviction and (conviction < 1 or conviction > 10):
-                await interaction.followup.send(
-                    "❌ Conviction score must be between 1-10", ephemeral=True
-                )
-                return
-
-            # Log the trade
-            trade_id = self.trade_logger.log_entry(
-                project_symbol=symbol.upper(),
+            # Validate inputs using Pydantic (Security: CRITICAL-REL-001)
+            validated = TradeEntryInput(
+                symbol=symbol,
                 entry_price=entry_price,
-                position_size_usd=position_size,
-                conviction_score=conviction,
-                notes=notes,
+                position_size=position_size,
+                conviction=conviction,
+                notes=notes
+            )
+        except ValidationError as e:
+            # Return user-friendly validation errors
+            error_messages = []
+            for error in e.errors():
+                field = error['loc'][0]
+                msg = error['msg']
+                error_messages.append(f"**{field}**: {msg}")
+
+            await interaction.followup.send(
+                "❌ Invalid input:\n" + "\n".join(error_messages),
+                ephemeral=True
+            )
+            return
+
+        try:
+            # Log the trade with validated data
+            trade_id = self.trade_logger.log_entry(
+                project_symbol=validated.symbol,
+                entry_price=validated.entry_price,
+                position_size_usd=validated.position_size,
+                conviction_score=validated.conviction,
+                notes=validated.notes,
             )
 
-            # Create success embed
+            # Create success embed (use validated data)
             embed = discord.Embed(
                 title="✅ Trade Entry Logged",
-                description=f"Successfully logged entry for **{symbol.upper()}**",
+                description=f"Successfully logged entry for **{validated.symbol}**",
                 color=discord.Color.green(),
             )
 
             embed.add_field(name="Trade ID", value=f"`{trade_id[:13]}...`", inline=False)
-            embed.add_field(name="Symbol", value=symbol.upper(), inline=True)
-            embed.add_field(name="Entry Price", value=f"${entry_price:,.2f}", inline=True)
+            embed.add_field(name="Symbol", value=validated.symbol, inline=True)
+            embed.add_field(name="Entry Price", value=f"${validated.entry_price:,.2f}", inline=True)
             embed.add_field(
-                name="Position Size", value=f"${position_size:,.2f}", inline=True
+                name="Position Size", value=f"${validated.position_size:,.2f}", inline=True
             )
 
-            if conviction:
-                embed.add_field(name="Conviction", value=f"{conviction}/10", inline=True)
+            if validated.conviction:
+                embed.add_field(name="Conviction", value=f"{validated.conviction}/10", inline=True)
 
-            if notes:
-                embed.add_field(name="Notes", value=notes, inline=False)
+            if validated.notes:
+                # Safe to display - already validated
+                embed.add_field(name="Notes", value=validated.notes, inline=False)
 
             embed.set_footer(
                 text=f"To exit: /trade-exit trade_id:{trade_id[:13]}... <exit_price>"
@@ -111,15 +118,25 @@ class TradeCommands(commands.Cog):
             await interaction.followup.send(embed=embed, ephemeral=True)
 
             logger.info(
-                f"Trade entry logged via Discord: {symbol} @ ${entry_price} "
+                f"Trade entry logged via Discord: {validated.symbol} @ ${validated.entry_price} "
                 f"by {interaction.user.name}"
             )
 
         except Exception as e:
-            logger.error(f"Error logging trade entry: {e}")
-            logger.exception("Full traceback:")
+            # System error - log internally, return generic message (Security: MEDIUM-REL-003)
+            logger.error(
+                f"System error in trade_entry command",
+                exc_info=True,
+                extra={
+                    'user': interaction.user.name,
+                    'user_id': interaction.user.id,
+                    'symbol': validated.symbol if 'validated' in locals() else 'unknown'
+                }
+            )
             await interaction.followup.send(
-                f"❌ Error logging trade: {str(e)}", ephemeral=True
+                "❌ An error occurred while logging your trade. "
+                "The issue has been logged and will be investigated.",
+                ephemeral=True
             )
 
     @app_commands.command(name="trade-exit", description="Log a trade exit")
