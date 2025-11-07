@@ -15,6 +15,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from utils.config import get_discord_config
 from utils.logger import get_logger
+from monitoring.health import (
+    HealthCheckServer,
+    get_health_status,
+    run_periodic_health_checks,
+)
+from knowledge.supabase_client import get_supabase_client
 
 logger = get_logger(__name__)
 
@@ -110,6 +116,9 @@ class DACLEBot(commands.Bot):
         logger.info(f"✅ Bot connected as {self.user} (ID: {self.user.id})")
         logger.info(f"📡 Connected to {len(self.guilds)} guild(s)")
 
+        # Mark bot as ready for health checks (HIGH-REL-001)
+        get_health_status().set_bot_ready(True)
+
         # Verify we're in the private server
         private_server = self.get_guild(self.private_server_id)
         if private_server:
@@ -136,6 +145,11 @@ class DACLEBot(commands.Bot):
                 type=discord.ActivityType.watching, name="crypto signals 📊"
             )
         )
+
+        # Start periodic health checks for database and Redis
+        logger.info("Starting periodic health checks...")
+        supabase = get_supabase_client()
+        self.loop.create_task(run_periodic_health_checks(supabase, redis_client=None))
 
     async def on_message(self, message: discord.Message):
         """
@@ -172,6 +186,11 @@ def run_bot():
     """Main entry point to run the bot"""
     logger.info("Starting DACLE Discord Bot...")
 
+    # Start health check HTTP server (HIGH-REL-001)
+    health_server = HealthCheckServer(host="0.0.0.0", port=8080)
+    health_server.start()
+    logger.info("Health check server started on http://0.0.0.0:8080")
+
     try:
         # Create bot instance (will load config in __init__)
         bot = DACLEBot()
@@ -187,9 +206,14 @@ def run_bot():
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
+        health_server.stop()
     except Exception as e:
         logger.error(f"Bot crashed: {e}", exc_info=True)
+        health_server.stop()
         raise
+    finally:
+        # Mark bot as not ready on shutdown
+        get_health_status().set_bot_ready(False)
 
 
 if __name__ == "__main__":
