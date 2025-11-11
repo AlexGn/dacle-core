@@ -434,13 +434,13 @@ python scripts/test_connection.py
 - **[reports/README.md](reports/README.md)** - Feedback loop guide
 
 ### Real TGE Analysis Reports
-- **[MONAD Analysis](reports/MONAD_TGE_ANALYSIS_2025-11-06.md)** - 6.45/10 conviction score
-- **[HTML Report Viewer](reports/report-viewer.html)** - Apple-style interactive viewer
+- **[MONAD Analysis](reports/MONAD/MONAD_TGE_ANALYSIS_2025-11-06.md)** - 6.45/10 conviction score
+- **[HTML Report Viewer](reports/MONAD/report-viewer.html)** - Apple-style interactive viewer
 
 ### Session Documentation
 - **[docs/sessions/SESSION_18_PREMARKET_INTEGRATION.md](docs/sessions/SESSION_18_PREMARKET_INTEGRATION.md)** - Multi-platform OTC
 - **[docs/sessions/SESSION_18_QUICK_REFERENCE.md](docs/sessions/SESSION_18_QUICK_REFERENCE.md)** - Quick ref
-- **[docs/sessions/](docs/sessions/)** - All 27 session logs
+- **[Session Logs Directory](docs/sessions/)** - All implementation sessions
 
 ### Strategic Analysis
 - **[docs/analysis/MASTER_AIRDROP_DATABASE.md](docs/analysis/MASTER_AIRDROP_DATABASE.md)** - 121 projects
@@ -521,7 +521,7 @@ For questions about the system architecture or implementation, see documentation
 
 ## 📝 License
 
-See [LICENSE](docs/references/LICENSE)
+See [LICENSE](LICENSE)
 
 ---
 
