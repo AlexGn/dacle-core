@@ -439,13 +439,13 @@ python scripts/test_connection.py
 
 ### Session Documentation
 - **[docs/sessions/SESSION_18_PREMARKET_INTEGRATION.md](docs/sessions/SESSION_18_PREMARKET_INTEGRATION.md)** - Multi-platform OTC
-- **[docs/sessions/SESSION_18_QUICK_REFERENCE.md](docs/sessions/SESSION_18_QUICK_REFERENCE.md)** - Quick ref
-- **[Session Logs Directory](docs/sessions/)** - All implementation sessions
+- **[docs/archived/sessions/SESSION_18_QUICK_REFERENCE.md](docs/archived/sessions/SESSION_18_QUICK_REFERENCE.md)** - Quick ref
+- **[Session Logs Directory](docs/sessions/)** - Active session summaries
 
 ### Strategic Analysis
 - **[docs/analysis/MASTER_AIRDROP_DATABASE.md](docs/analysis/MASTER_AIRDROP_DATABASE.md)** - 121 projects
-- **[docs/analysis/FORCED_EXECUTION_FLOW.md](docs/analysis/FORCED_EXECUTION_FLOW.md)** - Execution trigger design
-- **[docs/analysis/WORKFLOW_VERIFICATION_WITH_SESSION_18.md](docs/analysis/WORKFLOW_VERIFICATION_WITH_SESSION_18.md)** - System validation
+- **[docs/archived/old_proposals/FORCED_EXECUTION_FLOW.md](docs/archived/old_proposals/FORCED_EXECUTION_FLOW.md)** - Execution trigger design (archived)
+- **[docs/archived/sessions/WORKFLOW_VERIFICATION_WITH_SESSION_18.md](docs/archived/sessions/WORKFLOW_VERIFICATION_WITH_SESSION_18.md)** - System validation (archived)
 
 ---
 
