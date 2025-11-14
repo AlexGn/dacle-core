@@ -15,11 +15,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.knowledge.supabase_client import get_knowledge_base
-from src.monitoring.health import (
-    HealthCheckServer,
-    get_health_status,
-    run_periodic_health_checks,
-)
+from src.monitoring.health import HealthCheckServer, get_health_status, run_periodic_health_checks
 from src.utils.config import get_discord_config
 from src.utils.logger import get_logger
 
