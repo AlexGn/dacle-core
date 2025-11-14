@@ -70,35 +70,35 @@ class DACLEBot(commands.Bot):
 
         # Load message monitor cog
         try:
-            await self.load_extension("bot.cogs.monitor")
+            await self.load_extension("src.bot.cogs.monitor")
             logger.info("✅ Loaded monitor cog")
         except Exception as e:
             logger.error(f"❌ Failed to load monitor cog: {e}")
 
         # Load trade commands cog
         try:
-            await self.load_extension("bot.cogs.trades")
+            await self.load_extension("src.bot.cogs.trades")
             logger.info("✅ Loaded trades cog")
         except Exception as e:
             logger.error(f"❌ Failed to load trades cog: {e}")
 
         # Load CryptoRank commands cog
         try:
-            await self.load_extension("bot.cogs.cryptorank_commands")
+            await self.load_extension("src.bot.cogs.cryptorank_commands")
             logger.info("✅ Loaded cryptorank_commands cog")
         except Exception as e:
             logger.error(f"❌ Failed to load cryptorank_commands cog: {e}")
 
         # Load Whales Market OTC commands cog
         try:
-            await self.load_extension("bot.cogs.otc_commands")
+            await self.load_extension("src.bot.cogs.otc_commands")
             logger.info("✅ Loaded otc_commands cog")
         except Exception as e:
             logger.error(f"❌ Failed to load otc_commands cog: {e}")
 
         # Load daily briefing cog
         try:
-            await self.load_extension("bot.cogs.briefing")
+            await self.load_extension("src.bot.cogs.briefing")
             logger.info("✅ Loaded briefing cog")
         except Exception as e:
             logger.error(f"❌ Failed to load briefing cog: {e}")
