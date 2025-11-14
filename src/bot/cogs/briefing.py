@@ -22,6 +22,8 @@ from briefing.macro_events import MacroEventsTracker
 from knowledge.supabase_client import get_knowledge_base
 from utils.config import SupabaseConfig
 from supabase import create_client
+from tge.alert_generator import TGEAlertGenerator
+from conviction.tge_pipeline import PipelineResult
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +46,9 @@ class BriefingCog(commands.Cog):
         self.generator = DailyBriefingGenerator(self.kb)
         self.formatter = BriefingDiscordFormatter()
 
+        # Initialize TGE alert generator (Session 30)
+        self.alert_generator = TGEAlertGenerator()
+
         # Initialize macro events tracker
         config = SupabaseConfig.from_env()
         supabase_client = create_client(config.url, config.key)
@@ -53,7 +58,7 @@ class BriefingCog(commands.Cog):
         # Format: {user_id: {"subscribed_at": datetime, "dm_channel": discord.DMChannel}}
         self.subscribers = {}
 
-        logger.info("BriefingCog initialized")
+        logger.info("BriefingCog initialized with TGE alert capabilities")
 
     async def cog_load(self):
         """Called when cog is loaded - start scheduled tasks."""
@@ -343,6 +348,105 @@ class BriefingCog(commands.Cog):
             embed.set_footer(text="Stay informed about market-moving events")
 
         return embed
+
+    async def send_tge_alert(
+        self,
+        pipeline_result: PipelineResult,
+        exchange_availability: Optional[dict] = None
+    ) -> dict:
+        """
+        Send TGE alert to all briefing subscribers.
+
+        This is called by the TGE scanner when a high-conviction opportunity
+        is detected (conviction ≥8.0/10).
+
+        Args:
+            pipeline_result: Full TGE analysis from pipeline
+            exchange_availability: Optional exchange status dict
+                {
+                    "mexc": bool,
+                    "hyperliquid": bool,
+                    "blofin": bool,
+                    "recommended": str
+                }
+
+        Returns:
+            {
+                "sent": int,  # Number of successful sends
+                "failed": int,  # Number of failures
+                "total_subscribers": int
+            }
+
+        Example:
+            result = await briefing_cog.send_tge_alert(pipeline_result)
+            logger.info(f"Alert sent to {result['sent']} subscribers")
+        """
+        logger.info(
+            f"🚨 Sending TGE alert for {pipeline_result.token_name} "
+            f"(conviction: {pipeline_result.final_conviction}/10)"
+        )
+
+        try:
+            # Generate alert embeds
+            embeds = self.alert_generator.generate_alert(
+                pipeline_result,
+                exchange_availability
+            )
+
+            logger.info(f"Generated {len(embeds)} alert embeds")
+
+            # Send to all subscribers
+            sent_count = 0
+            failed_count = 0
+
+            for user_id, sub_info in self.subscribers.items():
+                try:
+                    user = await self.bot.fetch_user(user_id)
+                    dm_channel = await user.create_dm()
+
+                    # Add urgent prefix message
+                    await dm_channel.send(
+                        f"🚨 **HIGH CONVICTION TGE ALERT** 🚨\n"
+                        f"**{pipeline_result.token_name}** scored **{pipeline_result.final_conviction}/10**\n"
+                        f"⏱️ **Execute or skip within 2 hours**"
+                    )
+
+                    # Send embeds
+                    await dm_channel.send(embeds=embeds)
+                    sent_count += 1
+
+                    logger.info(
+                        f"Sent TGE alert to user {sub_info.get('username', user_id)} "
+                        f"({user_id})"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Failed to send alert to user {user_id}: {e}")
+                    failed_count += 1
+
+            result = {
+                "sent": sent_count,
+                "failed": failed_count,
+                "total_subscribers": len(self.subscribers)
+            }
+
+            logger.info(
+                f"TGE alert sent: {sent_count} succeeded, {failed_count} failed "
+                f"(total subscribers: {len(self.subscribers)})"
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Error in send_tge_alert: {e}")
+            logger.exception("Full traceback:")
+
+            return {
+                "sent": 0,
+                "failed": 0,
+                "total_subscribers": len(self.subscribers),
+                "error": str(e)
+            }
 
 
 async def setup(bot: commands.Bot):
