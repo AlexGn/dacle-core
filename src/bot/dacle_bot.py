@@ -10,8 +10,9 @@ from typing import Optional
 import discord
 from discord.ext import commands
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add project root to path for imports
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
 
 from src.utils.config import get_discord_config
 from src.utils.logger import get_logger
@@ -20,7 +21,7 @@ from monitoring.health import (
     get_health_status,
     run_periodic_health_checks,
 )
-from src.knowledge.supabase_client import get_supabase_client
+from src.knowledge.supabase_client import get_knowledge_base
 
 logger = get_logger(__name__)
 
@@ -148,8 +149,8 @@ class DACLEBot(commands.Bot):
 
         # Start periodic health checks for database and Redis
         logger.info("Starting periodic health checks...")
-        supabase = get_supabase_client()
-        self.loop.create_task(run_periodic_health_checks(supabase, redis_client=None))
+        kb = get_knowledge_base()
+        self.loop.create_task(run_periodic_health_checks(kb, redis_client=None))
 
     async def on_message(self, message: discord.Message):
         """
