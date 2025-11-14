@@ -103,13 +103,8 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load briefing cog: {e}")
 
-        # Clear and sync slash commands with Discord
+        # Sync slash commands with Discord
         try:
-            # Clear all commands first (clean slate)
-            self.tree.clear_commands(guild=None)
-            logger.info("🧹 Cleared existing commands")
-
-            # Sync new commands
             synced = await self.tree.sync()
             logger.info(f"✅ Synced {len(synced)} slash command(s)")
         except Exception as e:
