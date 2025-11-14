@@ -13,14 +13,14 @@ from discord.ext import commands
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.config import get_discord_config
-from utils.logger import get_logger
+from src.utils.config import get_discord_config
+from src.utils.logger import get_logger
 from monitoring.health import (
     HealthCheckServer,
     get_health_status,
     run_periodic_health_checks,
 )
-from knowledge.supabase_client import get_supabase_client
+from src.knowledge.supabase_client import get_supabase_client
 
 logger = get_logger(__name__)
 

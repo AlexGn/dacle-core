@@ -16,10 +16,10 @@ from discord import app_commands
 from discord.ext import commands
 from pydantic import ValidationError
 
-from bot.validation import TradeEntryInput, TradeExitInput
-from briefing.daily_briefing import DailyBriefingGenerator
-from knowledge.supabase_client import get_knowledge_base
-from knowledge.trade_logger import TradeLogger
+from src.bot.validation import TradeEntryInput, TradeExitInput
+from src.briefing.daily_briefing import DailyBriefingGenerator
+from src.knowledge.supabase_client import get_knowledge_base
+from src.knowledge.trade_logger import TradeLogger
 
 logger = logging.getLogger(__name__)
 

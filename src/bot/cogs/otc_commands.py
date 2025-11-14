@@ -11,10 +11,10 @@ from typing import Optional
 import logging
 from datetime import datetime, timedelta
 
-from knowledge.supabase_client import get_knowledge_base
-from integrations.whalesmarket.otc_scanner import WhalesMarketScanner
+from src.knowledge.supabase_client import get_knowledge_base
+from src.integrations.whalesmarket.otc_scanner import WhalesMarketScanner
 from together import Together
-from utils.config import get_together_config
+from src.utils.config import get_together_config
 
 logger = logging.getLogger(__name__)
 

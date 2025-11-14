@@ -11,11 +11,11 @@ from typing import Optional
 import logging
 from datetime import datetime, timedelta
 
-from knowledge.supabase_client import get_knowledge_base
-from integrations.cryptorank.tge_scanner import TGEScanner
-from integrations.cryptorank.unlock_monitor import UnlockMonitor
+from src.knowledge.supabase_client import get_knowledge_base
+from src.integrations.cryptorank.tge_scanner import TGEScanner
+from src.integrations.cryptorank.unlock_monitor import UnlockMonitor
 from together import Together
-from utils.config import get_together_config
+from src.utils.config import get_together_config
 
 logger = logging.getLogger(__name__)
 

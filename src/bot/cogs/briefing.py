@@ -16,14 +16,14 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from briefing.daily_briefing import DailyBriefingGenerator
-from briefing.discord_formatter import BriefingDiscordFormatter
-from briefing.macro_events import MacroEventsTracker
-from knowledge.supabase_client import get_knowledge_base
-from utils.config import SupabaseConfig
+from src.briefing.daily_briefing import DailyBriefingGenerator
+from src.briefing.discord_formatter import BriefingDiscordFormatter
+from src.briefing.macro_events import MacroEventsTracker
+from src.knowledge.supabase_client import get_knowledge_base
+from src.utils.config import SupabaseConfig
 from supabase import create_client
-from tge.alert_generator import TGEAlertGenerator
-from conviction.tge_pipeline import PipelineResult
+from src.tge.alert_generator import TGEAlertGenerator
+from src.conviction.tge_pipeline import PipelineResult
 
 logger = logging.getLogger(__name__)
 

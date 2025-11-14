@@ -11,11 +11,11 @@ from typing import Dict, List, Optional, Tuple
 import discord
 from discord.ext import commands
 
-from ai.together_client import get_together_client
-from knowledge.knowledge_base import KnowledgeBase
-from knowledge.supabase_client import get_knowledge_base
-from scoring.mention_conviction_scorer import MentionConvictionScorer
-from utils.logger import get_logger
+from src.ai.together_client import get_together_client
+from src.knowledge.knowledge_base import KnowledgeBase
+from src.knowledge.supabase_client import get_knowledge_base
+from src.scoring.mention_conviction_scorer import MentionConvictionScorer
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
