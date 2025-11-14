@@ -193,14 +193,14 @@ class TradeCommands(commands.Cog):
 
             # Create success embed
             outcome_emoji = (
-                "🎉"
-                if result["outcome"] == "win"
-                else "😞" if result["outcome"] == "loss" else "😐"
+                "🎉" if result["outcome"] == "win" else "😞" if result["outcome"] == "loss" else "😐"
             )
             outcome_color = (
                 discord.Color.green()
                 if result["outcome"] == "win"
-                else discord.Color.red() if result["outcome"] == "loss" else discord.Color.greyple()
+                else discord.Color.red()
+                if result["outcome"] == "loss"
+                else discord.Color.greyple()
             )
 
             embed = discord.Embed(
