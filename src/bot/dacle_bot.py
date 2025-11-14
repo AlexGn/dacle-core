@@ -16,7 +16,7 @@ sys.path.insert(0, str(project_root))
 
 from src.utils.config import get_discord_config
 from src.utils.logger import get_logger
-from monitoring.health import (
+from src.monitoring.health import (
     HealthCheckServer,
     get_health_status,
     run_periodic_health_checks,
@@ -150,7 +150,8 @@ class DACLEBot(commands.Bot):
         # Start periodic health checks for database and Redis
         logger.info("Starting periodic health checks...")
         kb = get_knowledge_base()
-        self.loop.create_task(run_periodic_health_checks(kb, redis_client=None))
+        # Pass the actual Supabase client for health checks
+        self.loop.create_task(run_periodic_health_checks(kb.client, redis_client=None))
 
     async def on_message(self, message: discord.Message):
         """
