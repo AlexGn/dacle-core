@@ -60,7 +60,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - **POST-GENERATION VALIDATION** - Automated quality checks (5 sec, saves 15-30 min)
   - 5 checks: File locations, dashboard integration, template consistency, HTML data populated (Check 3B - Session 30), no misplaced files
   - Detects {{PLACEHOLDER}} tokens, generic text, [SYMBOL] tokens in HTML
-  - Script: `bash .claude/scripts/validate_report.sh TOKEN`
+  - Script: `bash scripts/validate_report.sh TOKEN`
 - **Template Consistency Rule** - Always use standard template (500+ lines)
   - PRE-TGE: Standard template with MONITOR styling
   - POST-TGE: Standard template with EXECUTE/SKIP styling
