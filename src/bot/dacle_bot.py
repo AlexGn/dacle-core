@@ -14,14 +14,14 @@ from discord.ext import commands
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.utils.config import get_discord_config
-from src.utils.logger import get_logger
+from src.knowledge.supabase_client import get_knowledge_base
 from src.monitoring.health import (
     HealthCheckServer,
     get_health_status,
     run_periodic_health_checks,
 )
-from src.knowledge.supabase_client import get_knowledge_base
+from src.utils.config import get_discord_config
+from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -136,15 +136,11 @@ class DACLEBot(commands.Bot):
                     f"send={perms.send_messages}"
                 )
         else:
-            logger.warning(
-                f"⚠️  Private server (ID: {self.private_server_id}) not found!"
-            )
+            logger.warning(f"⚠️  Private server (ID: {self.private_server_id}) not found!")
 
         # Set bot presence/status
         await self.change_presence(
-            activity=discord.Activity(
-                type=discord.ActivityType.watching, name="crypto signals 📊"
-            )
+            activity=discord.Activity(type=discord.ActivityType.watching, name="crypto signals 📊")
         )
 
         # Start periodic health checks for database and Redis
@@ -174,7 +170,9 @@ class DACLEBot(commands.Bot):
         if message.guild and message.guild.id == self.private_server_id:
             logger.info(f"✅ Message is from private server, will be processed")
         else:
-            logger.warning(f"⚠️  Message NOT from private server (guild_id: {message.guild.id if message.guild else 'None'})")
+            logger.warning(
+                f"⚠️  Message NOT from private server (guild_id: {message.guild.id if message.guild else 'None'})"
+            )
 
         # Process commands (if any)
         await self.process_commands(message)

@@ -15,6 +15,7 @@ def suppress_urllib3_warnings():
     # It's harmless - urllib3 still works correctly
     try:
         from urllib3.exceptions import NotOpenSSLWarning
+
         warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
     except ImportError:
         # urllib3 not installed or older version without NotOpenSSLWarning

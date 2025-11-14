@@ -15,15 +15,15 @@ from typing import Optional
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+from supabase import create_client
 
 from src.briefing.daily_briefing import DailyBriefingGenerator
 from src.briefing.discord_formatter import BriefingDiscordFormatter
 from src.briefing.macro_events import MacroEventsTracker
-from src.knowledge.supabase_client import get_knowledge_base
-from src.utils.config import SupabaseConfig
-from supabase import create_client
-from src.tge.alert_generator import TGEAlertGenerator
 from src.conviction.tge_pipeline import PipelineResult
+from src.knowledge.supabase_client import get_knowledge_base
+from src.tge.alert_generator import TGEAlertGenerator
+from src.utils.config import SupabaseConfig
 
 logger = logging.getLogger(__name__)
 
@@ -119,9 +119,7 @@ class BriefingCog(commands.Cog):
                     logger.error(f"Failed to send briefing to user {user_id}: {e}")
                     failed_count += 1
 
-            logger.info(
-                f"Daily briefing sent: {sent_count} succeeded, {failed_count} failed"
-            )
+            logger.info(f"Daily briefing sent: {sent_count} succeeded, {failed_count} failed")
 
         except Exception as e:
             logger.error(f"Error in daily briefing task: {e}")
@@ -134,13 +132,12 @@ class BriefingCog(commands.Cog):
         logger.info("Bot ready - daily briefing scheduler can start")
 
     @app_commands.command(
-        name="briefing",
-        description="Generate your daily crypto trading briefing"
+        name="briefing", description="Generate your daily crypto trading briefing"
     )
     @app_commands.describe(
         hours="How many hours back to scan for mentions (default: 24)",
         max_opportunities="Maximum opportunities to show (default: 5)",
-        min_conviction="Minimum conviction score to include (default: 6.0)"
+        min_conviction="Minimum conviction score to include (default: 6.0)",
     )
     async def briefing_command(
         self,
@@ -192,7 +189,7 @@ class BriefingCog(commands.Cog):
             else:
                 # Send in batches of 10
                 for i in range(0, len(embeds), 10):
-                    batch = embeds[i:i+10]
+                    batch = embeds[i : i + 10]
                     if i == 0:
                         await interaction.followup.send(embeds=batch)
                     else:
@@ -205,13 +202,11 @@ class BriefingCog(commands.Cog):
             logger.exception("Full traceback:")
 
             await interaction.followup.send(
-                "❌ Error generating briefing. Check logs for details.",
-                ephemeral=True
+                "❌ Error generating briefing. Check logs for details.", ephemeral=True
             )
 
     @app_commands.command(
-        name="briefing-subscribe",
-        description="Subscribe to daily briefing DMs at 8:00 AM EST"
+        name="briefing-subscribe", description="Subscribe to daily briefing DMs at 8:00 AM EST"
     )
     async def briefing_subscribe_command(self, interaction: discord.Interaction):
         """
@@ -224,8 +219,7 @@ class BriefingCog(commands.Cog):
 
         if user_id in self.subscribers:
             await interaction.response.send_message(
-                "✅ You're already subscribed to daily briefings!",
-                ephemeral=True
+                "✅ You're already subscribed to daily briefings!", ephemeral=True
             )
             return
 
@@ -246,12 +240,11 @@ class BriefingCog(commands.Cog):
             "• Execution reminders (high-conviction signals you haven't acted on)\n"
             "• Upcoming macro events\n\n"
             "Use `/briefing-unsubscribe` anytime to stop receiving briefings.",
-            ephemeral=True
+            ephemeral=True,
         )
 
     @app_commands.command(
-        name="briefing-unsubscribe",
-        description="Unsubscribe from daily briefing DMs"
+        name="briefing-unsubscribe", description="Unsubscribe from daily briefing DMs"
     )
     async def briefing_unsubscribe_command(self, interaction: discord.Interaction):
         """
@@ -264,8 +257,7 @@ class BriefingCog(commands.Cog):
 
         if user_id not in self.subscribers:
             await interaction.response.send_message(
-                "ℹ️ You're not subscribed to daily briefings.",
-                ephemeral=True
+                "ℹ️ You're not subscribed to daily briefings.", ephemeral=True
             )
             return
 
@@ -278,12 +270,11 @@ class BriefingCog(commands.Cog):
             "✅ **Unsubscribed from Daily Briefing**\n\n"
             "You'll no longer receive daily briefing DMs.\n"
             "You can still use `/briefing` anytime to generate a briefing on demand.",
-            ephemeral=True
+            ephemeral=True,
         )
 
     @app_commands.command(
-        name="briefing-subscribers",
-        description="[Admin] View current briefing subscribers"
+        name="briefing-subscribers", description="[Admin] View current briefing subscribers"
     )
     async def briefing_subscribers_command(self, interaction: discord.Interaction):
         """
@@ -296,10 +287,7 @@ class BriefingCog(commands.Cog):
         # For now, just show to everyone
 
         if not self.subscribers:
-            await interaction.response.send_message(
-                "ℹ️ No subscribers yet.",
-                ephemeral=True
-            )
+            await interaction.response.send_message("ℹ️ No subscribers yet.", ephemeral=True)
             return
 
         sub_list = []
@@ -319,7 +307,7 @@ class BriefingCog(commands.Cog):
             title="📅 Upcoming Macro Events",
             description=f"Important events in the next 7 days",
             color=discord.Color.purple(),
-            timestamp=datetime.now()
+            timestamp=datetime.now(),
         )
 
         for event in events[:10]:  # Max 10 events
@@ -336,11 +324,7 @@ class BriefingCog(commands.Cog):
             if projects:
                 value += f"\n💎 Affects: {', '.join(projects[:3])}"
 
-            embed.add_field(
-                name=date,
-                value=value,
-                inline=False
-            )
+            embed.add_field(name=date, value=value, inline=False)
 
         if len(events) > 10:
             embed.set_footer(text=f"Showing 10 of {len(events)} events")
@@ -350,9 +334,7 @@ class BriefingCog(commands.Cog):
         return embed
 
     async def send_tge_alert(
-        self,
-        pipeline_result: PipelineResult,
-        exchange_availability: Optional[dict] = None
+        self, pipeline_result: PipelineResult, exchange_availability: Optional[dict] = None
     ) -> dict:
         """
         Send TGE alert to all briefing subscribers.
@@ -388,10 +370,7 @@ class BriefingCog(commands.Cog):
 
         try:
             # Generate alert embeds
-            embeds = self.alert_generator.generate_alert(
-                pipeline_result,
-                exchange_availability
-            )
+            embeds = self.alert_generator.generate_alert(pipeline_result, exchange_availability)
 
             logger.info(f"Generated {len(embeds)} alert embeds")
 
@@ -427,7 +406,7 @@ class BriefingCog(commands.Cog):
             result = {
                 "sent": sent_count,
                 "failed": failed_count,
-                "total_subscribers": len(self.subscribers)
+                "total_subscribers": len(self.subscribers),
             }
 
             logger.info(
@@ -445,7 +424,7 @@ class BriefingCog(commands.Cog):
                 "sent": 0,
                 "failed": 0,
                 "total_subscribers": len(self.subscribers),
-                "error": str(e)
+                "error": str(e),
             }
 
 

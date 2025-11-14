@@ -11,13 +11,14 @@ import functools
 import logging
 import time
 from typing import Callable, TypeVar, cast
+
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
 # Type variable for generic function decoration
-F = TypeVar('F', bound=Callable)
+F = TypeVar("F", bound=Callable)
 
 
 def rate_limit(calls: int, period: int):
@@ -68,7 +69,7 @@ def get_retry_session(
     backoff_factor: float = 2.0,
     status_forcelist: tuple = (429, 500, 502, 503, 504),
     allowed_methods: tuple = ("GET", "POST"),
-) -> 'requests.Session':
+) -> "requests.Session":
     """
     Create a requests.Session with retry logic
 
@@ -120,7 +121,7 @@ def retry_with_backoff(
     max_attempts: int = 3,
     base_delay: float = 1.0,
     max_delay: float = 60.0,
-    exceptions: tuple = (Exception,)
+    exceptions: tuple = (Exception,),
 ):
     """
     Decorator to retry function calls with exponential backoff
@@ -145,6 +146,7 @@ def retry_with_backoff(
         Attempt 3: Wait 2s
         Attempt 4: Wait 4s (if max_attempts > 3)
     """
+
     def decorator(func: F) -> F:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -154,13 +156,11 @@ def retry_with_backoff(
                 except exceptions as e:
                     if attempt == max_attempts - 1:
                         # Last attempt failed, re-raise
-                        logger.error(
-                            f"{func.__name__} failed after {max_attempts} attempts: {e}"
-                        )
+                        logger.error(f"{func.__name__} failed after {max_attempts} attempts: {e}")
                         raise
 
                     # Calculate exponential backoff delay
-                    delay = min(base_delay * (2 ** attempt), max_delay)
+                    delay = min(base_delay * (2**attempt), max_delay)
 
                     logger.warning(
                         f"{func.__name__} failed (attempt {attempt + 1}/{max_attempts}): {e}. "

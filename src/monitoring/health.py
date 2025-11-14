@@ -181,9 +181,7 @@ class HealthCheckServer:
             self.server = HTTPServer((self.host, self.port), HealthCheckHandler)
             self.thread = threading.Thread(target=self._run_server, daemon=True)
             self.thread.start()
-            logger.info(
-                f"Health check server started on http://{self.host}:{self.port}"
-            )
+            logger.info(f"Health check server started on http://{self.host}:{self.port}")
             logger.info(f"  - Liveness:  http://{self.host}:{self.port}/health")
             logger.info(f"  - Readiness: http://{self.host}:{self.port}/ready")
             logger.info(f"  - Status:    http://{self.host}:{self.port}/status")
@@ -255,9 +253,7 @@ def check_redis_health(redis_client) -> bool:
         return False
 
 
-async def run_periodic_health_checks(
-    supabase_client, redis_client=None, interval: int = 30
-):
+async def run_periodic_health_checks(supabase_client, redis_client=None, interval: int = 30):
     """
     Run periodic health checks in the background
 

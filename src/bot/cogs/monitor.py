@@ -213,9 +213,7 @@ If no crypto projects mentioned, return: []
                 {"role": "user", "content": prompt},
             ]
 
-            response = self.together.chat_completion(
-                messages, temperature=0.3, max_tokens=300
-            )
+            response = self.together.chat_completion(messages, temperature=0.3, max_tokens=300)
 
             # Parse JSON response
             import json
@@ -305,9 +303,7 @@ If no crypto projects mentioned, return: []
             )
 
             # Generate and store embedding for semantic search
-            embedding = self.together.generate_embedding(
-                f"{project_name}: {content[:300]}"
-            )
+            embedding = self.together.generate_embedding(f"{project_name}: {content[:300]}")
 
             # Update project with embedding
             self.kb.update_project(project["id"], {"embedding": embedding})
@@ -326,9 +322,7 @@ If no crypto projects mentioned, return: []
                 logger.warning(f"  🚩 Red: {', '.join(conviction_score.red_flags[:2])}")
 
         except Exception as e:
-            logger.error(
-                f"Error storing mention for {project_name} by {researcher_name}: {e}"
-            )
+            logger.error(f"Error storing mention for {project_name} by {researcher_name}: {e}")
             logger.exception("Full traceback:")
 
     @commands.Cog.listener()
@@ -352,7 +346,9 @@ If no crypto projects mentioned, return: []
 
         # Skip forwarded messages - researchers will use copy-paste workflow
         if not message_content.strip() and message.flags.value & 16384:
-            logger.debug(f"Ignoring forwarded message from {message.author.name} (no content accessible)")
+            logger.debug(
+                f"Ignoring forwarded message from {message.author.name} (no content accessible)"
+            )
             return
 
         # Try to get referenced message content (for replies, not forwards)
@@ -364,7 +360,9 @@ If no crypto projects mentioned, return: []
                     referenced_msg = message.reference.resolved
                     if referenced_msg and referenced_msg.content:
                         message_content = referenced_msg.content
-                        logger.info(f"📨 Extracted content from reply reference: {message_content[:100]}")
+                        logger.info(
+                            f"📨 Extracted content from reply reference: {message_content[:100]}"
+                        )
             except Exception as e:
                 logger.debug(f"Could not extract referenced message content: {e}")
 
@@ -383,13 +381,12 @@ If no crypto projects mentioned, return: []
 
         # Periodically clean up old messages (every ~20th message)
         import random
+
         if random.randint(1, 20) == 1:
             self._cleanup_old_messages()
 
         # Detect researcher (check both username and content - use extracted content)
-        researcher_name = self._detect_researcher(
-            message.author.name, message_content
-        )
+        researcher_name = self._detect_researcher(message.author.name, message_content)
 
         # Only process if from known researcher
         if not researcher_name:
@@ -400,9 +397,7 @@ If no crypto projects mentioned, return: []
         )
 
         # Get aggregated context (current message + recent messages from same user)
-        aggregated_content = self._get_recent_context(
-            message.author.id, message_content
-        )
+        aggregated_content = self._get_recent_context(message.author.id, message_content)
 
         # Log if we're using context from multiple messages
         if aggregated_content != message_content:

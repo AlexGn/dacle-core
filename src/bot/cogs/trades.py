@@ -64,19 +64,18 @@ class TradeCommands(commands.Cog):
                 entry_price=entry_price,
                 position_size=position_size,
                 conviction=conviction,
-                notes=notes
+                notes=notes,
             )
         except ValidationError as e:
             # Return user-friendly validation errors
             error_messages = []
             for error in e.errors():
-                field = error['loc'][0]
-                msg = error['msg']
+                field = error["loc"][0]
+                msg = error["msg"]
                 error_messages.append(f"**{field}**: {msg}")
 
             await interaction.followup.send(
-                "❌ Invalid input:\n" + "\n".join(error_messages),
-                ephemeral=True
+                "❌ Invalid input:\n" + "\n".join(error_messages), ephemeral=True
             )
             return
 
@@ -111,9 +110,7 @@ class TradeCommands(commands.Cog):
                 # Safe to display - already validated
                 embed.add_field(name="Notes", value=validated.notes, inline=False)
 
-            embed.set_footer(
-                text=f"To exit: /trade-exit trade_id:{trade_id[:13]}... <exit_price>"
-            )
+            embed.set_footer(text=f"To exit: /trade-exit trade_id:{trade_id[:13]}... <exit_price>")
 
             await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -128,15 +125,15 @@ class TradeCommands(commands.Cog):
                 f"System error in trade_entry command",
                 exc_info=True,
                 extra={
-                    'user': interaction.user.name,
-                    'user_id': interaction.user.id,
-                    'symbol': validated.symbol if 'validated' in locals() else 'unknown'
-                }
+                    "user": interaction.user.name,
+                    "user_id": interaction.user.id,
+                    "symbol": validated.symbol if "validated" in locals() else "unknown",
+                },
             )
             await interaction.followup.send(
                 "❌ An error occurred while logging your trade. "
                 "The issue has been logged and will be investigated.",
-                ephemeral=True
+                ephemeral=True,
             )
 
     @app_commands.command(name="trade-exit", description="Log a trade exit")
@@ -167,16 +164,9 @@ class TradeCommands(commands.Cog):
 
             # Find full trade ID if partial provided
             if len(trade_id) < 36:  # Partial ID provided
-                result = (
-                    self.kb.client.table("trades")
-                    .select("id")
-                    .eq("status", "open")
-                    .execute()
-                )
+                result = self.kb.client.table("trades").select("id").eq("status", "open").execute()
 
-                matching_trades = [
-                    t["id"] for t in result.data if t["id"].startswith(trade_id)
-                ]
+                matching_trades = [t["id"] for t in result.data if t["id"].startswith(trade_id)]
 
                 if len(matching_trades) == 0:
                     await interaction.followup.send(
@@ -202,13 +192,15 @@ class TradeCommands(commands.Cog):
             )
 
             # Create success embed
-            outcome_emoji = "🎉" if result["outcome"] == "win" else "😞" if result["outcome"] == "loss" else "😐"
+            outcome_emoji = (
+                "🎉"
+                if result["outcome"] == "win"
+                else "😞" if result["outcome"] == "loss" else "😐"
+            )
             outcome_color = (
                 discord.Color.green()
                 if result["outcome"] == "win"
-                else discord.Color.red()
-                if result["outcome"] == "loss"
-                else discord.Color.greyple()
+                else discord.Color.red() if result["outcome"] == "loss" else discord.Color.greyple()
             )
 
             embed = discord.Embed(
@@ -222,13 +214,9 @@ class TradeCommands(commands.Cog):
                 value=f"${result['entry_price']:,.2f} → ${result['exit_price']:,.2f}",
                 inline=False,
             )
-            embed.add_field(
-                name="Return", value=f"{result['return_pct']:+.2f}%", inline=True
-            )
+            embed.add_field(name="Return", value=f"{result['return_pct']:+.2f}%", inline=True)
             embed.add_field(name="P/L", value=f"${result['pnl_usd']:+,.2f}", inline=True)
-            embed.add_field(
-                name="Held", value=f"{result['holding_days']:.1f} days", inline=True
-            )
+            embed.add_field(name="Held", value=f"{result['holding_days']:.1f} days", inline=True)
             embed.add_field(name="Exit Reason", value=reason, inline=True)
 
             if notes:
@@ -247,9 +235,7 @@ class TradeCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Error logging trade exit: {e}")
             logger.exception("Full traceback:")
-            await interaction.followup.send(
-                f"❌ Error logging exit: {str(e)}", ephemeral=True
-            )
+            await interaction.followup.send(f"❌ Error logging exit: {str(e)}", ephemeral=True)
 
     @app_commands.command(name="trades-open", description="List all open positions")
     async def trades_open(self, interaction: discord.Interaction):
@@ -268,9 +254,7 @@ class TradeCommands(commands.Cog):
             )
 
             if not result.data:
-                await interaction.followup.send(
-                    "📊 No open positions currently.", ephemeral=True
-                )
+                await interaction.followup.send("📊 No open positions currently.", ephemeral=True)
                 return
 
             trades = result.data
@@ -316,14 +300,10 @@ class TradeCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Error listing open trades: {e}")
             logger.exception("Full traceback:")
-            await interaction.followup.send(
-                f"❌ Error listing trades: {str(e)}", ephemeral=True
-            )
+            await interaction.followup.send(f"❌ Error listing trades: {str(e)}", ephemeral=True)
 
     @app_commands.command(name="trades-stats", description="Show trading performance stats")
-    @app_commands.describe(
-        researcher="Optional: Filter by researcher (Austin, Phobia, Sebastien)"
-    )
+    @app_commands.describe(researcher="Optional: Filter by researcher (Austin, Phobia, Sebastien)")
     async def trades_stats(
         self, interaction: discord.Interaction, researcher: Optional[str] = None
     ):
@@ -332,9 +312,7 @@ class TradeCommands(commands.Cog):
 
         try:
             # Get performance metrics
-            metrics = self.trade_logger.get_trade_performance(
-                researcher_name=researcher
-            )
+            metrics = self.trade_logger.get_trade_performance(researcher_name=researcher)
 
             if metrics.get("total_trades", 0) == 0:
                 msg = "📊 No trades found"
@@ -348,7 +326,9 @@ class TradeCommands(commands.Cog):
             if researcher:
                 title += f" - {researcher}"
 
-            color = discord.Color.green() if metrics.get("win_rate", 0) >= 50 else discord.Color.red()
+            color = (
+                discord.Color.green() if metrics.get("win_rate", 0) >= 50 else discord.Color.red()
+            )
 
             embed = discord.Embed(
                 title=title,
@@ -411,9 +391,7 @@ class TradeCommands(commands.Cog):
         except Exception as e:
             logger.error(f"Error getting trade stats: {e}")
             logger.exception("Full traceback:")
-            await interaction.followup.send(
-                f"❌ Error getting stats: {str(e)}", ephemeral=True
-            )
+            await interaction.followup.send(f"❌ Error getting stats: {str(e)}", ephemeral=True)
 
     # NOTE: /briefing command moved to BriefingCog (src/bot/cogs/briefing.py)
     # The BriefingCog has a more comprehensive implementation with:

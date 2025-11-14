@@ -11,7 +11,7 @@ Security: Addresses CRITICAL-REL-001 from security audit
 import re
 from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class TradeEntryInput(BaseModel):
@@ -53,8 +53,7 @@ class TradeEntryInput(BaseModel):
         v_upper = v.upper()
         if not re.match(r"^[A-Z0-9\-]+$", v_upper):
             raise ValueError(
-                "Symbol must be alphanumeric (A-Z, 0-9, -). "
-                f"Invalid characters detected in: {v}"
+                "Symbol must be alphanumeric (A-Z, 0-9, -). " f"Invalid characters detected in: {v}"
             )
         return v_upper
 
@@ -105,7 +104,9 @@ class TradeExitInput(BaseModel):
 
     model_config = ConfigDict(str_strip_whitespace=True)
 
-    trade_id: str = Field(..., min_length=8, max_length=36, description="Trade ID (full or partial)")
+    trade_id: str = Field(
+        ..., min_length=8, max_length=36, description="Trade ID (full or partial)"
+    )
     exit_price: float = Field(..., gt=0, lt=1_000_000_000, description="Exit price in USD")
     reason: str = Field(default="manual", max_length=50, description="Exit reason")
     notes: Optional[str] = Field(None, max_length=2000, description="Exit notes")
@@ -157,8 +158,7 @@ class TradeExitInput(BaseModel):
         v_lower = v.lower()
         if v_lower not in allowed_reasons:
             raise ValueError(
-                f"Exit reason must be one of: {', '.join(sorted(allowed_reasons))}. "
-                f"Got: {v}"
+                f"Exit reason must be one of: {', '.join(sorted(allowed_reasons))}. " f"Got: {v}"
             )
         return v_lower
 
@@ -201,9 +201,7 @@ class ProjectSymbolInput(BaseModel):
         """Validate symbol format (same as TradeEntryInput)"""
         v_upper = v.upper()
         if not re.match(r"^[A-Z0-9\-]+$", v_upper):
-            raise ValueError(
-                f"Symbol must be alphanumeric (A-Z, 0-9, -). Got: {v}"
-            )
+            raise ValueError(f"Symbol must be alphanumeric (A-Z, 0-9, -). Got: {v}")
         return v_upper
 
 
