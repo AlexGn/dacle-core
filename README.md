@@ -51,6 +51,11 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
   - **Session 25**: 3-tier analysis paths (FAST/STANDARD/REJECTION)
   - **Session 25**: Decision-first output format
   - **Session 25**: 50-70% speed improvement with 0% quality loss
+- **Agent 5** - Position Sizing & Risk Calculator
+  - Risk/reward ratio calculation (≥3.3:1 threshold)
+  - Position size recommendations (5-8% based on conviction)
+  - Exchange availability verification
+  - Entry window timing optimization
 
 **TGE Report Generation Workflow** (Sessions 28-30):
 - **PRE-GENERATION CHECKLIST** - 8-point verification (50 sec, saves 15-30 min)
@@ -188,6 +193,15 @@ Input: Token Symbol (e.g., "MONAD")
 │ • Confidence validation (HIGH/MEDIUM/LOW thresholds)        │
 │ • Data completeness check (missing fields = penalties)      │
 │ • Execution recommendation (EXECUTE/RESEARCH/REJECT)         │
+│ Output: execution_decision.json                             │
+└─────────────────────────────────────────────────────────────┘
+   ↓
+┌─────────────────────────────────────────────────────────────┐
+│ Agent 5: Position Sizing & Risk Calculator                  │
+│ • R/R ratio calculation (≥3.3:1 threshold)                  │
+│ • Position size recommendation (5-8% based on conviction)   │
+│ • Exchange availability verification                         │
+│ • Entry window timing optimization                           │
 │ Output: final_report.md (HTML + Markdown)                   │
 └─────────────────────────────────────────────────────────────┘
    ↓
@@ -275,6 +289,7 @@ dacle/
 │   │   ├── 2-tge-short-signal-executor.md
 │   │   ├── 3-conviction-scorer.md
 │   │   ├── 4-execution-reality-check.md
+│   │   ├── 5-position-sizing-risk-calculator.md
 │   │   ├── MASTER_WORKFLOW.md           # Complete workflow guide
 │   │   ├── EXECUTION_CHECKLIST.md       # Quality gates
 │   │   └── AGENT_IMPROVEMENTS.md        # v2.4 enhancements
@@ -412,7 +427,7 @@ python scripts/test_connection.py
 ## 🚀 Roadmap
 
 ### ✅ Completed (Sessions 1-25)
-- [x] **6-Agent TGE Analysis System v2.6** (Agents 0, 0.5, 1, 2, 3, 4 - optimized)
+- [x] **6-Agent TGE Analysis System v3.0** (Agents 0, 0.5, 1, 2, 3, 4, 5 - optimized)
 - [x] **Agent 4 Optimization** (50-70% speed improvement, fast-path protocol)
 - [x] **Multi-Platform OTC Integration** (Hyperliquid, Aevo, MEXC, Gate.io)
 - [x] **Feedback Loop System** (Agent-human collaboration)
