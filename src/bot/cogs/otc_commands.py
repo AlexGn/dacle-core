@@ -13,7 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 from together import Together
 
-from src.integrations.whalesmarket.otc_scanner import WhalesMarketScanner
+from src.integrations.whalesmarket.scanner import WhalesMarketScanner
 from src.knowledge.supabase_client import get_knowledge_base
 from src.utils.config import get_together_config
 
