@@ -22,13 +22,13 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v3.0 - November 2025)
+## 📊 Current Status (v3.4 - November 2025)
 
-**Phase**: Real-World Trade Validation Complete ✅ - System upgraded from B+ (85%) to A+ (97%)
-**Focus**: GAIB Trade Validation & Perplexity Feedback Loop (Post-Session 41)
-**Latest**: GAIB short validated David's perfect entry ($0.1602) - System error fixed (used ATH instead of listing price)
-**System**: 6-Agent TGE Analysis Pipeline v3.0 + Perplexity A+ (97%) scans (institutional-grade quality)
-**Performance**: High-conviction (9-10/10) analysis in **2 minutes** + 95%+ Fibonacci accuracy + 100% OTC coverage
+**Phase**: Arsh TA Integration v3.4 Complete ✅ - Phase 2 & 3 (Scoring + Learning Loop)
+**Focus**: TA Correlation Monitoring & Prospective Validation (Session 41)
+**Latest**: TA methodology integrated into Agent 2 (conviction scoring) + Agent 5 (position sizing) + Learning Loop foundation built
+**System**: 6-Agent TGE Analysis Pipeline v3.4 + Arsh TA (BTC/ETH/Macro overlay) + Perplexity A+ (97%)
+**Performance**: High-conviction (9-10/10) analysis in **2 minutes** + TA-aware position sizing (±1% overlay) + Correlation tracking ready
 **Dashboard**: http://localhost:8501 (3 pages operational) | Live: https://dacletge.netlify.app/
 
 ### 🎯 Real-World Validation Results
@@ -54,9 +54,38 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - **Entry Strategy**: Gap-up to $0.045-0.050 (4:1 R:R) OR skip if $0.025 (0.46:1 R:R)
 - **Predicted**: -45% to -55% dump in first week
 
+### 🎯 Arsh TA Integration v3.4 (Session 41)
+
+**Phase 2: TA Scoring & Position Sizing** ✅
+- **Agent 2**: Added macro_market_conditions scoring (±0.5 to conviction)
+- **Agent 5**: TA-aware position sizing overlay (±0.5-1% based on BTC/ETH structure)
+- **Pipeline**: Full TA data flow integration
+- **Testing**: 8/8 integration tests passing
+
+**Phase 3: Learning Loop Foundation** ✅
+- **Database**: `ta_correlation_tracker` schema with 4 helper views
+- **Scripts**: Logging (`log_ta_correlation.py`) + Analysis (`analyze_ta_correlation.py`)
+- **Workflows**: Daily/Weekly/Monthly procedures documented
+- **Goal**: Track TA signal accuracy to validate Arsh methodology (target: >80% accuracy)
+
+**Example Scenarios**:
+- **Perfect Alignment** (BTC↓ + ETH↓ + Bearish + Resistance): +2.0 conviction, 5% position
+- **TA Headwinds** (BTC↑ + ETH↑ + Bullish): -2.0 conviction, 3% position
+- **Neutral TA**: No adjustment, baseline 4% position
+
+**Files Created** (Session 41):
+- [scripts/schema/ta_correlation_tracker.sql](scripts/schema/ta_correlation_tracker.sql) - Database schema
+- [scripts/log_ta_correlation.py](scripts/log_ta_correlation.py) - Logging script
+- [scripts/analyze_ta_correlation.py](scripts/analyze_ta_correlation.py) - Analysis script
+- [docs/implementation/TA_LEARNING_LOOP.md](docs/implementation/TA_LEARNING_LOOP.md) - Technical guide
+- [docs/workflows/TA_CORRELATION_WORKFLOW.md](docs/workflows/TA_CORRELATION_WORKFLOW.md) - User workflow
+- [prompts/perplexity_single_token_analysis_v3.4_compressed.md](prompts/perplexity_single_token_analysis_v3.4_compressed.md) - Updated prompt
+
+**Next Phase**: Begin prospective TA tracking on next TGE discovery
+
 ### ✅ Production-Ready Features
 
-**6-Agent TGE Analysis System v2.7** (Optimized):
+**6-Agent TGE Analysis System v3.4** (Arsh TA Integration):
 - **Agent 0.5** - Knowledge Base Access Layer (semantic search, 950 lines)
 - **Agent 0** - Data Retrieval & Validation (1,790 lines, **11 OTC platforms** 🆕)
   - **Session 31**: 11 pre-market sources (Whales Market, Hyperliquid, Aster, 8 CEX pre-markets)
@@ -66,7 +95,10 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
   - **Session 31**: Platform-specific guidance (270 lines - red flags, best practices, limitations)
   - **Session 31**: Data coverage 78% → 92%+ (14-point improvement)
 - **Agent 1** - OTC Volume Analysis (multi-platform tracking)
-- **Agent 2** - TGE Short Signal Generation (pre-TGE scoring with dump pressure estimation 🆕)
+- **Agent 2** - TGE Short Signal Generation + **Arsh TA Scoring** 🆕 v3.4
+  - Pre-TGE scoring with dump pressure estimation
+  - Macro market conditions overlay (±0.5 conviction)
+  - BTC/ETH structure integration
 - **Agent 3** - Conviction Scoring (hybrid formula)
 - **Agent 4** - Execution Reality Check (fast-path optimization, 951 lines)
   - **Session 25**: 2-minute analysis for 9-10/10 conviction trades ⚡
@@ -74,9 +106,10 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
   - **Session 25**: 3-tier analysis paths (FAST/STANDARD/REJECTION)
   - **Session 25**: Decision-first output format
   - **Session 25**: 50-70% speed improvement with 0% quality loss
-- **Agent 5** - Position Sizing & Risk Calculator
+- **Agent 5** - Position Sizing & Risk Calculator + **TA Overlay** 🆕 v3.4
   - Risk/reward ratio calculation (≥3.3:1 threshold)
-  - Position size recommendations (5-8% based on conviction)
+  - Position size recommendations (3-5% with TA overlay)
+  - **TA-aware position sizing** (±0.5-1% based on BTC/ETH structure)
   - Exchange availability verification
   - Entry window timing optimization
 
@@ -620,6 +653,6 @@ See [LICENSE](LICENSE)
 
 ---
 
-**Last Updated**: November 14, 2025
-**Version**: 2.7
-**Status**: Session 30 Part 4 Complete ✅ (PIEVERSE analysis + HTML validation improvements) | TGE Alert System Testing Next 🎯
+**Last Updated**: November 21, 2025
+**Version**: 3.4
+**Status**: Session 41 Complete ✅ (Arsh TA Integration v3.4 - Phase 2 & 3: Scoring + Learning Loop) | TA Correlation Tracking Ready 🎯
