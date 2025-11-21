@@ -541,14 +541,10 @@ python scripts/test_connection.py
 - **[HTML Report Viewer](reports/MONAD/report-viewer.html)** - Apple-style interactive viewer
 
 ### Session Documentation
-- **[docs/sessions/SESSION_18_PREMARKET_INTEGRATION.md](docs/sessions/SESSION_18_PREMARKET_INTEGRATION.md)** - Multi-platform OTC
-- **[docs/archived/sessions/SESSION_18_QUICK_REFERENCE.md](docs/archived/sessions/SESSION_18_QUICK_REFERENCE.md)** - Quick ref
-- **[Session Logs Directory](docs/sessions/)** - Active session summaries
+- **[Session Logs Directory](docs/sessions/)** - Active session summaries (Sessions 23-42)
 
 ### Strategic Analysis
-- **[docs/analysis/MASTER_AIRDROP_DATABASE.md](docs/analysis/MASTER_AIRDROP_DATABASE.md)** - 121 projects
-- **[docs/archived/old_proposals/FORCED_EXECUTION_FLOW.md](docs/archived/old_proposals/FORCED_EXECUTION_FLOW.md)** - Execution trigger design (archived)
-- **[docs/archived/sessions/WORKFLOW_VERIFICATION_WITH_SESSION_18.md](docs/archived/sessions/WORKFLOW_VERIFICATION_WITH_SESSION_18.md)** - System validation (archived)
+- **[docs/analysis/](docs/analysis/)** - Research and data analysis documents
 
 ---
 
