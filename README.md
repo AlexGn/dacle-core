@@ -297,7 +297,7 @@ python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # 3. Install dependencies
-pip install -r requirements.txt
+pip install -e .
 
 # 4. Configure environment variables
 cp .env.example .env
@@ -402,7 +402,7 @@ dacle/
 │       ├── 2_📊_OTC_Signals.py
 │       └── 3_🎯_Airdrop_Analysis.py
 ├── run_bot.py                           # Bot launcher
-├── requirements.txt                     # Python dependencies
+├── pyproject.toml                       # Python dependencies & project config
 └── .env                                 # Environment variables (not in git)
 ```
 
