@@ -19,7 +19,8 @@ from src.monitoring.health import HealthCheckServer, get_health_status, run_peri
 from src.utils.config import get_discord_config
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
+# Logger will be initialized in run_bot() after config is loaded
+logger = None
 
 
 class DACLEBot(commands.Bot):
@@ -152,6 +153,10 @@ class DACLEBot(commands.Bot):
 
 def run_bot():
     """Main entry point to run the bot"""
+    # Initialize logger now that config is loaded
+    global logger
+    logger = get_logger(__name__)
+
     logger.info("Starting DACLE Discord Bot...")
 
     # Start health check HTTP server (HIGH-REL-001)
