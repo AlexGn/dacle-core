@@ -1,6 +1,9 @@
 """
 Configuration management for DACLE
 Loads environment variables and provides typed access
+
+Configuration is loaded explicitly at application startup via load_config().
+This avoids import-time side effects and makes the config loading predictable.
 """
 
 import os
@@ -9,11 +12,6 @@ from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
-
-# Load .env file from project root
-project_root = Path(__file__).parent.parent.parent
-env_file = project_root / ".env"
-load_dotenv(env_file)
 
 
 @dataclass
@@ -134,19 +132,69 @@ class AppConfig:
 _config: Optional[AppConfig] = None
 
 
+def load_config(root_path: Optional[Path] = None) -> AppConfig:
+    """
+    Explicitly load configuration from .env file at application startup.
+
+    This function should be called once at the beginning of each application entrypoint
+    (e.g., run_bot.py, run_tge_analysis.py) before any other imports that depend on config.
+
+    Args:
+        root_path: Path to project root directory. If None, auto-detects using __file__.
+
+    Returns:
+        AppConfig: The loaded application configuration
+
+    Raises:
+        ValueError: If required environment variables are not set
+        RuntimeError: If config is already loaded (prevents double-loading)
+    """
+    global _config
+
+    if _config is not None:
+        raise RuntimeError(
+            "Configuration already loaded. load_config() should only be called once at startup."
+        )
+
+    # Auto-detect root path if not provided
+    if root_path is None:
+        # Find project root by looking for pyproject.toml or .env
+        current = Path(__file__).resolve().parent
+        while current != current.parent:
+            if (current / "pyproject.toml").exists() or (current / ".env").exists():
+                root_path = current
+                break
+            current = current.parent
+
+        if root_path is None:
+            # Fallback to parent.parent.parent if auto-detection fails
+            root_path = Path(__file__).parent.parent.parent
+
+    # Load .env file
+    env_file = root_path / ".env"
+    load_dotenv(env_file)
+
+    # Create config singleton
+    _config = AppConfig.from_env()
+    return _config
+
+
 def get_config() -> AppConfig:
     """
-    Get application configuration singleton
+    Get application configuration singleton.
 
     Returns:
         AppConfig: The application configuration
 
     Raises:
+        RuntimeError: If configuration has not been loaded via load_config()
         ValueError: If required environment variables are not set
     """
     global _config
     if _config is None:
-        _config = AppConfig.from_env()
+        raise RuntimeError(
+            "Configuration has not been loaded. Call load_config() at application startup first."
+        )
     return _config
 
 
