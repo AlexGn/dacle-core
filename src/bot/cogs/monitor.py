@@ -337,9 +337,22 @@ If no crypto projects mentioned, return: []
         if message.author.bot:
             return
 
+        # Log ALL messages for debugging
+        logger.info(
+            f"📨 Message received from {message.author.name} in "
+            f"{'#' + message.channel.name if message.guild else 'DM'}: {message.content[:100]}"
+        )
+
         # Only process messages from configured private server
         if not message.guild or message.guild.id != self.bot.private_server_id:
+            logger.warning(
+                f"⚠️  Message NOT from private server (guild_id: {message.guild.id if message.guild else 'None'})"
+            )
+            # Still process commands even if not from private server
+            await self.bot.process_commands(message)
             return
+
+        logger.info(f"✅ Message is from private server, processing for mentions")
 
         # Extract actual message content (handle forwarded messages)
         message_content = message.content
@@ -349,6 +362,7 @@ If no crypto projects mentioned, return: []
             logger.debug(
                 f"Ignoring forwarded message from {message.author.name} (no content accessible)"
             )
+            await self.bot.process_commands(message)
             return
 
         # Try to get referenced message content (for replies, not forwards)
@@ -390,6 +404,7 @@ If no crypto projects mentioned, return: []
 
         # Only process if from known researcher
         if not researcher_name:
+            await self.bot.process_commands(message)
             return
 
         logger.info(
@@ -411,6 +426,7 @@ If no crypto projects mentioned, return: []
 
         if not projects:
             logger.debug(f"No projects found in message(s) from {researcher_name}")
+            await self.bot.process_commands(message)
             return
 
         # Store each mention
@@ -425,6 +441,9 @@ If no crypto projects mentioned, return: []
                     content=aggregated_content,  # Store full context
                     symbol=symbol,
                 )
+
+        # Process commands after handling message
+        await self.bot.process_commands(message)
 
 
 async def setup(bot: commands.Bot):

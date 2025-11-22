@@ -145,34 +145,6 @@ class DACLEBot(commands.Bot):
         # Pass the actual Supabase client for health checks
         self.loop.create_task(run_periodic_health_checks(kb.client, redis_client=None))
 
-    async def on_message(self, message: discord.Message):
-        """
-        Called whenever a message is sent in any channel the bot can see
-
-        Args:
-            message: The Discord message object
-        """
-        # Ignore messages from the bot itself
-        if message.author.bot:
-            return
-
-        # Log ALL messages for debugging (changed from debug to info)
-        logger.info(
-            f"📨 Message received from {message.author.name} in "
-            f"{'#' + message.channel.name if message.guild else 'DM'}: {message.content[:100]}"
-        )
-
-        # Only process messages from the private server
-        if message.guild and message.guild.id == self.private_server_id:
-            logger.info(f"✅ Message is from private server, will be processed")
-        else:
-            logger.warning(
-                f"⚠️  Message NOT from private server (guild_id: {message.guild.id if message.guild else 'None'})"
-            )
-
-        # Process commands (if any)
-        await self.process_commands(message)
-
     async def on_error(self, event: str, *args, **kwargs):
         """Handle errors"""
         logger.error(f"Error in {event}", exc_info=True)
