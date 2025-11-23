@@ -74,12 +74,8 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - **Neutral TA**: No adjustment, baseline 4% position
 
 **Files Created** (Session 41):
-- [scripts/schema/ta_correlation_tracker.sql](scripts/schema/ta_correlation_tracker.sql) - Database schema
-- [scripts/log_ta_correlation.py](scripts/log_ta_correlation.py) - Logging script
-- [scripts/analyze_ta_correlation.py](scripts/analyze_ta_correlation.py) - Analysis script
 - [docs/implementation/TA_LEARNING_LOOP.md](docs/implementation/TA_LEARNING_LOOP.md) - Technical guide
 - [docs/workflows/TA_CORRELATION_WORKFLOW.md](docs/workflows/TA_CORRELATION_WORKFLOW.md) - User workflow
-- [prompts/perplexity_single_token_analysis_v3.4_compressed.md](prompts/perplexity_single_token_analysis_v3.4_compressed.md) - Updated prompt
 
 **Next Phase**: Begin prospective TA tracking on next TGE discovery
 
@@ -570,17 +566,12 @@ python scripts/test_connection.py
 - **[.claude/agents/README.md](.claude/agents/README.md)** - 6-agent system overview
 - **[.claude/agents/MASTER_WORKFLOW.md](.claude/agents/MASTER_WORKFLOW.md)** - Complete workflow
 - **[.claude/agents/AGENT_IMPROVEMENTS.md](.claude/agents/AGENT_IMPROVEMENTS.md)** - v2.4 enhancements
-- **[reports/README.md](reports/README.md)** - Feedback loop guide
 
 ### Real TGE Analysis Reports
-- **[MONAD Analysis](reports/MONAD/MONAD_TGE_ANALYSIS_2025-11-06.md)** - 6.45/10 conviction score
-- **[HTML Report Viewer](reports/MONAD/report-viewer.html)** - Apple-style interactive viewer
+See `reports/` directory for TGE analysis outputs.
 
 ### Session Documentation
-- **[Session Logs Directory](docs/sessions/)** - Active session summaries (Sessions 23-42)
-
-### Strategic Analysis
-- **[docs/analysis/](docs/analysis/)** - Research and data analysis documents
+See [docs/archive/sessions/](docs/archive/sessions/) for session summaries.
 
 ---
 
