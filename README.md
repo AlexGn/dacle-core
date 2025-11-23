@@ -563,7 +563,7 @@ python scripts/test_connection.py
 - **[docs/STATUS.md](docs/STATUS.md)** - Current status (always up-to-date)
 
 ### TGE Analysis System
-- **[.claude/agents/README.md](.claude/agents/README.md)** - 6-agent system overview
+- **[.claude/agents/README.md](README.md)** - 6-agent system overview
 - **[.claude/agents/MASTER_WORKFLOW.md](.claude/agents/MASTER_WORKFLOW.md)** - Complete workflow
 - **[.claude/agents/AGENT_IMPROVEMENTS.md](.claude/agents/AGENT_IMPROVEMENTS.md)** - v2.4 enhancements
 
