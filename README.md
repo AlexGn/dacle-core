@@ -1,6 +1,6 @@
 # DACLE - David's Automated Crypto Learning Engine
 
-**AI-powered TGE analysis system with 6-agent pipeline, multi-platform OTC tracking, and knowledge base integration**
+**AI-powered TGE analysis system with 5-agent pipeline, multi-platform OTC tracking, and knowledge base integration**
 
 ---
 
@@ -27,7 +27,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 **Phase**: Arsh TA Integration v3.4 Complete ✅ - Phase 2 & 3 (Scoring + Learning Loop)
 **Focus**: TA Correlation Monitoring & Prospective Validation (Session 41)
 **Latest**: TA methodology integrated into Agent 2 (conviction scoring) + Agent 5 (position sizing) + Learning Loop foundation built
-**System**: 6-Agent TGE Analysis Pipeline v3.4 + Arsh TA (BTC/ETH/Macro overlay) + Perplexity A+ (97%)
+**System**: 5-Agent TGE Analysis Pipeline v3.4 (Agents 0.5, 0, 2, 4, 5) + Arsh TA (BTC/ETH/Macro overlay) + Perplexity A+ (97%)
 **Performance**: High-conviction (9-10/10) analysis in **2 minutes** + TA-aware position sizing (±1% overlay) + Correlation tracking ready
 **Dashboard**: http://localhost:8501 (3 pages operational) | Live: https://dacletge.netlify.app/
 
@@ -85,7 +85,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ### ✅ Production-Ready Features
 
-**6-Agent TGE Analysis System v3.4** (Arsh TA Integration):
+**5-Agent TGE Analysis System v3.4** (Arsh TA Integration):
 - **Agent 0.5** - Knowledge Base Access Layer (semantic search, 950 lines)
 - **Agent 0** - Data Retrieval & Validation (1,790 lines, **11 OTC platforms** 🆕)
   - **Session 31**: 11 pre-market sources (Whales Market, Hyperliquid, Aster, 8 CEX pre-markets)
@@ -94,12 +94,13 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
   - **Session 31**: 6 VC funding sources (added crypto-fundraising.info, AlphaPacked, newsletters)
   - **Session 31**: Platform-specific guidance (270 lines - red flags, best practices, limitations)
   - **Session 31**: Data coverage 78% → 92%+ (14-point improvement)
-- **Agent 1** - OTC Volume Analysis (multi-platform tracking)
-- **Agent 2** - TGE Short Signal Generation + **Arsh TA Scoring** 🆕 v3.4
+  - **Note**: OTC price validation operational ✅ | OTC volume trend analysis ⏳ (Phase 2 roadmap)
+- **Agent 2** - TGE Short Signal Generation + **Arsh TA Scoring** + **Alpha Callers (5%) + Social Hype (3%)** 🆕 v3.4
   - Pre-TGE scoring with dump pressure estimation
   - Macro market conditions overlay (±0.5 conviction)
   - BTC/ETH structure integration
-- **Agent 3** - Conviction Scoring (hybrid formula)
+  - Alpha caller mentions (54 Twitter accounts across 3 tiers)
+  - Social hype intelligence (Twitter, CryptoRank, CoinGecko)
 - **Agent 4** - Execution Reality Check (fast-path optimization, 951 lines)
   - **Session 25**: 2-minute analysis for 9-10/10 conviction trades ⚡
   - **Session 25**: Pipeline trust protocol (eliminates redundant validation)
@@ -163,15 +164,18 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 **Session 13 Discovery**: David's actual workflow ≠ our assumptions
 
 **What We Built** (Analysis Infrastructure):
-- ✅ 6-agent TGE analysis system
-- ✅ Multi-platform OTC tracking
+- ✅ 5-agent TGE analysis system (Agents 1 & 3 archived Session 43)
+- ✅ Multi-platform OTC price tracking (11 platforms)
+- ✅ Alpha Caller mentions (54 Twitter accounts integrated into Agent 2)
+- ✅ Social Hype scoring (integrated into Agent 2)
 - ✅ Dashboard with conviction scores
 - ✅ 6,558+ lines of implementation
 
-**What's Missing** (Execution Triggers):
-- ❌ HAV Convergence Detector (Discord + Twitter)
-- ❌ TGE Execution Alerts (Telegram push notifications)
-- ❌ Trade Logger Integration (execution rate tracking)
+**What's Missing** (Execution Triggers + Phase 2 Features):
+- ❌ **OTC Volume Trend Analysis** (MET pattern detection) - Agent 1 archived, Phase 2 roadmap
+- ❌ **Multi-Source Convergence Alerts** - Agent 3 archived, Phase 2 roadmap
+- ❌ **TGE Execution Alerts** (Telegram push notifications)
+- ❌ **Trade Logger Integration** (execution rate tracking)
 
 **David's Real Workflow**:
 - Uses 10+ sources (not just Discord)
@@ -179,18 +183,17 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - Primary strategy: **Convergence Signals** (3+ sources = high conviction)
 - Execution rate: 30% (needs push alerts, not pull dashboards)
 
-**Priority #1**: HAV + Twitter Convergence Detector (2 weeks)
-- HAV Discord tracker (copy-paste with #hav tag)
-- HAV Twitter tracker (@HavAirdrops - PUBLIC)
-- Top 15 Twitter caller monitoring (from 52 total)
-- Convergence alert when 3+ sources mention same project
-- Telegram DM notifications (not dashboard)
+**Phase 2 Roadmap** (Deferred Advanced Features):
+- **OTC Volume Tracking** (4-6 hours) - Catch MET-like patterns (-42% volume → -60% dump)
+- **Multi-Source Convergence Alerts** (8-12 hours) - Real-time alerts when 3+ sources converge
+- **TGE Execution Alerts** - Telegram push notifications for 8-10/10 conviction trades
+- **Trade Logger Integration** - Track execution rate vs. alert delivery
 
 ---
 
 ## 🎯 System Architecture
 
-### 6-Agent TGE Analysis Pipeline v2.4
+### 5-Agent TGE Analysis Pipeline v3.4
 
 ```
 Input: Token Symbol (e.g., "MONAD")
@@ -205,8 +208,10 @@ Input: Token Symbol (e.g., "MONAD")
 └─────────────────────────────────────────────────────────────┘
    ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ Agent 0: Data Retrieval & Validation (1,790 lines) - v2.7  │
+│ Agent 0: Data Retrieval & Validation (1,790 lines) - v3.4  │
 │ • 11 OTC platforms (Whales, Hyperliquid, Aster, 8 CEX)     │
+│ • OTC PRICE validation ✅ (median across 5+ platforms)      │
+│ • OTC VOLUME tracking ⏳ (Phase 2 - MET pattern detection)  │
 │ • 3-source TGE date validation (CryptoRank, ICODrops, ICO)  │
 │ • Reward Type classification (8 categories + dump pressure) │
 │ • 6 VC funding sources (Crunchbase, Messari, crypto-fund)   │
@@ -219,49 +224,48 @@ Input: Token Symbol (e.g., "MONAD")
 └─────────────────────────────────────────────────────────────┘
    ↓
 ┌─────────────────────────────────────────────────────────────┐
-│ Agent 1: OTC Volume Analysis                                │
-│ • Multi-platform volume tracking                            │
-│ • Fading interest detection (-30% volume = SHORT signal)    │
-│ • Price trend analysis                                       │
-│ Output: otc_analysis.json (STRONG_SHORT/NEUTRAL/NO_DATA)    │
-└─────────────────────────────────────────────────────────────┘
-   ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Agent 2: TGE Short Signal Generation                        │
-│ • FDV/MC ratio analysis (>3x = red flag)                    │
-│ • Float % analysis (<40% = red flag)                        │
-│ • VC markup analysis (>3x = red flag)                       │
-│ • Pre-TGE scoring (0-3 points for products)                 │
+│ Agent 2: TGE Short Signal Generation + Conviction Scoring   │
+│ • 9-Component Conviction Formula (Session 39 v3.0):         │
+│   - FDV/MC Ratio (25%), Float % (20%), VC Markup (12%)     │
+│   - VC Tier (5%), OI + Order Book (10%), Pattern (12%)     │
+│   - Dump Pressure (8%), Alpha Callers (5%), Hype (3%)      │
+│ • Arsh TA Integration (Session 42):                         │
+│   - BTC/ETH market structure overlay                        │
+│   - Macro market conditions (±0.5 conviction)               │
+│ • Alpha Caller Mentions (54 Twitter accounts, 3 tiers)      │
+│ • Social Hype Intelligence (Twitter, CryptoRank, CoinGecko) │
 │ • Historical pattern matching (Wormhole, Starknet, ZKSync)  │
-│ Output: short_signal.json (EXECUTE_SHORT/WATCHLIST/REJECT)  │
-└─────────────────────────────────────────────────────────────┘
-   ↓
-┌─────────────────────────────────────────────────────────────┐
-│ Agent 3: Conviction Scoring                                 │
-│ • Hybrid formula (pre-TGE vs post-TGE)                      │
-│ • Weighted components (30% + 25% + 15% + 20% + 10% = 100%) │
-│ • KB confidence integration                                 │
-│ Output: conviction_score.json (0.0-10.0 scale)              │
+│ Output: conviction_score.json (0.0-10.0 + EXECUTE/SKIP)     │
 └─────────────────────────────────────────────────────────────┘
    ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ Agent 4: Execution Reality Check                            │
-│ • Confidence validation (HIGH/MEDIUM/LOW thresholds)        │
+│ • 3-Tier Analysis Paths (Session 25):                       │
+│   - FAST-PATH: 9-10/10 conviction (2 min analysis)          │
+│   - STANDARD: 7-8.9/10 conviction (3-4 min analysis)        │
+│   - REJECTION: <7/10 conviction (1 min rejection)           │
+│ • BTC/ETH TA Validation (Session 42)                        │
+│ • KB confidence-based quality gates (Session 15)            │
 │ • Data completeness check (missing fields = penalties)      │
-│ • Execution recommendation (EXECUTE/RESEARCH/REJECT)         │
+│ • Execution recommendation (EXECUTE/WAIT/REJECT)            │
 │ Output: execution_decision.json                             │
 └─────────────────────────────────────────────────────────────┘
    ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ Agent 5: Position Sizing & Risk Calculator                  │
 │ • R/R ratio calculation (≥3.3:1 threshold)                  │
-│ • Position size recommendation (5-8% based on conviction)   │
+│ • Position size base (3-8% based on 7-10/10 conviction)     │
+│ • TA-aware position overlay (±0.5-1% Session 42)            │
 │ • Exchange availability verification                         │
 │ • Entry window timing optimization                           │
 │ Output: final_report.md (HTML + Markdown)                   │
 └─────────────────────────────────────────────────────────────┘
    ↓
 Output: Final TGE Analysis Report
+
+NOTE: Agents 1 (OTC Volume) & 3 (Convergence) archived Session 43.
+      Basic functionality absorbed into Agents 0 & 2.
+      Advanced features (volume trend analysis, convergence alerts) → Phase 2 roadmap.
 ```
 
 ### Test Results (Real TGEs)
@@ -338,14 +342,15 @@ cd .claude/agents
 dacle/
 ├── .claude/
 │   ├── agents/
-│   │   ├── README.md                    # 6-agent system overview
+│   │   ├── README.md                    # 5-agent system overview
 │   │   ├── 0-data-retrieval-validator.md
-│   │   ├── 0.5-knowledge-access.md
-│   │   ├── 1-otc-volume-analyzer.md
+│   │   ├── 0.5-knowledge-base-lookup.md
 │   │   ├── 2-tge-short-signal-executor.md
-│   │   ├── 3-conviction-scorer.md
 │   │   ├── 4-execution-reality-check.md
 │   │   ├── 5-position-sizing-risk-calculator.md
+│   │   ├── archived/                    # Agents 1 & 3 (Session 43)
+│   │   │   ├── 1-otc-volume-analyzer.md (functionality → Agent 0 + Phase 2)
+│   │   │   └── 3-multi-source-convergence-detector.md (functionality → Agent 2 + Phase 2)
 │   │   ├── MASTER_WORKFLOW.md           # Complete workflow guide
 │   │   ├── EXECUTION_CHECKLIST.md       # Quality gates
 │   │   └── AGENT_IMPROVEMENTS.md        # v2.4 enhancements
@@ -482,10 +487,13 @@ python scripts/test_connection.py
 
 ## 🚀 Roadmap
 
-### ✅ Completed (Sessions 1-25)
-- [x] **6-Agent TGE Analysis System v3.0** (Agents 0, 0.5, 1, 2, 3, 4, 5 - optimized)
+### ✅ Completed (Sessions 1-43)
+- [x] **5-Agent TGE Analysis System v3.4** (Agents 0, 0.5, 2, 4, 5 - Session 43 consolidation)
 - [x] **Agent 4 Optimization** (50-70% speed improvement, fast-path protocol)
-- [x] **Multi-Platform OTC Integration** (Hyperliquid, Aevo, MEXC, Gate.io)
+- [x] **Multi-Platform OTC Integration** (11 platforms - price validation operational)
+- [x] **Alpha Caller Integration** (54 Twitter accounts, 5% conviction weight)
+- [x] **Social Hype Integration** (3% conviction weight, Kaito.ai + metrics)
+- [x] **Arsh TA Integration v3.4** (BTC/ETH structure, ±0.5-1% position sizing)
 - [x] **Feedback Loop System** (Agent-human collaboration)
 - [x] **Knowledge Base** (9 case studies embedded, semantic search)
 - [x] **Product Viability Scoring** (Pre-TGE projects: TVL, funding, VCs, team)
@@ -493,7 +501,35 @@ python scripts/test_connection.py
 - [x] **Master Airdrop Database** (121 projects)
 - [x] **Discord Bot** (24/7 monitoring)
 
-### 🔜 Priority 1: Execution Triggers (Next 2 Weeks)
+### 🔜 Phase 2: Missing Advanced Features (Deferred from Session 43)
+
+**High Priority - OTC Volume Trend Analysis** (4-6 hours):
+- [ ] **Enhance Agent 0 with Volume Tracking**
+  - [ ] Extend Agent 0 to track 7-day OTC volume history (not just price)
+  - [ ] Hyperliquid API integration for volume data
+  - [ ] MET pattern baseline comparison (-42% volume decline detection)
+  - [ ] Fading interest detection (>30% decline = SHORT signal)
+- [ ] **Update Conviction Formula to v3.1.2**
+  - [ ] Add Component 10: OTC Volume Trend (2% weight)
+  - [ ] Update CONVICTION_SCORING_v3.1.md documentation
+- [ ] **Create Volume Scraper Infrastructure**
+  - [ ] Daily scraper: `scripts/scrape_otc_volumes.py`
+  - [ ] Supabase schema: `otc_volume_history` table (30-day rolling window)
+  - [ ] Integrate with Agent 0 data package
+- **Validated Pattern**: MET case study (-42% volume → -60% dump, Gabew caught it, David missed it)
+
+**Medium Priority - Multi-Source Convergence Alerts** (8-12 hours, **VALIDATE WITH DAVID FIRST**):
+- [ ] **Evaluate Necessity**
+  - [ ] Ask David: "Do you still prioritize 3+ source convergence?"
+  - [ ] Confirm it's a real execution blocker vs. current 9-component formula
+- [ ] **If Validated: Enhance Agent 2 with Convergence Detection**
+  - [ ] Track 54 Twitter alpha callers for project mentions
+  - [ ] Cross-reference CryptoRank, ICODrops, DropLabs
+  - [ ] Generate convergence alerts when 3+ sources mention same project
+  - [ ] Telegram push notification integration
+- **Current Status**: Scoring components (Alpha Callers 5%, Social Hype 3%) integrated into Agent 2. Alert system not implemented.
+
+### 🔜 Priority 1: Execution Triggers (Ongoing)
 - [ ] **HAV Convergence Detector** (Discord + Twitter integration)
   - [ ] HAV Discord tracker (copy-paste with #hav tag)
   - [ ] HAV Twitter tracker (@HavAirdrops API)
