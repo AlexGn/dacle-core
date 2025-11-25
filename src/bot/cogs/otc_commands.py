@@ -11,11 +11,9 @@ from typing import Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
-from together import Together
 
 from src.integrations.whalesmarket.scanner import WhalesMarketScanner
 from src.knowledge.supabase_client import get_knowledge_base
-from src.utils.config import get_together_config
 
 logger = logging.getLogger(__name__)
 
@@ -27,12 +25,8 @@ class OTCCommands(commands.Cog):
         self.bot = bot
         self.kb = get_knowledge_base()
 
-        # Initialize Together client for LLM extraction
-        together_config = get_together_config()
-        self.together_client = Together(api_key=together_config.api_key)
-
         # Initialize OTC scanner
-        self.otc_scanner = WhalesMarketScanner(self.kb, self.together_client)
+        self.otc_scanner = WhalesMarketScanner(self.kb)
 
     @app_commands.command(
         name="scan-otc", description="Scan Whales Market for pre-market OTC tokens"
