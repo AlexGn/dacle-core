@@ -29,7 +29,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 **Latest**: TA methodology integrated into Agent 2 (conviction scoring) + Agent 5 (position sizing) + Learning Loop foundation built
 **System**: 5-Agent TGE Analysis Pipeline v3.4 (Agents 0.5, 0, 2, 4, 5) + Arsh TA (BTC/ETH/Macro overlay) + Perplexity A+ (97%)
 **Performance**: High-conviction (9-10/10) analysis in **2 minutes** + TA-aware position sizing (±1% overlay) + Correlation tracking ready
-**Dashboard**: http://localhost:8501 (3 pages operational) | Live: https://dacletge.netlify.app/
+**Live Dashboard**: https://dacletge.netlify.app/
 
 ### 🎯 Real-World Validation Results
 
@@ -321,13 +321,11 @@ python scripts/test_together.py    # Test Together.ai
 source venv/bin/activate
 python run_bot.py
 
-# 2. Start Dashboard (optional, for viewing results)
-streamlit run dashboard/app.py
-# Opens http://localhost:8501
+# 2. Run TGE Analysis (on-demand)
+python scripts/tge/run_tge_analysis.py
 
-# 3. Run TGE Analysis (on-demand)
-cd .claude/agents
-# Use Claude Code with agent prompts to analyze specific tokens
+# 3. View Dashboard
+# Live at: https://dacletge.netlify.app/
 ```
 
 ---
