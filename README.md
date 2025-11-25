@@ -569,7 +569,7 @@ python scripts/test_connection.py
 See `reports/` directory for TGE analysis outputs.
 
 ### Session Documentation
-See [ARCHIVE_INDEX.md](docs/ARCHIVE_INDEX.md) for access to historical session summaries (preserved in archive-branch).
+See [archive information is on separate git branch (archive-branch)](docs/archive information is on separate git branch (archive-branch)) for access to historical session summaries (preserved in archive-branch).
 
 ---
 
