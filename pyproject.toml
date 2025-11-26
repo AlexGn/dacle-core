@@ -24,6 +24,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "python-dateutil>=2.8.2",
     "PyJWT>=2.10.1",
+    "feedparser>=6.0.10",  # For Coinbase Blog RSS parsing
 ]
 
 [project.optional-dependencies]
