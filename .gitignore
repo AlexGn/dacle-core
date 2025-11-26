@@ -114,3 +114,9 @@ scratch_*.py
 /*_PLAN.md
 /TEMP_*.md
 /TODO_*.md
+
+# Test artifacts (Week 1 indices testing)
+/indices_data_*.json
+/price_action_*.json
+/scripts/helpers/indices_data_*.json
+/scripts/helpers/price_action_*.json
