@@ -25,6 +25,9 @@ dependencies = [
     "python-dateutil>=2.8.2",
     "PyJWT>=2.10.1",
     "feedparser>=6.0.10",  # For Coinbase Blog RSS parsing
+    "python-telegram-bot>=20.0",  # Telegram Entry Timer Bot
+    "ccxt>=4.0.0",  # Exchange integration for TA data
+    "pycoingecko>=3.1.0",  # 7-Index tracking (USDT.D, BTC.D, etc.)
 ]
 
 [project.optional-dependencies]
