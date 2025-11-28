@@ -102,18 +102,23 @@ class AppConfig:
     log_level: str
     supabase: SupabaseConfig
     discord: DiscordConfig
-    together: TogetherConfig
+    together: Optional[TogetherConfig]
     redis: RedisConfig
 
     @classmethod
     def from_env(cls) -> "AppConfig":
         """Load complete app config from environment variables"""
+        # Make Together.ai optional since it's no longer used
+        together_config = None
+        if os.getenv("TOGETHER_API_KEY"):
+            together_config = TogetherConfig.from_env()
+
         return cls(
             env=os.getenv("ENV", "development"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             supabase=SupabaseConfig.from_env(),
             discord=DiscordConfig.from_env(),
-            together=TogetherConfig.from_env(),
+            together=together_config,
             redis=RedisConfig.from_env(),
         )
 
