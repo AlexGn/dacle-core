@@ -1,122 +1,103 @@
-# DACLE - Second Brain Knowledge Base
-# Git Ignore File
-
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-Icon
-._*
-
-# Temporary files
-*.tmp
-*.temp
-*~
-.#*
-
-# Editor directories and files
-.vscode/
-.idea/
-*.swp
-*.swo
-*.swn
-.atom/
-
-# Environment variables
-.env
-.env.local
-.env.*.local
-
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# Dependencies
-node_modules/
-jspm_packages/
-
-# Build outputs
-dist/
-build/
-out/
-
-# Database files (if local instances created)
-*.db
-*.sqlite
-*.sqlite3
 
 # API keys and secrets
-secrets/
-credentials/
-*.key
-*.pem
-
-# Personal notes (if you want to keep some things private)
-PRIVATE/
-personal-notes/
-
 # Backup files
-*.bak
-*.backup
-*_backup
-
-# Vector embeddings (can be regenerated)
-embeddings/
-*.vec
-
+# Bot runtime files
+# Build outputs
 # Cache
-.cache/
-*.cache
-
+# DACLE - Second Brain Knowledge Base
+# Database files (if local instances created)
+# Dependencies
+# Editor directories and files
+# Environment variables
+# Git Ignore File
+# Jupyter Notebooks
+# Logs
+# Note: scripts/test_manual.py is tracked (proper script, not temporary)
+# Note: tests/ directory test files ARE tracked
+# Personal notes (if you want to keep some things private)
 # Python specific
-__pycache__/
-*.py[cod]
+# Redis dump
+# Temporary files
+# Temporary markdown files at root (docs should be in docs/)
+# Temporary test files (but allow test suite in tests/ directory)
+# Test artifacts (Week 1 indices testing)
+# Vector embeddings (can be regenerated)
+# macOS
 *$py.class
+*.backup
+*.bak
+*.cache
+*.db
+*.egg
+*.egg-info/
+*.key
+*.log
+*.pem
+*.pid
+*.py[cod]
 *.so
+*.sqlite
+*.sqlite3
+*.swn
+*.swo
+*.swp
+*.temp
+*.tmp
+*.vec
+*_backup
+*~
+.#*
+.AppleDouble
+.DS_Store
+.LSOverride
 .Python
-.pytest_cache/
+._*
+.atom/
+.cache/
 .coverage
-htmlcov/
+.env
+.env.*.local
+.env.local
+.idea/
+.installed.cfg
+.ipynb_checkpoints/
+.pytest_cache/
 .tox/
 .venv/
-venv/
-ENV/
-env/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Jupyter Notebooks
-.ipynb_checkpoints/
-
-# Redis dump
-dump.rdb
-
-# Bot runtime files
-bot.log
-bot.pid
-*.pid
-
-# Temporary test files (but allow test suite in tests/ directory)
-/test_*.py
-/src/test_*.py
-/scripts/test_*.py
-scratch_*.py
-# Note: tests/ directory test files ARE tracked
-# Note: scripts/test_manual.py is tracked (proper script, not temporary)
-
-# Temporary markdown files at root (docs should be in docs/)
+.vscode/
 /*_DIAGNOSIS.md
 /*_NOW.md
 /*_PLAN.md
 /TEMP_*.md
 /TODO_*.md
-
-# Test artifacts (Week 1 indices testing)
 /indices_data_*.json
 /price_action_*.json
 /scripts/helpers/indices_data_*.json
 /scripts/helpers/price_action_*.json
+/scripts/test_*.py
+/src/test_*.py
+/test_*.py
+ENV/
+Icon
+PRIVATE/
+__pycache__/
+bot.log
+bot.pid
+build/
+credentials/
+dist/
+dump.rdb
+embeddings/
+env/
+htmlcov/
+jspm_packages/
+logs/
+node_modules/
+npm-debug.log*
+out/
+personal-notes/
+scratch_*.py
+secrets/
+venv/
+yarn-debug.log*
+yarn-error.log*
