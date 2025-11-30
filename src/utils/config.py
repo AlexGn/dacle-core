@@ -112,6 +112,25 @@ class PerplexityConfig:
 
 
 @dataclass
+class OpenAIConfig:
+    """OpenAI API configuration (Session 79D)"""
+
+    api_key: str
+    model: str = "gpt-4o"  # GPT-4o: $2.50/1M tokens
+
+    @classmethod
+    def from_env(cls) -> "OpenAIConfig":
+        """Load OpenAI config from environment variables"""
+        api_key = os.getenv("OPENAI_API_KEY")
+
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not set in environment")
+
+        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        return cls(api_key=api_key, model=model)
+
+
+@dataclass
 class AppConfig:
     """Main application configuration"""
 
@@ -122,6 +141,7 @@ class AppConfig:
     together: Optional[TogetherConfig]
     redis: RedisConfig
     perplexity: Optional[PerplexityConfig]
+    openai: Optional[OpenAIConfig]
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -136,6 +156,11 @@ class AppConfig:
         if os.getenv("PERPLEXITY_API_KEY"):
             perplexity_config = PerplexityConfig.from_env()
 
+        # Make OpenAI optional (Session 79D)
+        openai_config = None
+        if os.getenv("OPENAI_API_KEY"):
+            openai_config = OpenAIConfig.from_env()
+
         return cls(
             env=os.getenv("ENV", "development"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -144,6 +169,7 @@ class AppConfig:
             together=together_config,
             redis=RedisConfig.from_env(),
             perplexity=perplexity_config,
+            openai=openai_config,
         )
 
     @property
@@ -251,3 +277,8 @@ def get_redis_config() -> RedisConfig:
 def get_perplexity_config() -> Optional[PerplexityConfig]:
     """Get Perplexity API configuration (Session 79C)"""
     return get_config().perplexity
+
+
+def get_openai_config() -> Optional[OpenAIConfig]:
+    """Get OpenAI API configuration (Session 79D)"""
+    return get_config().openai
