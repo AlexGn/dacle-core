@@ -22,13 +22,21 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v3.4 - November 2025)
+## 📊 Current Status (v3.6 - Session 76, November 29, 2025)
 
-**Phase**: Arsh TA Integration v3.4 Complete ✅ - Phase 2 & 3 (Scoring + Learning Loop)
-**Focus**: TA Correlation Monitoring & Prospective Validation (Session 41)
-**Latest**: TA methodology integrated into Agent 2 (conviction scoring) + Agent 5 (position sizing) + Learning Loop foundation built
-**System**: 5-Agent TGE Analysis Pipeline v3.4 (Agents 0.5, 0, 2, 4, 5) + Arsh TA (BTC/ETH/Macro overlay) + Perplexity A+ (97%)
-**Performance**: High-conviction (9-10/10) analysis in **2 minutes** + TA-aware position sizing (±1% overlay) + Correlation tracking ready
+**🚀 LATEST (Session 76)**: Agent 5 Guardrails - MM Detection + Perpetuals Verification
+- **MM Detection**: Auto-widen stop loss by 50% when top-tier MM detected (Wintermute, Jump, DWF Labs, GSR, Amber Group)
+- **Perpetuals Verification**: Block execution if perpetual futures unavailable (no "Long Only" surprises)
+- **Knowledge Base Path Fix**: Updated docs/knowledge → docs/reference
+- **Pipeline Validation**: Enhanced error handling and graceful fallbacks
+
+**Session 52B - CRITICAL** (Nov 25): 4-Tier Conviction System
+- Unlocked 7.5-7.9 "Execute with Caution" tier (3-4% position)
+- Direction-aware FDV penalty (shorts vs longs)
+- Validated: +$48 GAIB profit captured (previously blocked by binary logic)
+
+**System**: 6-Agent TGE Analysis Pipeline v3.6 (Agents 0.5, 0, 1, 2, 3, 4, 5) + 5 Exchange Perpetuals Tracking + 4-Tier Conviction
+**Performance**: High-conviction (9-10/10) analysis in **90 minutes** (was 3h) + Data confidence 58% → 80% + Exchange coverage: 5 platforms
 **Live Dashboard**: https://dacletge.netlify.app/
 
 ### 🎯 Real-World Validation Results
@@ -81,7 +89,48 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ### ✅ Production-Ready Features
 
-**5-Agent TGE Analysis System v3.4** (Arsh TA Integration):
+**6-Agent TGE Analysis System v3.6** (Session 76 - MM Detection + Perpetuals Verification):
+
+| Agent | Version | Model | Purpose | Last Updated |
+|-------|---------|-------|---------|--------------|
+| **Agent 0.5** | v1.1 | Sonnet 4.5 | Knowledge Base Lookup | Session 76 |
+| **Agent 0** | v3.6 | Sonnet 4.5 | Data Retrieval & Validation | Session 76 |
+| **Agent 1** | v2.5 | Haiku | OTC Volume Trends | Session 49 |
+| **Agent 2** | v3.6 | Sonnet 4.5 | Conviction Scoring (4-tier system) | Session 76 |
+| **Agent 3** | v3.0 | Sonnet 4.5 | Multi-Source Convergence | Session 50 |
+| **Agent 4** | v3.6 | Opus | Reality Check | Session 76 |
+| **Agent 5** | v1.4 | Sonnet 4.5 | Position Sizing + Risk (MM detection) | Session 76 |
+
+### 🆕 Recent Major Updates (Sessions 45-76)
+
+**v3.6 - Agent 5 Guardrails** (Session 76, Nov 29):
+- **MM Detection**: Auto-widen SL by 50% for top-tier market makers
+- **Perpetuals Verification**: Block execution if perpetual futures unavailable
+- **Pipeline Validation**: Enhanced error handling, graceful fallbacks
+
+**v3.5 - TA Analysis Repositioning** (Session 75, Nov 27):
+- Moved TA analysis BEFORE Agent 2 scoring (was after)
+- Macro indices now inform conviction calculation
+- Example: Stablecoin dominance bearish → +0.5 conviction for shorts
+
+**v3.4 - 4-Tier Conviction System** (Session 52B, Nov 25) ⭐ **CRITICAL**:
+- Unlocked 7.5-7.9 "Execute with Caution" tier (was binary execute/skip)
+- Direction-aware FDV penalty (shorts: -0.5 penalty, longs: blocker)
+- Data uncertainty position sizing (single gap: -20%, multiple gaps: cap at 3%)
+- **Validated**: +$48 GAIB profit captured (previously blocked)
+
+**v3.3 - Exchange Perpetuals & 6-Agent Pipeline** (Sessions 49-51, Nov 24):
+- Added 5 exchange perpetual futures tracking (Binance, OKX, MEXC, Bybit, Gate.io)
+- Agent 0.5 Knowledge Base Lookup introduced (121-project database)
+- Data confidence: 58% → 80% (+22%)
+- Analysis time: 3h → 90min (-50%)
+
+**v3.2 - Documentation Audit & Data Governance** (Sessions 45-48, Nov 22-23):
+- 156 files reviewed, 165 → 139 markdown files (-16%)
+- Reference data consolidation (VC tiers, alpha callers, exchange tiers)
+- Enhanced data quality controls
+
+**Agent Details**:
 - **Agent 0.5** - Knowledge Base Access Layer (semantic search, 950 lines)
 - **Agent 0** - Data Retrieval & Validation (1,790 lines, **11 OTC platforms** 🆕)
   - **Session 31**: 11 pre-market sources (Whales Market, Hyperliquid, Aster, 8 CEX pre-markets)
