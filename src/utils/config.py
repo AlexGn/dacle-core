@@ -95,6 +95,23 @@ class RedisConfig:
 
 
 @dataclass
+class PerplexityConfig:
+    """Perplexity API configuration (Session 79C)"""
+
+    api_key: str
+
+    @classmethod
+    def from_env(cls) -> "PerplexityConfig":
+        """Load Perplexity config from environment variables"""
+        api_key = os.getenv("PERPLEXITY_API_KEY")
+
+        if not api_key:
+            raise ValueError("PERPLEXITY_API_KEY not set in environment")
+
+        return cls(api_key=api_key)
+
+
+@dataclass
 class AppConfig:
     """Main application configuration"""
 
@@ -104,6 +121,7 @@ class AppConfig:
     discord: DiscordConfig
     together: Optional[TogetherConfig]
     redis: RedisConfig
+    perplexity: Optional[PerplexityConfig]
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -113,6 +131,11 @@ class AppConfig:
         if os.getenv("TOGETHER_API_KEY"):
             together_config = TogetherConfig.from_env()
 
+        # Make Perplexity optional (Session 79C)
+        perplexity_config = None
+        if os.getenv("PERPLEXITY_API_KEY"):
+            perplexity_config = PerplexityConfig.from_env()
+
         return cls(
             env=os.getenv("ENV", "development"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -120,6 +143,7 @@ class AppConfig:
             discord=DiscordConfig.from_env(),
             together=together_config,
             redis=RedisConfig.from_env(),
+            perplexity=perplexity_config,
         )
 
     @property
@@ -222,3 +246,8 @@ def get_together_config() -> TogetherConfig:
 def get_redis_config() -> RedisConfig:
     """Get Redis configuration"""
     return get_config().redis
+
+
+def get_perplexity_config() -> Optional[PerplexityConfig]:
+    """Get Perplexity API configuration (Session 79C)"""
+    return get_config().perplexity
