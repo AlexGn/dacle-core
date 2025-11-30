@@ -101,3 +101,5 @@ secrets/
 venv/
 yarn-debug.log*
 yarn-error.log*
+# API cost tracking (runtime data)
+data/api_costs/
