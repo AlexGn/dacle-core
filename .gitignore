@@ -107,3 +107,8 @@ data/api_costs/
 # Webfetch cache (ephemeral data)
 data/webfetch_results/*
 !data/webfetch_results/.gitkeep
+
+# Test artifacts (ephemeral data)
+tests/artifacts/*
+!tests/artifacts/.gitkeep
+tests/*_results*
