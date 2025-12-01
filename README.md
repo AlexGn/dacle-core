@@ -22,9 +22,17 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v3.8 - Session 79K-TA, December 1, 2025)
+## 📊 Current Status (v3.8 - Session 80-STAGE7, December 2, 2025)
 
-**🚀 LATEST (Session 79K-TA)**: TA Aggregator for Agent 4
+**🚀 LATEST (Session 80-STAGE7)**: Entry Timing Monitor (Stage 7)
+- **Stage 7 Added**: Automated entry timing monitor for high-conviction tokens (≥8.0)
+- **48-Hour Lifecycle**: Pre-TGE → 6h (🔴 Critical) → 48h (🟡 Extended) → Auto-remove
+- **14 TA Indicators**: Macro (7) + Core TA (5) + Advanced (2) via TADataAggregator
+- **Entry Scoring**: 0-10 scale, Telegram alerts when score ≥6.5
+- **GitHub Actions**: Automated monitoring every 15 minutes
+- **Currently Tracking**: RAYLS (10/10 conviction), IRYS (8.5/10 conviction)
+
+**Session 79K-TA**: TA Aggregator for Agent 4
 - **TADataAggregator**: Collects 19 TA/macro indicators into structured JSON for execution decisions
 - **17/19 Indicators Live**: All via free APIs (Binance Futures, CCXT, CoinGecko, Alternative.me)
 - **2 N/A for TGE**: Long/Short liquidations irrelevant for new tokens (no perps at TGE)
@@ -46,7 +54,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - Direction-aware FDV penalty (shorts vs longs)
 - Validated: +$48 GAIB profit captured (previously blocked by binary logic)
 
-**System**: 6-Agent TGE Analysis Pipeline v3.6 (Agents 0.5, 0, 1, 2, 3, 4, 5) + 5 Exchange Perpetuals Tracking + 4-Tier Conviction
+**System**: 7-Stage Automated Pipeline (Discovery → Data → Analysis → Execution → Persistence → Learning → Entry Timing) + 6-Agent TGE Analysis v3.6 + 5 Exchange Perpetuals
 **Performance**: High-conviction (9-10/10) analysis in **90 minutes** (was 3h) + Data confidence 58% → 80% + Exchange coverage: 5 platforms
 **Live Dashboard**: https://dacletge.netlify.app/
 
@@ -249,7 +257,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ## 🎯 System Architecture
 
-### 5-Agent TGE Analysis Pipeline v3.4
+### 7-Stage Automated TGE Pipeline (Session 80-STAGE7)
 
 ```
 Input: Token Symbol (e.g., "MONAD")
@@ -317,7 +325,17 @@ Input: Token Symbol (e.g., "MONAD")
 │ Output: final_report.md (HTML + Markdown)                   │
 └─────────────────────────────────────────────────────────────┘
    ↓
-Output: Final TGE Analysis Report
+┌─────────────────────────────────────────────────────────────┐
+│ STAGE 7: Entry Timing Monitor (Session 80-STAGE7)          │
+│ • Automated monitoring for high-conviction tokens (≥8.0)    │
+│ • 48-hour lifecycle: Pre-TGE → 6h 🔴 → 48h 🟡 → Remove    │
+│ • 14 TA indicators every 15 minutes (GitHub Actions)        │
+│ • Entry score 0-10 (≥6.5 triggers Telegram alert)          │
+│ • TGE-Zero mode fallback (no price history = 2.0/10)        │
+│ Output: Telegram alerts with entry timing recommendations   │
+└─────────────────────────────────────────────────────────────┘
+   ↓
+Output: Final TGE Analysis Report + Real-Time Entry Alerts
 
 NOTE: Agents 1 (OTC Volume) & 3 (Convergence) archived Session 43.
       Basic functionality absorbed into Agents 0 & 2.
