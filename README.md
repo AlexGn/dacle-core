@@ -22,13 +22,19 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v3.7 - Session 79J, December 1, 2025)
+## 📊 Current Status (v3.8 - Session 79K-TA, December 1, 2025)
 
-**🚀 LATEST (Session 79J)**: TGE Data Quality Foundation
+**🚀 LATEST (Session 79K-TA)**: TA Aggregator for Agent 4
+- **TADataAggregator**: Collects 19 TA/macro indicators into structured JSON for execution decisions
+- **17/19 Indicators Live**: All via free APIs (Binance Futures, CCXT, CoinGecko, Alternative.me)
+- **2 N/A for TGE**: Long/Short liquidations irrelevant for new tokens (no perps at TGE)
+- **Stage 4.5**: New pipeline stage collecting TA snapshot between Analysis and Execution
+- **LiquidationTracker**: Funding Rate, OI Change, Cascade Risk from Binance Futures
+
+**Session 79J**: TGE Data Quality Foundation
 - **Field Alias System**: Validator recognizes alternative field names (e.g., `community_allocation_pct` → `token_allocation`)
 - **Alias Verification Report**: Transparency on which aliases were matched during validation
 - **Individual Token Insertion**: `add_token_to_tge_calendar.py` for manual token additions
-- **Architecture Solidified**: Local files = Source of Truth, Supabase = Registry
 - **IRYS Validation**: 100% CRITICAL (14/14), 100% IMPORTANT (9/9)
 
 **Session 76** (Nov 29): Agent 5 Guardrails - MM Detection + Perpetuals Verification
@@ -729,5 +735,5 @@ See [LICENSE](LICENSE)
 ---
 
 **Last Updated**: December 1, 2025
-**Version**: v3.7
-**Status**: Session 79J Complete ✅ (TGE Data Quality Foundation - Field Aliases + Verification Report + Individual Token Insertion) | IRYS 100% Validated 🎯
+**Version**: v3.8
+**Status**: Session 79K-TA Complete ✅ (TA Aggregator - 17/19 Indicators Live via Free APIs) | Stage 4.5 Added 🎯
