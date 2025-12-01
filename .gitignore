@@ -103,3 +103,7 @@ yarn-debug.log*
 yarn-error.log*
 # API cost tracking (runtime data)
 data/api_costs/
+
+# Webfetch cache (ephemeral data)
+data/webfetch_results/*
+!data/webfetch_results/.gitkeep
