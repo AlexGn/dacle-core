@@ -22,13 +22,18 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v3.6 - Session 76, November 29, 2025)
+## 📊 Current Status (v3.7 - Session 79J, December 1, 2025)
 
-**🚀 LATEST (Session 76)**: Agent 5 Guardrails - MM Detection + Perpetuals Verification
-- **MM Detection**: Auto-widen stop loss by 50% when top-tier MM detected (Wintermute, Jump, DWF Labs, GSR, Amber Group)
-- **Perpetuals Verification**: Block execution if perpetual futures unavailable (no "Long Only" surprises)
-- **Knowledge Base Path Fix**: Updated docs/knowledge → docs/reference
-- **Pipeline Validation**: Enhanced error handling and graceful fallbacks
+**🚀 LATEST (Session 79J)**: TGE Data Quality Foundation
+- **Field Alias System**: Validator recognizes alternative field names (e.g., `community_allocation_pct` → `token_allocation`)
+- **Alias Verification Report**: Transparency on which aliases were matched during validation
+- **Individual Token Insertion**: `add_token_to_tge_calendar.py` for manual token additions
+- **Architecture Solidified**: Local files = Source of Truth, Supabase = Registry
+- **IRYS Validation**: 100% CRITICAL (14/14), 100% IMPORTANT (9/9)
+
+**Session 76** (Nov 29): Agent 5 Guardrails - MM Detection + Perpetuals Verification
+- **MM Detection**: Auto-widen stop loss by 50% when top-tier MM detected
+- **Perpetuals Verification**: Block execution if perpetual futures unavailable
 
 **Session 52B - CRITICAL** (Nov 25): 4-Tier Conviction System
 - Unlocked 7.5-7.9 "Execute with Caution" tier (3-4% position)
@@ -723,6 +728,6 @@ See [LICENSE](LICENSE)
 
 ---
 
-**Last Updated**: November 25, 2025
-**Version**: v3.4.1
-**Status**: Session 68 Complete ✅ (IRYS Gap Analysis + TA Integration + Documentation Cleanup) | Price Action Analyzer Built 🎯
+**Last Updated**: December 1, 2025
+**Version**: v3.7
+**Status**: Session 79J Complete ✅ (TGE Data Quality Foundation - Field Aliases + Verification Report + Individual Token Insertion) | IRYS 100% Validated 🎯
