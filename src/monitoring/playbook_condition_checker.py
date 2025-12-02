@@ -21,6 +21,7 @@ from src.models.playbook_models import (
     MarketSnapshot
 )
 from src.monitoring.condition_check_functions import execute_check_function
+from src.monitoring.market_regime_classifier import MarketRegimeClassifier
 from scripts.helpers.indices_tracker import IndicesTracker
 import ccxt
 
@@ -44,8 +45,9 @@ class PlaybookConditionChecker:
     }
 
     def __init__(self):
-        """Initialize checker with indices tracker."""
+        """Initialize checker with indices tracker and market regime classifier."""
         self.indices_tracker = IndicesTracker()
+        self.regime_classifier = MarketRegimeClassifier()
 
     def check_all_conditions(
         self,
@@ -130,6 +132,15 @@ class PlaybookConditionChecker:
         # Capture market snapshot
         market_snapshot = self._capture_market_snapshot()
 
+        # Classify market regime (Gemini feedback: critical for regime-aware learning)
+        try:
+            regime_result = self.regime_classifier.classify()
+            market_regime = regime_result['regime']
+            print(f"🌍 Market Regime: {market_regime} (Confidence: {regime_result['confidence']:.0%})")
+        except Exception as e:
+            print(f"⚠️  Market regime classification failed: {e}, defaulting to CHOP")
+            market_regime = 'CHOP'
+
         # Determine if alert should be sent
         should_alert = self._should_send_alert(
             playbook,
@@ -149,6 +160,7 @@ class PlaybookConditionChecker:
             readiness_score=readiness_score,
             condition_states=condition_states,
             market_snapshot=market_snapshot,
+            market_regime=market_regime,
             should_alert=should_alert,
             newly_met_conditions=newly_met,
             newly_lost_conditions=newly_lost
