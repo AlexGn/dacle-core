@@ -17,7 +17,24 @@ from pathlib import Path
 
 from scripts.helpers.price_action_analyzer import PriceActionAnalyzer
 from scripts.helpers.indices_tracker import IndicesTracker
+from scripts.helpers.technical_pattern_detector import (
+    TrendlineBreakDetector,
+    CandlestickAnalyzer,
+    RetestDetector
+)
+from scripts.helpers.gpt4_vision_analyzer import GPT4VisionAnalyzer, CostGuard
+from scripts.helpers.ta_decision_logger import TADecisionLogger
 import ccxt
+import os
+
+# Global cost guard instance (shared across all condition checks)
+_cost_guard = CostGuard(max_calls_per_week=15)
+
+# Global decision logger (tracks all TA decisions)
+_decision_logger = TADecisionLogger()
+
+# Global flag to enable/disable Tier 3 (set via env var)
+ENABLE_TIER3 = os.getenv('ENABLE_TIER3_VISION', 'false').lower() == 'true'
 
 
 def _get_btc_price() -> float:
@@ -61,7 +78,13 @@ def check_usdt_dominance(params: Dict) -> Tuple[bool, str]:
     """
     try:
         tracker = IndicesTracker()
-        usdt_d = tracker.get_usdt_dominance()
+        indices_data = tracker.fetch_all_indices()
+
+        if not indices_data or 'indices' not in indices_data:
+            return (False, "Unable to fetch USDT.D data")
+
+        usdt_d_data = indices_data['indices'].get('usdt_d', {})
+        usdt_d = usdt_d_data.get('value', 0)
 
         support_level = params.get('support_level', 4.88)
         bounce_threshold = params.get('bounce_threshold', 5.0)
@@ -159,97 +182,281 @@ def check_eth_level(params: Dict) -> Tuple[bool, str]:
 
 def check_trendline_break(params: Dict) -> Tuple[bool, str]:
     """
-    Check if token broke a trendline (requires manual verification).
+    Check if token broke a trendline using automated pattern detection.
 
     Condition: Price breaks below descending trendline or above ascending trendline
 
     Args:
         params: {
             'direction': str ('upside' or 'downside'),
-            'token_symbol': str
+            'token_symbol': str,
+            'timeframe': str (optional, default '4h')
         }
 
     Returns:
         (met: bool, reason: str)
 
-    Note: This function requires manual chart analysis. In automated mode,
-    it returns False until manually updated via database.
-
     Example:
         check_trendline_break({'direction': 'downside', 'token_symbol': 'RLS'})
-        → (False, "Awaiting manual confirmation of downside trendline break")
+        → (True, "Price $0.024 broke below support $0.026 | Death cross confirmed")
     """
-    direction = params.get('direction', 'downside')
-    token_symbol = params.get('token_symbol', 'TOKEN')
+    try:
+        direction = params.get('direction', 'downside')
+        token_symbol = params.get('token_symbol', 'TOKEN')
+        timeframe = params.get('timeframe', '4h')
 
-    # TODO: Integrate with chart pattern detection system (future enhancement)
-    # For now, this requires manual verification and database update
+        # Add /USDT suffix if not present
+        if '/' not in token_symbol:
+            token_symbol = f"{token_symbol}/USDT"
 
-    return (False, f"Awaiting manual confirmation of {direction} trendline break for {token_symbol}")
+        # Use Tier 1 automated detection
+        detector = TrendlineBreakDetector()
+        result = detector.detect_break(
+            token_symbol=token_symbol,
+            direction=direction,
+            timeframe=timeframe
+        )
+
+        # Extract clean symbol for logging
+        clean_symbol = token_symbol.split('/')[0] if '/' in token_symbol else token_symbol
+
+        # Escalate to Tier 3 if confidence is low and Tier 3 is enabled
+        if ENABLE_TIER3 and result.confidence < 0.75:
+            can_call, reason = _cost_guard.can_call(token_symbol)
+
+            if can_call:
+                try:
+                    analyzer = GPT4VisionAnalyzer()
+                    tier3_result = analyzer.analyze_trendline_break(
+                        token_symbol=token_symbol,
+                        direction=direction,
+                        timeframe=timeframe
+                    )
+                    _cost_guard.record_call(token_symbol)
+
+                    # Log Tier 3 decision
+                    _decision_logger.log_decision(
+                        token_symbol=clean_symbol,
+                        condition_type='trendline_break',
+                        tier_used=3,
+                        confidence=tier3_result.confidence,
+                        decision_met=tier3_result.met,
+                        reasoning=tier3_result.reasoning,
+                        cost=tier3_result.cost_estimate,
+                        metadata={'direction': direction, 'timeframe': timeframe}
+                    )
+
+                    return (
+                        tier3_result.met,
+                        f"[Tier 3 GPT-4o {tier3_result.confidence:.0%}] {tier3_result.reasoning}"
+                    )
+                except Exception as e:
+                    # Fall back to Tier 1 if Tier 3 fails - log as Tier 1
+                    _decision_logger.log_decision(
+                        token_symbol=clean_symbol,
+                        condition_type='trendline_break',
+                        tier_used=1,
+                        confidence=result.confidence,
+                        decision_met=result.met,
+                        reasoning=f"Tier 3 failed: {str(e)}, fallback to Tier 1",
+                        cost=0.0,
+                        metadata={'direction': direction, 'timeframe': timeframe, 'tier3_error': str(e)}
+                    )
+                    return (result.met, f"[Tier 1 {result.confidence:.0%}, Tier 3 failed: {str(e)}] {result.reason}")
+            else:
+                # Cost guard blocked - log as Tier 1
+                _decision_logger.log_decision(
+                    token_symbol=clean_symbol,
+                    condition_type='trendline_break',
+                    tier_used=1,
+                    confidence=result.confidence,
+                    decision_met=result.met,
+                    reasoning=f"Cost guard blocked: {reason}",
+                    cost=0.0,
+                    metadata={'direction': direction, 'timeframe': timeframe, 'cost_guard_reason': reason}
+                )
+                return (result.met, f"[Tier 1 {result.confidence:.0%}, Cost Guard: {reason}] {result.reason}")
+
+        # Return Tier 1 result - log decision
+        _decision_logger.log_decision(
+            token_symbol=clean_symbol,
+            condition_type='trendline_break',
+            tier_used=1,
+            confidence=result.confidence,
+            decision_met=result.met,
+            reasoning=result.reason,
+            cost=0.0,
+            metadata={'direction': direction, 'timeframe': timeframe}
+        )
+
+        if result.confidence >= 0.75:
+            return (result.met, f"[Tier 1 HIGH CONFIDENCE {result.confidence:.0%}] {result.reason}")
+        else:
+            return (result.met, f"[Tier 1 {result.confidence:.0%}] {result.reason}")
+
+    except Exception as e:
+        return (False, f"Error detecting trendline break: {str(e)}")
 
 
 def check_rejection_candle(params: Dict) -> Tuple[bool, str]:
     """
-    Check if token printed a rejection candle (requires manual verification).
+    Check if token printed a rejection candle using automated pattern detection.
 
     Condition: Strong rejection wick/candle at resistance
 
     Args:
         params: {
             'token_symbol': str,
-            'level': float (optional)
+            'level': float,
+            'direction': str (optional, 'downside' for bearish rejection, 'upside' for bullish),
+            'timeframe': str (optional, default '4h'),
+            'lookback': int (optional, default 3 candles)
         }
 
     Returns:
         (met: bool, reason: str)
 
-    Note: Requires manual chart analysis or integration with candlestick pattern detection.
-
     Example:
-        check_rejection_candle({'token_symbol': 'RLS', 'level': 0.015})
-        → (False, "Awaiting rejection candle confirmation at $0.015")
+        check_rejection_candle({'token_symbol': 'RLS', 'level': 0.0264})
+        → (True, "At $0.0264: Strong upper wick (3.2x body) | Close in lower 25% of range")
     """
-    token_symbol = params.get('token_symbol', 'TOKEN')
-    level = params.get('level')
+    try:
+        token_symbol = params.get('token_symbol', 'TOKEN')
+        level = params.get('level')
+        direction = params.get('direction', 'downside')
+        timeframe = params.get('timeframe', '4h')
+        lookback = params.get('lookback', 3)
 
-    # TODO: Integrate with candlestick pattern detection system (future enhancement)
+        if not level:
+            return (False, f"Missing 'level' parameter for {token_symbol} rejection check")
 
-    if level:
-        return (False, f"Awaiting rejection candle confirmation for {token_symbol} at ${level}")
-    else:
-        return (False, f"Awaiting rejection candle confirmation for {token_symbol}")
+        # Add /USDT suffix if not present
+        if '/' not in token_symbol:
+            token_symbol = f"{token_symbol}/USDT"
+
+        # Use Tier 1 automated detection
+        analyzer = CandlestickAnalyzer()
+        result = analyzer.detect_rejection(
+            token_symbol=token_symbol,
+            level=level,
+            direction=direction,
+            timeframe=timeframe,
+            lookback=lookback
+        )
+
+        # Escalate to Tier 3 if confidence is low and Tier 3 is enabled
+        if ENABLE_TIER3 and result.confidence < 0.75:
+            can_call, reason = _cost_guard.can_call(token_symbol)
+
+            if can_call:
+                try:
+                    vision_analyzer = GPT4VisionAnalyzer()
+                    tier3_result = vision_analyzer.analyze_rejection_candle(
+                        token_symbol=token_symbol,
+                        level=level,
+                        direction=direction,
+                        timeframe=timeframe
+                    )
+                    _cost_guard.record_call(token_symbol)
+
+                    return (
+                        tier3_result.met,
+                        f"[Tier 3 GPT-4o {tier3_result.confidence:.0%}] {tier3_result.reasoning}"
+                    )
+                except Exception as e:
+                    # Fall back to Tier 1 if Tier 3 fails
+                    return (result.met, f"[Tier 1 {result.confidence:.0%}, Tier 3 failed: {str(e)}] {result.reason}")
+            else:
+                # Cost guard blocked - return Tier 1 with note
+                return (result.met, f"[Tier 1 {result.confidence:.0%}, Cost Guard: {reason}] {result.reason}")
+
+        # Return Tier 1 result
+        if result.confidence >= 0.75:
+            return (result.met, f"[Tier 1 HIGH CONFIDENCE {result.confidence:.0%}] {result.reason}")
+        else:
+            return (result.met, f"[Tier 1 {result.confidence:.0%}] {result.reason}")
+
+    except Exception as e:
+        return (False, f"Error detecting rejection candle: {str(e)}")
 
 
 def check_retest_confirmation(params: Dict) -> Tuple[bool, str]:
     """
-    Check if token confirmed a retest (requires manual verification).
+    Check if token confirmed a retest using automated pattern detection.
 
     Condition: Price retests broken level and shows rejection
 
     Args:
         params: {
             'token_symbol': str,
-            'level': float (optional)
+            'level': float,
+            'direction': str (optional, 'downside' for resistance retest, 'upside' for support retest),
+            'timeframe': str (optional, default '4h')
         }
 
     Returns:
         (met: bool, reason: str)
 
-    Note: Requires manual chart analysis.
-
     Example:
-        check_retest_confirmation({'token_symbol': 'RLS', 'level': 0.015})
-        → (False, "Awaiting retest confirmation at $0.015")
+        check_retest_confirmation({'token_symbol': 'RLS', 'level': 0.0264})
+        → (True, "Price returned to $0.0264 | Failed to reclaim level | Lower high formed")
     """
-    token_symbol = params.get('token_symbol', 'TOKEN')
-    level = params.get('level')
+    try:
+        token_symbol = params.get('token_symbol', 'TOKEN')
+        level = params.get('level')
+        direction = params.get('direction', 'downside')
+        timeframe = params.get('timeframe', '4h')
 
-    # TODO: Integrate with price action detection system (future enhancement)
+        if not level:
+            return (False, f"Missing 'level' parameter for {token_symbol} retest check")
 
-    if level:
-        return (False, f"Awaiting retest confirmation for {token_symbol} at ${level}")
-    else:
-        return (False, f"Awaiting retest confirmation for {token_symbol}")
+        # Add /USDT suffix if not present
+        if '/' not in token_symbol:
+            token_symbol = f"{token_symbol}/USDT"
+
+        # Use Tier 1 automated detection
+        detector = RetestDetector()
+        result = detector.detect_retest(
+            token_symbol=token_symbol,
+            level=level,
+            direction=direction,
+            timeframe=timeframe
+        )
+
+        # Escalate to Tier 3 if confidence is low and Tier 3 is enabled
+        if ENABLE_TIER3 and result.confidence < 0.75:
+            can_call, reason = _cost_guard.can_call(token_symbol)
+
+            if can_call:
+                try:
+                    vision_analyzer = GPT4VisionAnalyzer()
+                    tier3_result = vision_analyzer.analyze_retest_confirmation(
+                        token_symbol=token_symbol,
+                        level=level,
+                        direction=direction,
+                        timeframe=timeframe
+                    )
+                    _cost_guard.record_call(token_symbol)
+
+                    return (
+                        tier3_result.met,
+                        f"[Tier 3 GPT-4o {tier3_result.confidence:.0%}] {tier3_result.reasoning}"
+                    )
+                except Exception as e:
+                    # Fall back to Tier 1 if Tier 3 fails
+                    return (result.met, f"[Tier 1 {result.confidence:.0%}, Tier 3 failed: {str(e)}] {result.reason}")
+            else:
+                # Cost guard blocked - return Tier 1 with note
+                return (result.met, f"[Tier 1 {result.confidence:.0%}, Cost Guard: {reason}] {result.reason}")
+
+        # Return Tier 1 result
+        if result.confidence >= 0.75:
+            return (result.met, f"[Tier 1 HIGH CONFIDENCE {result.confidence:.0%}] {result.reason}")
+        else:
+            return (result.met, f"[Tier 1 {result.confidence:.0%}] {result.reason}")
+
+    except Exception as e:
+        return (False, f"Error detecting retest confirmation: {str(e)}")
 
 
 def check_total3_weakness(params: Dict) -> Tuple[bool, str]:
@@ -261,7 +468,7 @@ def check_total3_weakness(params: Dict) -> Tuple[bool, str]:
     Args:
         params: {
             'direction': str ('declining', 'support_break'),
-            'support_level': float (optional)
+            'support_level': float (optional, in billions)
         }
 
     Returns:
@@ -269,30 +476,35 @@ def check_total3_weakness(params: Dict) -> Tuple[bool, str]:
 
     Example:
         check_total3_weakness({'direction': 'declining'})
-        → (True, "Total3 declining -2.3% in last 24h")
+        → (True, "Total3 declining (signal: BEARISH_FOR_ALTS)")
     """
     try:
         tracker = IndicesTracker()
-        total3_data = tracker.get_index_data('TOTAL3')
+        indices_data = tracker.fetch_all_indices()
 
-        if not total3_data:
+        if not indices_data or 'indices' not in indices_data:
             return (False, "Total3 data unavailable")
 
+        total3_data = indices_data['indices'].get('total3', {})
+        total3_value = total3_data.get('value', 0)  # In USD
+        total3_signal = total3_data.get('signal', 'INFO')
+        total3_billions = total3_value / 1e9  # Convert to billions
+
         direction = params.get('direction', 'declining')
-        current_price = total3_data.get('current_price', 0)
-        change_24h = total3_data.get('change_24h', 0)
 
         if direction == 'declining':
-            if change_24h < -1.0:  # More than 1% decline
-                return (True, f"Total3 declining {change_24h:.1f}% in last 24h")
+            # Check macro signal for weakness indication
+            macro_signal = indices_data.get('macro_signal', 'NEUTRAL')
+            if 'BEARISH' in macro_signal:
+                return (True, f"Total3 at ${total3_billions:.0f}B (macro signal: {macro_signal})")
             else:
-                return (False, f"Total3 at {change_24h:.1f}% (waiting for decline)")
+                return (False, f"Total3 at ${total3_billions:.0f}B (macro signal: {macro_signal}, waiting for weakness)")
         elif direction == 'support_break':
-            support_level = params.get('support_level')
-            if support_level and current_price < support_level:
-                return (True, f"Total3 broke ${support_level:,.0f}B support (now ${current_price:,.0f}B)")
+            support_level = params.get('support_level')  # In billions
+            if support_level and total3_billions < support_level:
+                return (True, f"Total3 broke ${support_level:.0f}B support (now ${total3_billions:.0f}B)")
             else:
-                return (False, f"Total3 at ${current_price:,.0f}B (waiting for support break)")
+                return (False, f"Total3 at ${total3_billions:.0f}B (waiting for support break below ${support_level:.0f}B)")
         else:
             return (False, f"Unknown direction: {direction}")
 
@@ -349,12 +561,17 @@ def check_macro_alignment(params: Dict) -> Tuple[bool, str]:
         → (True, "Macro aligned: BTC <$88k, USDT.D >5%")
     """
     try:
-        btc_context = get_btc_context()
-        btc_price = btc_context.get('current_price', 0)
+        btc_price = _get_btc_price()
         btc_below = params.get('btc_below', 88000)
 
         tracker = IndicesTracker()
-        usdt_d = tracker.get_usdt_dominance()
+        indices_data = tracker.fetch_all_indices()
+
+        if not indices_data or 'indices' not in indices_data:
+            return (False, "Unable to fetch macro data")
+
+        usdt_d_data = indices_data['indices'].get('usdt_d', {})
+        usdt_d = usdt_d_data.get('value', 0)
         usdt_d_above = params.get('usdt_d_above', 5.0)
 
         btc_bearish = btc_price < btc_below

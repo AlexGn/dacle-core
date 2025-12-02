@@ -206,7 +206,12 @@ class PlaybookConditionChecker:
             btc_ticker = exchange.fetch_ticker('BTC/USDT')
             eth_ticker = exchange.fetch_ticker('ETH/USDT')
 
-            usdt_d = self.indices_tracker.get_usdt_dominance()
+            # Get USDT.D from indices
+            indices_data = self.indices_tracker.fetch_all_indices()
+            usdt_d = 0
+            if indices_data and 'indices' in indices_data:
+                usdt_d_data = indices_data['indices'].get('usdt_d', {})
+                usdt_d = usdt_d_data.get('value', 0)
 
             return {
                 'timestamp': datetime.now(timezone.utc).isoformat(),
