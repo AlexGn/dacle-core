@@ -112,3 +112,8 @@ data/webfetch_results/*
 tests/artifacts/*
 !tests/artifacts/.gitkeep
 tests/*_results*
+
+# Supabase CLI
+.supabase/
+supabase/config.toml
+supabase/.temp/
