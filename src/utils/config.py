@@ -48,12 +48,14 @@ class DiscordConfig:
         token = os.getenv("DISCORD_BOT_TOKEN")
         server_id = os.getenv("DISCORD_PRIVATE_SERVER_ID")
 
-        if not token:
-            raise ValueError("DISCORD_BOT_TOKEN not set in environment")
-        if not server_id:
-            raise ValueError("DISCORD_PRIVATE_SERVER_ID not set in environment")
+        # Discord is optional - allow None values if not configured
+        # Raises error only if partially configured (one but not both)
+        if token and not server_id:
+            raise ValueError("DISCORD_BOT_TOKEN set but DISCORD_PRIVATE_SERVER_ID missing")
+        if server_id and not token:
+            raise ValueError("DISCORD_PRIVATE_SERVER_ID set but DISCORD_BOT_TOKEN missing")
 
-        return cls(bot_token=token, private_server_id=server_id)
+        return cls(bot_token=token or "", private_server_id=server_id or "")
 
 
 @dataclass
