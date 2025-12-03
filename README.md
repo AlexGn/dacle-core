@@ -22,13 +22,24 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v3.8 - Session 81, December 2, 2025)
+## 📊 Current Status (v3.9 - Session 84, December 3, 2025)
 
-**🚀 LATEST (Session 81)**: Repository Cleanup & Organization
+**🚀 LATEST (Session 84 Phase 2)**: Profitability-Based Condition Optimization ✅
+- **avg_pnl_per_trigger Tracking**: THE key metric - optimizes for profitability, not accuracy
+- **Agent 6 & Agent 7**: Playbook generation + profitability analytics (947 lines)
+- **Trade-Condition Linking**: Attribution system (48h lookback, influence weighting)
+- **Database Schema**: 2 new tables (condition_trade_links, condition_profitability_metrics)
+- **Capital Efficiency**: "Tier 3's 66.7% rate costs $5/call. If triggers don't lead to profits, you're burning capital." (Gemini)
+- **Example Impact**: check_trendline_break (+$15.25/trigger) now prioritized over check_usdt_dominance (80% accuracy, -$5.20/trigger) → saves $285.60/90 days
+
+**Session 84 Phase 1**: Market Regime Tagging + Weighted Similarity ✅
+- **Market Regime**: Segregate condition performance by BULL/BEAR/CHOP regimes
+- **Weighted Similarity**: 0.0-1.0 scoring (FDV 30%, Float 25%, VC 20%, Exchange 15%, Vesting 10%)
+
+**Session 81**: Repository Cleanup & Organization
 - **Templates Consolidated**: All templates moved to `/templates` folder (11 templates total)
 - **Data Cleanup**: Archived unused `security/` folder and incomplete MONAD token data
 - **Infrastructure**: Removed obsolete Replit deployment files and webhook workflow
-- **Organization**: Cleaner repository structure with centralized templates
 
 **Session 80-STAGE7**: Entry Timing Monitor (Stage 7)
 - **Stage 7 Added**: Automated entry timing monitor for high-conviction tokens (≥8.0)
@@ -114,7 +125,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ### ✅ Production-Ready Features
 
-**6-Agent TGE Analysis System v3.6** (Session 76 - MM Detection + Perpetuals Verification):
+**7-Agent TGE Analysis System v3.9** (Session 84 - Profitability-Based Optimization):
 
 | Agent | Version | Model | Purpose | Last Updated |
 |-------|---------|-------|---------|--------------|
@@ -125,6 +136,8 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 | **Agent 3** | v3.0 | Sonnet 4.5 | Multi-Source Convergence | Session 50 |
 | **Agent 4** | v3.6 | Opus | Reality Check | Session 76 |
 | **Agent 5** | v1.4 | Sonnet 4.5 | Position Sizing + Risk (MM detection) | Session 76 |
+| **Agent 6** | v1.0 | Sonnet 4.5 | Playbook Generator (profitability-based) | Session 84 |
+| **Agent 7** | v1.1 | Sonnet 4.5 | Learning Analytics (avg_pnl_per_trigger) | Session 84 |
 
 ### 🆕 Recent Major Updates (Sessions 45-76)
 
@@ -747,8 +760,8 @@ See [LICENSE](LICENSE)
 
 ## 📊 Project Stats
 
-- **Total Lines of Code**: 15,000+ (agents, scripts, documentation)
-- **Agent System**: 6 agents, 4,500+ lines of logic
+- **Total Lines of Code**: 16,000+ (agents, scripts, documentation)
+- **Agent System**: 7 agents (Agents 6 & 7 added Session 84), 5,450+ lines of logic
 - **Documentation**: 124 markdown files (PRD, guides, sessions, analysis)
 - **Knowledge Base**: 9 case studies embedded (Wormhole, Starknet, ZKSync, Meteora, etc.)
 - **Test Coverage**: 4 real TGE analyses (MONAD, ENDLESS, NEUTRL, ARIA)
@@ -758,6 +771,6 @@ See [LICENSE](LICENSE)
 
 ---
 
-**Last Updated**: December 2, 2025
-**Version**: v3.8
-**Status**: Session 81 Complete ✅ (Repository Cleanup & Organization) | Session 80-STAGE7: Entry Monitor Active 🎯
+**Last Updated**: December 3, 2025
+**Version**: v3.9
+**Status**: Session 84 Phase 2 Complete ✅ (Profitability-Based Condition Optimization) | Agents 6 & 7 Operational 🎯
