@@ -704,7 +704,7 @@ python scripts/test_connection.py
 See `reports/` directory for TGE analysis outputs.
 
 ### Session Documentation
-See [archive information is on separate git branch (archive-branch)](docs/archive information is on separate git branch (archive-branch)) for access to historical session summaries (preserved in archive-branch).
+Recent session documentation is available in [docs/sessions/](docs/sessions/). Historical session summaries (3+ months old) are preserved in git history.
 
 ---
 
