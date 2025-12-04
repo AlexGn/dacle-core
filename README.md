@@ -135,7 +135,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 **Files Created** (Session 41):
 - [docs/implementation/TA_LEARNING_LOOP.md](docs/implementation/TA_LEARNING_LOOP.md) - Technical guide
-- [docs/workflows/TA_CORRELATION_WORKFLOW.md](docs/workflows/TA_CORRELATION_WORKFLOW.md) - User workflow
+- [docs/workflows/TA_CORRELATION_WORKFLOW.md](guides/TA_CORRELATION_WORKFLOW.md) - User workflow
 
 **Next Phase**: Begin prospective TA tracking on next TGE discovery
 
