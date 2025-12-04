@@ -692,7 +692,7 @@ python scripts/test_connection.py
 
 ### Getting Started
 - **[.claude/session_start.md](.claude/session_start.md)** - Session context loader
-- **[docs/PRD.md](docs/PRD.md)** - Product requirements
+- **docs/PRD.md** - Product requirements
 - **[docs/STATUS.md](docs/STATUS.md)** - Current status (always up-to-date)
 
 ### TGE Analysis System
