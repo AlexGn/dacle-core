@@ -117,3 +117,6 @@ tests/*_results*
 .supabase/
 supabase/config.toml
 supabase/.temp/
+
+# Local Netlify folder
+.netlify
