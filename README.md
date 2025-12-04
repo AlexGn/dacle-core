@@ -32,6 +32,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - **Full Automation**: Discovery → Analysis → Alert → Execution pipeline complete
 - **Time Saved**: 30-60 seconds per trade (no manual position calculation)
 - **Mental Load**: Dollar amounts eliminate manual math
+- 📄 **[Complete Documentation →](./docs/SESSION_84_COMPLETE.md)**
 
 **Session 84 Phase 2**: Profitability-Based Condition Optimization ✅
 - **avg_pnl_per_trigger Tracking**: THE key metric - optimizes for profitability, not accuracy
