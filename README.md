@@ -270,7 +270,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
    - No automation needed
 
 **What We Built** (Analysis Infrastructure):
-- ✅ 7-agent TGE analysis system (Agents 0, 0.5, 2, 4, 5, 6, 7)
+- ✅ 7-agent TGE analysis system (Agents 0, 0.5, 2, 5, 6, 7)
 - ✅ Multi-platform OTC price tracking (11 platforms)
 - ✅ Alpha Caller mentions (54 Twitter accounts integrated into Agent 2)
 - ✅ Social Hype scoring (integrated into Agent 2)
@@ -278,6 +278,12 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - ✅ Auto-alert pipeline (Telegram notifications)
 - ✅ Position calculator (dollar amounts)
 - ✅ 10,000+ lines of implementation
+
+**Agent Architecture** (See [AGENT_MAPPING.md](docs/architecture/AGENT_MAPPING.md)):
+- `src/agents/` - Modular processing units (validation, position sizing, playbooks, analytics)
+- `src/conviction/` - Core scoring engine (Agent 2 + supporting modules)
+- `src/integrations/` - Data extraction (10+ sources, conceptual "Agent 1")
+- Agent 3 (manual feedback) and Agent 4 (execution check) deprecated/archived
 
 **Phase 2 Features** (Advanced - Deferred):
 - ⏳ **OTC Volume Trend Analysis** (MET pattern detection) - Agent 1 archived, Phase 2 roadmap
