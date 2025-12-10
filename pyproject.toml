@@ -30,7 +30,6 @@ dependencies = [
     "pycoingecko>=3.1.0",  # 7-Index tracking (USDT.D, BTC.D, etc.)
     "beautifulsoup4>=4.12.0",  # Web scraping for data collection
     "lxml>=4.9.0",  # XML/HTML parser for BeautifulSoup
-    "together>=1.0.0",  # Together AI API (legacy, now optional)
     "mplfinance>=0.12.10b0",  # Chart generation for GPT-4o Vision (TA Tier 3)
     "openai>=2.8.0",  # GPT-4o Vision API (TA Tier 3)
     "notion-client>=2.2.1",  # Notion API integration for TGE database sync
@@ -43,6 +42,9 @@ dev = [
     "black>=23.11.0",
     "isort>=5.12.0",
     "mypy>=1.7.0",
+]
+legacy = [
+    "together>=1.0.0",  # Together AI API (deprecated, only for legacy Discord bot)
 ]
 
 [build-system]

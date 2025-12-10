@@ -11,7 +11,12 @@ from typing import Optional
 import discord
 from discord import app_commands
 from discord.ext import commands
-from together import Together
+
+# Together is optional - only needed for LLM extraction
+try:
+    from together import Together
+except ImportError:
+    Together = None  # type: ignore
 
 from src.integrations.cryptorank.scanner import TGEScanner
 from src.integrations.cryptorank.unlock_monitor import UnlockMonitor
@@ -28,9 +33,14 @@ class CryptoRankCommands(commands.Cog):
         self.bot = bot
         self.kb = get_knowledge_base()
 
-        # Initialize Together client for LLM extraction
-        together_config = get_together_config()
-        self.together_client = Together(api_key=together_config.api_key)
+        # Initialize Together client for LLM extraction (optional)
+        self.together_client = None
+        if Together is not None:
+            try:
+                together_config = get_together_config()
+                self.together_client = Together(api_key=together_config.api_key)
+            except Exception as e:
+                logger.warning(f"Together client not available: {e}")
 
         # Initialize scanners
         self.tge_scanner = TGEScanner(self.kb, self.together_client)
