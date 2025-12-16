@@ -800,6 +800,7 @@ See [LICENSE](LICENSE)
 - **Streamlit** - Dashboard UI
 - **Playwright** - Browser automation (MEXC, Aevo)
 - **Notion MCP** - Manual research extraction
+- **claude-mem** - Persistent development session memory (Claude Code plugin)
 
 ---
 

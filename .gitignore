@@ -120,3 +120,6 @@ supabase/.temp/
 
 # Local Netlify folder
 .netlify
+
+# claude-mem plugin data (local development memory)
+.claude-mem/
