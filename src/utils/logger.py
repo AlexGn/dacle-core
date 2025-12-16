@@ -31,6 +31,10 @@ def setup_logger(
         config = get_config()
         level = config.log_level
 
+    # Default to INFO if level is still None or invalid
+    if not level or not isinstance(level, str):
+        level = "INFO"
+
     # Create logger
     logger = logging.getLogger(name)
     logger.setLevel(getattr(logging, level.upper()))
