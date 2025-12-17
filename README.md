@@ -22,14 +22,23 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v3.15 - Sessions 115-117, December 11, 2025)
+## 📊 Current Status (v4.0 - Sessions 140-145, December 17, 2025)
 
-**🚀 LATEST (Sessions 115-117)**: VPS Migration Complete - Real-time monitoring on Hetzner VPS ✅
+**🚀 LATEST (Sessions 140-145)**: Model v1.0 Production Lock - OUTSTANDING Correlation Achieved ✅
+- **Model Performance**: Spearman ρ=-0.612 (OUTSTANDING, target was -0.520)
+- **Production Status**: Model v1.0 weights locked and frozen for production use
+- **Forward Validation**: Out-of-sample (OOS) tracking system active for real-world validation
+- **Statistical Foundation**: Scipy integration, Spearman correlation, score compression fix (+48.2%)
+- **Component Optimization**: Weight rebalancing, supply components disabled (inverse correlation)
+- **Alert System Overhaul**: Anti-spam, actionability-only, post-TGE validation gate
+- **Pattern Coverage**: 100% (50/50 TGEs) with market regime data
+- **Top Predictor**: FDV/MC Ratio (ρ=-0.549 STRONG)
+- 📄 **[Model v1.0 Documentation →](./docs/sessions/SESSION_145_MODEL_LOCK.md)**
+
+**🚀 PREVIOUS (Sessions 115-117)**: VPS Migration Complete - Real-time monitoring on Hetzner VPS ✅
 - **Sniper Daemon**: Continuous conviction scanning on VPS with systemd integration
 - **Watchtower Migration**: Alert-based monitoring moved from GitHub Actions to VPS
-- **Historical Pattern Analysis**: Session 115 - verbose component breakdown, Month 1 scoring overhaul
-- **IRYS Learnings**: Session 116 - confluence override, lifecycle-aware liquidity thresholds
-- **Bug Fixes**: Session 117 - duplicate alerts fixed, macro data reliability improved
+- **Historical Pattern Analysis**: Verbose component breakdown, Month 1 scoring overhaul
 - **Infrastructure**: Both daemons running as systemd services with auto-restart
 - 📄 **[VPS Commands →](./docs/reference/command_line.md)**
 
@@ -806,17 +815,18 @@ See [LICENSE](LICENSE)
 
 ## 📊 Project Stats
 
-- **Total Lines of Code**: 16,000+ (agents, scripts, documentation)
+- **Total Lines of Code**: 18,000+ (agents, scripts, documentation, validation)
 - **Agent System**: 7 agents (Agents 6 & 7 added Session 84), 5,450+ lines of logic
-- **Documentation**: 124 markdown files (PRD, guides, sessions, analysis)
+- **Documentation**: 130+ markdown files (PRD, guides, sessions, analysis)
 - **Knowledge Base**: 9 case studies embedded (Wormhole, Starknet, ZKSync, Meteora, etc.)
-- **Test Coverage**: 4 real TGE analyses (MONAD, ENDLESS, NEUTRL, ARIA)
-- **Sessions Completed**: 25 major development sessions
-- **Database Tables**: 11 (projects, mentions, trades, patterns, OTC data, etc.)
-- **OTC Platforms**: 4 integrated (Hyperliquid, Aevo, MEXC, Gate.io)
+- **Test Coverage**: 50+ real TGE analyses with correlation validation
+- **Sessions Completed**: 145+ major development sessions
+- **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
+- **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
+- **Validation System**: Forward validation (OOS) tracking active
 
 ---
 
-**Last Updated**: December 11, 2025
-**Version**: v3.15
-**Status**: Sessions 115-117 Complete ✅ (VPS Migration - Sniper daemon, watchtower migration, historical pattern analysis) 🚀
+**Last Updated**: December 17, 2025
+**Version**: v4.0
+**Status**: Sessions 140-145 Complete ✅ (Model v1.0 Production Lock - ρ=-0.612 OUTSTANDING, Forward Validation Active) 🚀
