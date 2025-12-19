@@ -22,16 +22,22 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v4.1 - Session 232, December 19, 2025)
+## 📊 Current Status (v4.2 - Session 236, December 19, 2025)
 
-**🚀 LATEST (Session 232)**: Gemini External Review - 4 Safety Mechanisms Implemented ✅
+**🚀 LATEST (Session 236)**: Conviction Staleness Check & Auto-Regeneration ✅
+- **Staleness Detection**: 48-hour threshold for conviction analysis freshness
+- **Playbook Blocking**: Stale convictions block playbook generation by default
+- **Auto-Regeneration**: Watchtower 4H refresh automatically regenerates stale convictions
+- **Freshness Display**: Clear "[FRESH] Xh old" or "[STALE]" status messages
+- **Why 48h?**: TGE dumps occur in first 24-48h; macro conditions shift meaningfully in 2 days
+- 📄 **[Session 236 Documentation →](./docs/sessions/SESSION_236_CONVICTION_STALENESS.md)**
+
+**🚀 PREVIOUS (Session 232)**: Gemini External Review - 4 Safety Mechanisms Implemented ✅
 - **External Review**: Architecture validated as PRODUCTION READY by Gemini
 - **L020 VETO Upgrade**: Tier-1 exchange listings trigger 48h automatic pause (prevents "God Candle" losses)
 - **L024 Multi-Timeframe Fractal**: 15m chart for 0-24h TGEs, 4H for 24h-21d (addresses 4H bias)
 - **L025 First Green Day Trap**: Dead cat bounce detection (-10 confidence penalty for Day 3-5 pumps)
 - **Slippage Protection**: Position capped at 2% of 5-minute volume (prevents self-slippage)
-- **New Learnings**: L024, L025 added (total: 25 learnings)
-- **Conflicts Resolved**: L022 vs L023 (Levels > Patterns), L011 vs L019 (Trendlines override)
 - 📄 **[Gemini Review →](./docs/reviews/GEMINI_EXTERNAL_REVIEW_2025_12_19.md)**
 
 **🚀 PREVIOUS (Sessions 140-145)**: Model v1.0 Production Lock - OUTSTANDING Correlation Achieved ✅
@@ -836,5 +842,5 @@ See [LICENSE](LICENSE)
 ---
 
 **Last Updated**: December 19, 2025
-**Version**: v4.1
-**Status**: Session 232 Complete ✅ (Gemini External Review - 4 Safety Mechanisms Implemented, Architecture Validated) 🚀
+**Version**: v4.2
+**Status**: Session 236 Complete ✅ (Conviction Staleness Check & Auto-Regeneration - Fresh Analysis for All Playbooks) 🚀
