@@ -7,8 +7,11 @@ Detects market regime (BULL/BEAR/CHOP) at specific date using:
 - Fear & Greed Index (sentiment validation)
 
 Session 139: Critical data backfill to enable regime multipliers.
+Session 240: Updated to support CoinGecko Demo/Pro API keys.
 """
 
+import os
+import time
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, Optional, List
@@ -30,11 +33,41 @@ class MarketRegimeDetector:
     """
 
     def __init__(self):
-        self.coingecko_base = "https://api.coingecko.com/api/v3"
         self.fear_greed_base = "https://api.alternative.me/fng"
 
         # Cache for price data to avoid redundant API calls
         self._price_cache: Dict[str, Dict] = {}
+
+        # Setup CoinGecko API with optional API key
+        self.api_key = os.getenv("COINGECKO_API_KEY")
+        self.session = requests.Session()
+
+        if self.api_key:
+            if self.api_key.startswith("CG-"):
+                # Demo API key - same base URL as free, just higher rate limits
+                self.coingecko_base = "https://api.coingecko.com/api/v3"
+                self.session.headers.update({
+                    "x-cg-demo-api-key": self.api_key,
+                    "User-Agent": "DACLE-RegimeDetector/1.0",
+                })
+                self._rate_limit_delay = 2.0  # 30 calls/min
+                logger.debug("MarketRegimeDetector: Using CoinGecko Demo API")
+            else:
+                # Pro API key
+                self.coingecko_base = "https://pro-api.coingecko.com/api/v3"
+                self.session.headers.update({
+                    "x-cg-pro-api-key": self.api_key,
+                    "User-Agent": "DACLE-RegimeDetector/1.0",
+                })
+                self._rate_limit_delay = 0.1  # 500 calls/min
+                logger.debug("MarketRegimeDetector: Using CoinGecko Pro API")
+        else:
+            self.coingecko_base = "https://api.coingecko.com/api/v3"
+            self.session.headers.update({
+                "User-Agent": "DACLE-RegimeDetector/1.0",
+            })
+            self._rate_limit_delay = 1.0  # Conservative for free tier
+            logger.debug("MarketRegimeDetector: Using CoinGecko Free API")
 
     def detect_regime(self, date: str) -> Dict:
         """
@@ -119,7 +152,10 @@ class MarketRegimeDetector:
         }
 
         try:
-            response = requests.get(url, params=params, timeout=10)
+            # Rate limit before API call
+            time.sleep(self._rate_limit_delay)
+
+            response = self.session.get(url, params=params, timeout=10)
             response.raise_for_status()
             data = response.json()
 
