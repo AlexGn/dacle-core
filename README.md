@@ -22,9 +22,17 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v4.2 - Session 236, December 19, 2025)
+## 📊 Current Status (v4.3 - Session 146, December 21, 2025)
 
-**🚀 LATEST (Session 236)**: Conviction Staleness Check & Auto-Regeneration ✅
+**🚀 LATEST (Session 146)**: Learning 024 HTF Index S/R & TradingView Integration ✅
+- **Learning 024**: Daily timeframe S/R levels on indices (USDT.D, BTC.D, TOTAL3)
+- **Predictive Capability**: Identifies WHERE macro state changes will occur
+- **TradingView Setup Guide**: Created for David's Pro webhook integration
+- **Infrastructure Ready**: Webhook server and MacroSRChecker already exist
+- **P0 Next Step**: Configure TradingView alerts with David
+- 📄 **[Setup Guide →](./docs/guides/TRADINGVIEW_MACRO_SR_SETUP.md)**
+
+**🚀 PREVIOUS (Session 236)**: Conviction Staleness Check & Auto-Regeneration ✅
 - **Staleness Detection**: 48-hour threshold for conviction analysis freshness
 - **Playbook Blocking**: Stale convictions block playbook generation by default
 - **Auto-Regeneration**: Watchtower 4H refresh automatically regenerates stale convictions
@@ -836,11 +844,11 @@ See [LICENSE](LICENSE)
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
-- **Learnings Documented**: 25 (L001-L025) with governance framework
+- **Learnings Documented**: 26 (L001-L026) with governance framework
 - **Safety Mechanisms**: 4 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage)
 
 ---
 
-**Last Updated**: December 19, 2025
-**Version**: v4.2
-**Status**: Session 236 Complete ✅ (Conviction Staleness Check & Auto-Regeneration - Fresh Analysis for All Playbooks) 🚀
+**Last Updated**: December 21, 2025
+**Version**: v4.3
+**Status**: Session 146 Complete ✅ (L024 HTF Index S/R & TradingView Integration - Predictive Macro Signals) 🚀
