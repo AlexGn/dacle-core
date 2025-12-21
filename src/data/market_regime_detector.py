@@ -24,18 +24,62 @@ logger = logging.getLogger(__name__)
 # Based on BTC/ETH price trends and Fear & Greed at TGE date
 # Source: Historical analysis for ML training data
 STATIC_REGIME_DATA = {
-    # 2023 TGEs
+    # 2022 TGEs (Bear market / early recovery)
+    "2022-03-18": {"regime": "CHOP", "fear_greed": 30, "confidence": 0.85},   # APE
+    "2022-05-01": {"regime": "BEAR", "fear_greed": 22, "confidence": 0.90},   # OP (Luna crash coming)
+    "2022-06-15": {"regime": "DEEP_BEAR", "fear_greed": 10, "confidence": 0.95},  # LDO (post-Luna)
+    "2022-09-22": {"regime": "BEAR", "fear_greed": 25, "confidence": 0.90},   # GMT relaunch
+    "2022-10-17": {"regime": "BEAR", "fear_greed": 20, "confidence": 0.90},   # APT (pre-FTX)
+    # 2023 Q1 TGEs
+    "2023-02-14": {"regime": "CHOP", "fear_greed": 52, "confidence": 0.85},   # BLUR
+    "2023-03-23": {"regime": "CHOP", "fear_greed": 48, "confidence": 0.85},   # ARB
+    # 2023 Q2 TGEs
+    "2023-04-17": {"regime": "CHOP", "fear_greed": 53, "confidence": 0.85},   # RDNT
     "2023-05-03": {"regime": "CHOP", "fear_greed": 52, "confidence": 0.85},   # SUI
+    "2023-06-20": {"regime": "CHOP", "fear_greed": 47, "confidence": 0.85},   # EDU
+    # 2023 Q3 TGEs
+    "2023-07-13": {"regime": "CHOP", "fear_greed": 55, "confidence": 0.85},   # ARKM
+    "2023-07-18": {"regime": "CHOP", "fear_greed": 54, "confidence": 0.85},   # CYBER
     "2023-08-15": {"regime": "CHOP", "fear_greed": 48, "confidence": 0.85},   # SEI
+    "2023-09-14": {"regime": "CHOP", "fear_greed": 45, "confidence": 0.85},   # FRIEND
+    # 2023 Q4 TGEs (Bull starting)
     "2023-10-31": {"regime": "BULL", "fear_greed": 65, "confidence": 0.90},   # TIA
     "2023-11-20": {"regime": "BULL", "fear_greed": 72, "confidence": 0.90},   # PYTH
+    "2023-12-07": {"regime": "BULL", "fear_greed": 74, "confidence": 0.90},   # JTO
+    "2023-12-12": {"regime": "BULL", "fear_greed": 70, "confidence": 0.90},   # BONK era
     # 2024 Q1 TGEs
     "2024-01-18": {"regime": "BULL", "fear_greed": 70, "confidence": 0.90},   # MANTA, ONDO
     "2024-01-25": {"regime": "CHOP", "fear_greed": 55, "confidence": 0.85},   # ALT
     "2024-01-31": {"regime": "BULL", "fear_greed": 63, "confidence": 0.85},   # JUP
+    "2024-02-08": {"regime": "BULL", "fear_greed": 68, "confidence": 0.90},   # PIXEL
     "2024-02-20": {"regime": "BULL", "fear_greed": 75, "confidence": 0.95},   # STRK
+    "2024-02-29": {"regime": "BULL", "fear_greed": 80, "confidence": 0.95},   # AEVO
+    "2024-03-05": {"regime": "BULL", "fear_greed": 82, "confidence": 0.95},   # ETHFI (ATH era)
+    "2024-03-13": {"regime": "BULL", "fear_greed": 85, "confidence": 0.95},   # DYM (peak greed)
+    "2024-03-14": {"regime": "BULL", "fear_greed": 84, "confidence": 0.95},   # PORTAL
     # 2024 Q2 TGEs
+    "2024-04-02": {"regime": "BULL", "fear_greed": 72, "confidence": 0.90},   # ENA
     "2024-04-03": {"regime": "BULL", "fear_greed": 70, "confidence": 0.90},   # W
+    "2024-04-11": {"regime": "BULL", "fear_greed": 75, "confidence": 0.90},   # SAGA
+    "2024-04-20": {"regime": "CHOP", "fear_greed": 58, "confidence": 0.85},   # OMNI (halving)
+    "2024-04-30": {"regime": "CHOP", "fear_greed": 52, "confidence": 0.85},   # REZ
+    "2024-05-09": {"regime": "CHOP", "fear_greed": 55, "confidence": 0.85},   # Post-halving
+    "2024-06-17": {"regime": "CHOP", "fear_greed": 62, "confidence": 0.85},   # ZK
+    "2024-06-20": {"regime": "CHOP", "fear_greed": 60, "confidence": 0.85},   # ZRO
+    "2024-06-26": {"regime": "CHOP", "fear_greed": 55, "confidence": 0.85},   # BLAST
+    # 2024 Q3 TGEs
+    "2024-07-25": {"regime": "CHOP", "fear_greed": 58, "confidence": 0.85},   # IO
+    "2024-08-06": {"regime": "BEAR", "fear_greed": 35, "confidence": 0.90},   # SAFE (Aug dip)
+    "2024-09-19": {"regime": "CHOP", "fear_greed": 55, "confidence": 0.85},   # CATI
+    "2024-09-26": {"regime": "CHOP", "fear_greed": 58, "confidence": 0.85},   # HMSTR
+    "2024-10-01": {"regime": "CHOP", "fear_greed": 56, "confidence": 0.85},   # EIGEN
+    # 2024 Q4 TGEs (Election rally)
+    "2024-10-24": {"regime": "CHOP", "fear_greed": 62, "confidence": 0.85},   # SCR
+    "2024-11-07": {"regime": "BULL", "fear_greed": 75, "confidence": 0.90},   # GRASS (post-election)
+    "2024-11-14": {"regime": "BULL", "fear_greed": 82, "confidence": 0.95},   # GOAT era
+    "2024-11-19": {"regime": "BULL", "fear_greed": 85, "confidence": 0.95},   # ME
+    "2024-12-04": {"regime": "BULL", "fear_greed": 80, "confidence": 0.95},   # MOVE
+    "2024-12-17": {"regime": "BULL", "fear_greed": 85, "confidence": 0.95},   # PENGU
 }
 
 
