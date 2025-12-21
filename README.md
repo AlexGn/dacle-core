@@ -22,14 +22,22 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v4.3 - Session 146, December 21, 2025)
+## 📊 Current Status (v4.4 - Session 240-241, December 21, 2025)
 
-**🚀 LATEST (Session 146)**: Learning 024 HTF Index S/R & TradingView Integration ✅
+**🚀 LATEST (Session 240-241)**: ML Classifier Training & VPS Deployment ✅
+- **Binary Classification**: DUMP vs NOT_DUMP (Gemini recommended for N=38)
+- **Time-Series CV**: Prevents look-ahead bias in temporal crypto data
+- **Training Data**: 38 TGE samples, 23 features (numeric, boolean, one-hot)
+- **RF CV F1**: 55.43% (honest out-of-sample evaluation)
+- **VPS Deployed**: 37.27.217.82 with predict.py script
+- **Integration**: Secondary validation for DACLE conviction scores
+- 📄 **[ML Documentation →](./docs/reviews/ML_APPROACH_BREAKDOWN_FOR_REVIEW.md)**
+
+**🚀 PREVIOUS (Session 146)**: Learning 024 HTF Index S/R & TradingView Integration ✅
 - **Learning 024**: Daily timeframe S/R levels on indices (USDT.D, BTC.D, TOTAL3)
 - **Predictive Capability**: Identifies WHERE macro state changes will occur
 - **TradingView Setup Guide**: Created for David's Pro webhook integration
 - **Infrastructure Ready**: Webhook server and MacroSRChecker already exist
-- **P0 Next Step**: Configure TradingView alerts with David
 - 📄 **[Setup Guide →](./docs/guides/TRADINGVIEW_MACRO_SR_SETUP.md)**
 
 **🚀 PREVIOUS (Session 236)**: Conviction Staleness Check & Auto-Regeneration ✅
