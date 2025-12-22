@@ -22,9 +22,18 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v4.4 - Session 240-241, December 21, 2025)
+## 📊 Current Status (v4.5 - Session 246, December 22, 2025)
 
-**🚀 LATEST (Session 240-241)**: ML Classifier Training & VPS Deployment ✅
+**🚀 LATEST (Session 246)**: Telegram Notification System Overhaul ✅
+- **From "Dumb Reporter" to "Intelligent Analyst"**: Complete notification system transformation
+- **ML Validation**: All tokens routed through TradeQualityScorer (Single Source of Truth)
+- **Combined Actions**: STRONG_SHORT (ML≥70%), MONITOR (50-70%), SKIP (<50%)
+- **BTC CRITICAL VETO**: Flash crash detection forces all trades to SKIP
+- **Volatility Staleness**: MEME/AI=12h, DeFi/L2=24h, L1/Infra=72h
+- **Divergence Alpha**: Tracks ML SKIP decisions for validation
+- 📄 **[Session 246 Documentation →](./docs/reviews/SESSION_246_GEMINI_ACCURACY_REVIEW.md)**
+
+**🚀 PREVIOUS (Session 240-241)**: ML Classifier Training & VPS Deployment ✅
 - **Binary Classification**: DUMP vs NOT_DUMP (Gemini recommended for N=38)
 - **Time-Series CV**: Prevents look-ahead bias in temporal crypto data
 - **Training Data**: 38 TGE samples, 23 features (numeric, boolean, one-hot)
@@ -848,15 +857,16 @@ See [LICENSE](LICENSE)
 - **Documentation**: 135+ markdown files (PRD, guides, sessions, analysis, reviews)
 - **Knowledge Base**: 9 case studies embedded (Wormhole, Starknet, ZKSync, Meteora, etc.)
 - **Test Coverage**: 50+ real TGE analyses with correlation validation
-- **Sessions Completed**: 232+ major development sessions
+- **Sessions Completed**: 246+ major development sessions
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
-- **Learnings Documented**: 26 (L001-L026) with governance framework
-- **Safety Mechanisms**: 4 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage)
+- **Learnings Documented**: 37 (L001-L037) with governance framework
+- **Safety Mechanisms**: 5 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage, BTC CRITICAL VETO)
+- **Telegram Notifications**: ML-validated with STRONG_SHORT/MONITOR/SKIP grouping (Session 246)
 
 ---
 
-**Last Updated**: December 21, 2025
-**Version**: v4.3
-**Status**: Session 146 Complete ✅ (L024 HTF Index S/R & TradingView Integration - Predictive Macro Signals) 🚀
+**Last Updated**: December 22, 2025
+**Version**: v4.5
+**Status**: Session 246 Complete ✅ (Telegram Notification System Overhaul - ML-Validated Alerts) 🚀
