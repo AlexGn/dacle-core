@@ -145,7 +145,12 @@ def retry_with_backoff(
         Attempt 2: Wait 1s
         Attempt 3: Wait 2s
         Attempt 4: Wait 4s (if max_attempts > 3)
+
+    Raises:
+        ValueError: If max_attempts < 1
     """
+    if max_attempts < 1:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
 
     def decorator(func: F) -> F:
         @functools.wraps(func)
