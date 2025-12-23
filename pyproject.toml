@@ -35,6 +35,7 @@ dependencies = [
     "mplfinance>=0.12.10b0",  # Chart generation for GPT-4o Vision (TA Tier 3)
     "openai>=2.8.0",  # GPT-4o Vision API (TA Tier 3)
     "notion-client>=2.2.1",  # Notion API integration for TGE database sync
+    "sentry-sdk>=1.40.0",  # Production error tracking and alerting
 ]
 
 [project.optional-dependencies]

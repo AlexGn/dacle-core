@@ -1,6 +1,8 @@
 """
 Logging configuration for DACLE
 Provides structured logging with appropriate levels
+
+Session 255: Enhanced with Sentry integration for production error tracking
 """
 
 import logging
@@ -9,6 +11,9 @@ from pathlib import Path
 from typing import Optional
 
 from .config import get_config
+
+# Sentry initialization flag (only init once)
+_sentry_initialized = False
 
 
 def setup_logger(
@@ -71,6 +76,17 @@ def setup_logger(
         file_handler.setLevel(logging.DEBUG)
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
+
+    # Initialize Sentry once for production error tracking
+    global _sentry_initialized
+    if not _sentry_initialized:
+        try:
+            from .sentry_config import init_sentry
+
+            _sentry_initialized = init_sentry()
+        except Exception as e:
+            # Don't crash if Sentry fails to init
+            logger.debug(f"Sentry initialization skipped: {e}")
 
     return logger
 
