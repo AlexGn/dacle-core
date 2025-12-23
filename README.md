@@ -1,5 +1,8 @@
 # DACLE - David's Automated Crypto Learning Engine
 
+[![Tests](https://github.com/AlexGn/dacle/actions/workflows/test.yml/badge.svg)](https://github.com/AlexGn/dacle/actions/workflows/test.yml)
+[![codecov](https://codecov.io/gh/AlexGn/dacle/branch/main/graph/badge.svg)](https://codecov.io/gh/AlexGn/dacle)
+
 **AI-powered TGE analysis system with 5-agent pipeline, multi-platform OTC tracking, and knowledge base integration**
 
 ---
