@@ -123,3 +123,4 @@ supabase/.temp/
 
 # claude-mem plugin data (local development memory)
 .claude-mem/
+.hypothesis/
