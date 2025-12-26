@@ -30,7 +30,7 @@ import json
 import os
 import tempfile
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Union
 import logging
@@ -101,6 +101,61 @@ def _release_lock(file_handle) -> None:
             pass  # Ignore unlock errors
 
 
+def _recover_temp_file(path: Path) -> bool:
+    """
+    Session 257 Fix 3: Recover from interrupted atomic writes.
+
+    If a .tmp file exists but the main file doesn't, a crash occurred
+    during atomic_write after temp file creation but before rename.
+
+    Recovery logic:
+    - If .tmp exists and main doesn't: Use .tmp (atomic rename didn't complete)
+    - If both exist: Prefer main (rename completed, .tmp is stale)
+    - If only main exists: Normal case
+
+    Args:
+        path: Path to the main state file
+
+    Returns:
+        True if recovery was performed, False otherwise
+    """
+    # Find any .tmp files matching this state file
+    pattern = f'.{path.stem}_*.tmp'
+    tmp_files = list(path.parent.glob(pattern))
+
+    if not tmp_files:
+        return False
+
+    # Sort by modification time (most recent first)
+    tmp_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    newest_tmp = tmp_files[0]
+
+    if not path.exists():
+        # Main file doesn't exist but temp does - recover!
+        logger.warning(f"Recovering state from interrupted write: {newest_tmp} -> {path}")
+        try:
+            os.rename(newest_tmp, path)
+            # Clean up any other stale .tmp files
+            for stale_tmp in tmp_files[1:]:
+                try:
+                    stale_tmp.unlink()
+                except OSError:
+                    pass
+            return True
+        except OSError as e:
+            logger.error(f"Failed to recover temp file: {e}")
+            return False
+    else:
+        # Both exist - main file is authoritative, clean up stale temps
+        for stale_tmp in tmp_files:
+            try:
+                stale_tmp.unlink()
+                logger.debug(f"Cleaned up stale temp file: {stale_tmp}")
+            except OSError:
+                pass
+        return False
+
+
 def atomic_read(
     path: Union[str, Path],
     default: Optional[Dict] = None,
@@ -122,6 +177,9 @@ def atomic_read(
         LockTimeoutError: If lock acquisition times out
     """
     path = Path(path)
+
+    # Session 257 Fix 3: Check for and recover interrupted writes
+    _recover_temp_file(path)
 
     if not path.exists():
         return default if default is not None else {}
@@ -352,10 +410,169 @@ def atomic_check_and_mark(
     return was_present
 
 
+def cleanup_stale_entries(
+    path: Union[str, Path],
+    max_age_hours: float = 48.0,
+    timestamp_key: str = '_last_updated',
+    collections_to_clean: Optional[list] = None,
+    lock_timeout: float = 5.0
+) -> Dict[str, Any]:
+    """
+    Session 257 Fix 2: Remove stale entries from state file to prevent bloat.
+
+    Gemini Review: "Since you are storing 'Already Alerted' tokens in a JSON file,
+    this file will grow indefinitely. Risk: load(path) will eventually take >100ms."
+
+    This janitor function removes entries older than the dedup window.
+
+    Args:
+        path: Path to state file
+        max_age_hours: Maximum age in hours (default: 48h, matches dedup window)
+        timestamp_key: Key used for timestamps in entries
+        collections_to_clean: List of collection keys to clean (e.g., ['alerted_windows'])
+                             If None, cleans all collections that look like alert data
+        lock_timeout: Seconds to wait for lock
+
+    Returns:
+        Dict with cleanup statistics: {
+            'entries_removed': int,
+            'entries_kept': int,
+            'collections_cleaned': list,
+            'state_size_before': int,
+            'state_size_after': int
+        }
+
+    Example:
+        # Run daily via cron to prevent state file bloat
+        stats = cleanup_stale_entries(
+            '/path/to/post_tge_state.json',
+            max_age_hours=48.0,
+            collections_to_clean=['alerted_windows', 'alerted_tokens']
+        )
+        print(f"Cleaned {stats['entries_removed']} stale entries")
+    """
+    path = Path(path)
+    stats = {
+        'entries_removed': 0,
+        'entries_kept': 0,
+        'collections_cleaned': [],
+        'state_size_before': 0,
+        'state_size_after': 0
+    }
+
+    if not path.exists():
+        return stats
+
+    cutoff_time = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+    def clean_state(state: Dict) -> Dict:
+        nonlocal stats
+        stats['state_size_before'] = len(json.dumps(state))
+
+        # Determine which collections to clean
+        if collections_to_clean:
+            target_collections = collections_to_clean
+        else:
+            # Auto-detect collections that look like alert tracking data
+            target_collections = [
+                k for k in state.keys()
+                if isinstance(state[k], dict) and k not in ['_last_updated', '_metadata']
+            ]
+
+        for collection_key in target_collections:
+            if collection_key not in state:
+                continue
+
+            collection = state[collection_key]
+            if not isinstance(collection, dict):
+                continue
+
+            cleaned_collection = {}
+            for token_key, token_data in collection.items():
+                if isinstance(token_data, dict):
+                    # Token data has timestamps - filter old entries
+                    ts_str = token_data.get(timestamp_key) or token_data.get('timestamp')
+                    if ts_str:
+                        try:
+                            entry_time = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                            if entry_time.tzinfo is None:
+                                entry_time = entry_time.replace(tzinfo=timezone.utc)
+                            if entry_time >= cutoff_time:
+                                cleaned_collection[token_key] = token_data
+                                stats['entries_kept'] += 1
+                            else:
+                                stats['entries_removed'] += 1
+                                logger.debug(f"Removed stale entry: {collection_key}/{token_key}")
+                        except (ValueError, TypeError):
+                            # Can't parse timestamp - keep entry to be safe
+                            cleaned_collection[token_key] = token_data
+                            stats['entries_kept'] += 1
+                    else:
+                        # No timestamp - keep entry
+                        cleaned_collection[token_key] = token_data
+                        stats['entries_kept'] += 1
+
+                elif isinstance(token_data, list):
+                    # List of alerts - filter to recent window entries
+                    # Keep list items that are strings (window IDs) or recent timestamped dicts
+                    cleaned_list = []
+                    for item in token_data:
+                        if isinstance(item, str):
+                            # Window identifiers like '7d', '14d' - keep all
+                            cleaned_list.append(item)
+                            stats['entries_kept'] += 1
+                        elif isinstance(item, dict):
+                            ts_str = item.get(timestamp_key) or item.get('timestamp')
+                            if ts_str:
+                                try:
+                                    entry_time = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                                    if entry_time.tzinfo is None:
+                                        entry_time = entry_time.replace(tzinfo=timezone.utc)
+                                    if entry_time >= cutoff_time:
+                                        cleaned_list.append(item)
+                                        stats['entries_kept'] += 1
+                                    else:
+                                        stats['entries_removed'] += 1
+                                except (ValueError, TypeError):
+                                    cleaned_list.append(item)
+                                    stats['entries_kept'] += 1
+                            else:
+                                cleaned_list.append(item)
+                                stats['entries_kept'] += 1
+                        else:
+                            cleaned_list.append(item)
+                            stats['entries_kept'] += 1
+
+                    if cleaned_list:
+                        cleaned_collection[token_key] = cleaned_list
+                else:
+                    # Unknown format - keep
+                    cleaned_collection[token_key] = token_data
+                    stats['entries_kept'] += 1
+
+            state[collection_key] = cleaned_collection
+            stats['collections_cleaned'].append(collection_key)
+
+        stats['state_size_after'] = len(json.dumps(state))
+        return state
+
+    try:
+        atomic_update(path, clean_state, lock_timeout=lock_timeout)
+        logger.info(
+            f"State cleanup complete: removed {stats['entries_removed']} entries, "
+            f"kept {stats['entries_kept']}, size {stats['state_size_before']} -> {stats['state_size_after']} bytes"
+        )
+    except Exception as e:
+        logger.error(f"State cleanup failed: {e}")
+
+    return stats
+
+
 # Convenience aliases
 read_state = atomic_read
 write_state = atomic_write
 update_state = atomic_update
+cleanup_state = cleanup_stale_entries
 
 
 # Module-level state for tracking operations (debugging)
