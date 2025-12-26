@@ -25,15 +25,22 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 ---
 
-## 📊 Current Status (v4.5 - Session 246, December 22, 2025)
+## 📊 Current Status (v4.6 - Session 257, December 26, 2025)
 
-**🚀 LATEST (Session 246)**: Telegram Notification System Overhaul ✅
+**🚀 LATEST (Session 257)**: Notification System Overhaul & Alert Decision Engine ✅
+- **Problem Fixed**: Duplicate "TOO LATE" alerts for VOOI (84.4% drawdown - already dumped)
+- **AlertDecisionEngine**: Single point of truth for all alert decisions (5-check framework)
+- **Atomic State Management**: fcntl file locking prevents race condition duplicates
+- **Decision Logger**: Non-blocking Supabase logging (ThreadPoolExecutor, fire-and-forget)
+- **Daily Maintenance**: State file cleanup prevents JSON bloat (Gemini recommendation)
+- **Suppression Reasons**: TOO_LATE, LOW_CONVICTION, DUPLICATE_ALERT, BTC_CRITICAL_VETO
+- 📄 **[Alert Decision Matrix →](./docs/architecture/ALERT_DECISION_MATRIX.md)**
+
+**🚀 PREVIOUS (Session 246)**: Telegram Notification System Overhaul ✅
 - **From "Dumb Reporter" to "Intelligent Analyst"**: Complete notification system transformation
 - **ML Validation**: All tokens routed through TradeQualityScorer (Single Source of Truth)
 - **Combined Actions**: STRONG_SHORT (ML≥70%), MONITOR (50-70%), SKIP (<50%)
 - **BTC CRITICAL VETO**: Flash crash detection forces all trades to SKIP
-- **Volatility Staleness**: MEME/AI=12h, DeFi/L2=24h, L1/Infra=72h
-- **Divergence Alpha**: Tracks ML SKIP decisions for validation
 - 📄 **[Session 246 Documentation →](./docs/reviews/SESSION_246_GEMINI_ACCURACY_REVIEW.md)**
 
 **🚀 PREVIOUS (Session 240-241)**: ML Classifier Training & VPS Deployment ✅
