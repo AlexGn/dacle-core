@@ -152,7 +152,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 
 **System**: 7-Stage Automated Pipeline (Discovery → Data → Analysis → Execution → Persistence → Learning → Entry Timing) + 6-Agent TGE Analysis v3.6 + 5 Exchange Perpetuals
 **Performance**: High-conviction (9-10/10) analysis in **90 minutes** (was 3h) + Data confidence 58% → 80% + Exchange coverage: 5 platforms
-**Live Dashboard**: https://dacletge.netlify.app/
+**Production**: VPS (37.27.217.82) with watchtower + sniper daemons + Telegram alerts
 
 ### 🎯 Real-World Validation Results
 
@@ -522,8 +522,8 @@ python run_bot.py
 # 2. Run TGE Analysis (on-demand)
 python scripts/tge/run_tge_analysis.py
 
-# 3. View Dashboard
-# Live at: https://dacletge.netlify.app/
+# 3. View Dashboard (local)
+python dashboard/app.py
 ```
 
 ---
