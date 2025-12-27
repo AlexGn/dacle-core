@@ -12,6 +12,8 @@ This module provides a unified interface for fetching token data.
 The actual implementation is delegated to the original helper files
 during the migration period.
 
+Session 260 Update: Health monitoring integrated for all fetchers.
+
 Usage:
     from src.data.fetchers.token_data import (
         fetch_cryptorank_web,
@@ -40,6 +42,10 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 logger = logging.getLogger(__name__)
+
+# Session 260: Health monitoring integration
+from src.monitoring.data_source_health import get_monitor
+_health_monitor = get_monitor()
 
 
 # =============================================================================
