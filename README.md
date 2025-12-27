@@ -21,19 +21,23 @@ This displays:
 - Recent git activity
 - Ready-to-copy context prompt for Claude Code
 
-See [.claude/session_start.md](.claude/session_start.md) for details.
+See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v4.6 - Session 257, December 26, 2025)
+## 📊 Current Status (v4.7 - Session 262, December 27, 2025)
 
-**🚀 LATEST (Session 257)**: Notification System Overhaul & Alert Decision Engine ✅
+**🚀 LATEST (Session 262)**: Phase 2 Test Coverage + Dashboard Fix ✅
+- **Forward Validation**: Coverage 68% → 100% (pragma no cover for CLI block)
+- **TA Aggregator**: Removed premature deprecation warning (13+ active importers)
+- **Dashboard Fix**: Removed "Signal" from Analysis tab (belongs in Playbook)
+- **Tests**: 120 passing (67 forward_validation + 53 ta_aggregator)
+
+**🚀 PREVIOUS (Session 257)**: Notification System Overhaul & Alert Decision Engine ✅
 - **Problem Fixed**: Duplicate "TOO LATE" alerts for VOOI (84.4% drawdown - already dumped)
 - **AlertDecisionEngine**: Single point of truth for all alert decisions (5-check framework)
 - **Atomic State Management**: fcntl file locking prevents race condition duplicates
 - **Decision Logger**: Non-blocking Supabase logging (ThreadPoolExecutor, fire-and-forget)
-- **Daily Maintenance**: State file cleanup prevents JSON bloat (Gemini recommendation)
-- **Suppression Reasons**: TOO_LATE, LOW_CONVICTION, DUPLICATE_ALERT, BTC_CRITICAL_VETO
 - 📄 **[Alert Decision Matrix →](./docs/architecture/ALERT_DECISION_MATRIX.md)**
 
 **🚀 PREVIOUS (Session 246)**: Telegram Notification System Overhaul ✅
@@ -73,21 +77,21 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - **L024 Multi-Timeframe Fractal**: 15m chart for 0-24h TGEs, 4H for 24h-21d (addresses 4H bias)
 - **L025 First Green Day Trap**: Dead cat bounce detection (-10 confidence penalty for Day 3-5 pumps)
 - **Slippage Protection**: Position capped at 2% of 5-minute volume (prevents self-slippage)
-- 📄 **[Gemini Review →](./docs/reviews/GEMINI_EXTERNAL_REVIEW_2025_12_19.md)**
+- 📄 **[Gemini Review →](./docs/reviews/SESSION_259_FINAL_GEMINI_REVIEW_REQUEST.md)**
 
 **🚀 PREVIOUS (Sessions 140-145)**: Model v1.0 Production Lock - OUTSTANDING Correlation Achieved ✅
 - **Model Performance**: Spearman ρ=-0.612 (OUTSTANDING, target was -0.520)
 - **Production Status**: Model v1.0 weights locked and frozen for production use
 - **Forward Validation**: Out-of-sample (OOS) tracking system active for real-world validation
 - **Pattern Coverage**: 100% (50/50 TGEs) with market regime data
-- 📄 **[Model v1.0 Documentation →](./docs/sessions/SESSION_145_MODEL_LOCK.md)**
+- 📄 **Model v1.0 LOCKED** (weights frozen for production)
 
 **🚀 PREVIOUS (Sessions 115-117)**: VPS Migration Complete - Real-time monitoring on Hetzner VPS ✅
 - **Sniper Daemon**: Continuous conviction scanning on VPS with systemd integration
 - **Watchtower Migration**: Alert-based monitoring moved from GitHub Actions to VPS
 - **Historical Pattern Analysis**: Verbose component breakdown, Month 1 scoring overhaul
 - **Infrastructure**: Both daemons running as systemd services with auto-restart
-- 📄 **[VPS Commands →](./docs/reference/command_line.md)**
+- 📄 **VPS Commands**: See [docs/guides/VPS_OPERATIONS.md](./docs/guides/VPS_OPERATIONS.md)
 
 **🚀 PREVIOUS (Session 89B Phase 3 Week 1)**: Agent 7 Infrastructure Complete - Learning loop foundation ready for N≥10 ✅
 - **Hybrid Learning Architecture**: Cold Start (N<10) → Warm Start (N=10-50) → Hot (N≥50)
@@ -103,7 +107,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - **Full Automation**: Discovery → Analysis → Alert → Execution pipeline complete
 - **Time Saved**: 30-60 seconds per trade (no manual position calculation)
 - **Mental Load**: Dollar amounts eliminate manual math
-- 📄 **[Complete Documentation →](./docs/SESSION_84_COMPLETE.md)**
+- 📄 **Execution Pipeline Complete** (see CLAUDE.md for current status)
 
 **Session 84 Phase 2**: Profitability-Based Condition Optimization ✅
 - **avg_pnl_per_trigger Tracking**: THE key metric - optimizes for profitability, not accuracy
@@ -196,11 +200,7 @@ See [.claude/session_start.md](.claude/session_start.md) for details.
 - **TA Headwinds** (BTC↑ + ETH↑ + Bullish): -2.0 conviction, 3% position
 - **Neutral TA**: No adjustment, baseline 4% position
 
-**Files Created** (Session 41):
-- [docs/implementation/TA_LEARNING_LOOP.md](docs/implementation/TA_LEARNING_LOOP.md) - Technical guide
-- [docs/workflows/TA_CORRELATION_WORKFLOW.md](guides/TA_CORRELATION_WORKFLOW.md) - User workflow
-
-**Next Phase**: Begin prospective TA tracking on next TGE discovery
+**TA Learning Loop**: Integrated into conviction scoring engine (see [docs/architecture/TA_INTEGRATION_v3.1.md](docs/architecture/TA_INTEGRATION_v3.1.md))
 
 ### ✅ Production-Ready Features
 
@@ -754,20 +754,18 @@ python scripts/test_connection.py
 ## 📚 Key Documentation
 
 ### Getting Started
-- **[.claude/session_start.md](.claude/session_start.md)** - Session context loader
-- **docs/PRD.md** - Product requirements
-- **[docs/STATUS.md](docs/STATUS.md)** - Current status (always up-to-date)
+- **[CLAUDE.md](CLAUDE.md)** - Current system status and session context
+- **[docs/guides/QUICK_START.md](docs/guides/QUICK_START.md)** - Quick start guide
 
 ### TGE Analysis System
-- **[.claude/agents/README.md](README.md)** - 6-agent system overview
-- **[.claude/agents/MASTER_WORKFLOW.md](.claude/agents/MASTER_WORKFLOW.md)** - Complete workflow
-- **[.claude/agents/AGENT_IMPROVEMENTS.md](.claude/agents/AGENT_IMPROVEMENTS.md)** - v2.4 enhancements
+- **[.claude/agents/README.md](.claude/agents/README.md)** - Agent system overview
+- **[docs/architecture/CONVICTION_SCORING_v3.1.md](docs/architecture/CONVICTION_SCORING_v3.1.md)** - Conviction scoring formula
+- **[docs/architecture/TA_INTEGRATION_v3.1.md](docs/architecture/TA_INTEGRATION_v3.1.md)** - TA integration
 
-### Real TGE Analysis Reports
-See `reports/` directory for TGE analysis outputs.
-
-### Session Documentation
-Recent session documentation is available in [docs/sessions/](docs/sessions/). Historical session summaries (3+ months old) are preserved in git history.
+### Documentation
+- **[docs/architecture/](docs/architecture/)** - System architecture
+- **[docs/guides/](docs/guides/)** - User guides
+- **[docs/reference/learnings/](docs/reference/learnings/)** - 44 documented learnings (L001-L044)
 
 ---
 
