@@ -1,6 +1,8 @@
 """
 Message Monitor Cog
 Monitors Discord messages for crypto project mentions and stores them in Supabase
+
+Session 261: Together.ai is DEPRECATED - embedding features disabled.
 """
 
 import re
@@ -11,7 +13,14 @@ from typing import Dict, List, Optional, Tuple
 import discord
 from discord.ext import commands
 
-from src.ai.together_client import get_together_client
+# Session 261: Together.ai DEPRECATED - make import optional
+try:
+    from src.ai.together_client import get_together_client
+    TOGETHER_AVAILABLE = True
+except ImportError:
+    get_together_client = None  # type: ignore
+    TOGETHER_AVAILABLE = False
+
 from src.knowledge.knowledge_base import KnowledgeBase
 from src.knowledge.supabase_client import get_knowledge_base
 from src.scoring.mention_conviction_scorer import MentionConvictionScorer
@@ -40,11 +49,12 @@ class MessageMonitor(commands.Cog):
     def __init__(self, bot: commands.Bot):
         """Initialize the monitor cog"""
         self.bot = bot
-        self.together = get_together_client()
+        # Session 261: Together.ai deprecated - make optional
+        self.together = get_together_client() if TOGETHER_AVAILABLE and get_together_client else None
         self.kb = get_knowledge_base()
 
         # Initialize conviction scorer with knowledge base
-        knowledge_base = KnowledgeBase(self.together, self.kb)
+        knowledge_base = KnowledgeBase(supabase_client=self.kb, together_client=self.together)
         self.conviction_scorer = MentionConvictionScorer(
             together_client=self.together,
             knowledge_base=knowledge_base,
