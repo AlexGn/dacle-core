@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional
 
 # Ensure scripts.helpers is importable
 _project_root = Path(__file__).parent.parent.parent.parent
-if str(_project_root) not in sys.path:
+if str(_project_root) not in sys.path:  # pragma: no cover
     sys.path.insert(0, str(_project_root))
 
 logger = logging.getLogger(__name__)
