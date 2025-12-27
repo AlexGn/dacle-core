@@ -69,8 +69,9 @@ def fetch_cryptorank_web(
     Returns:
         Dict with TGE data, or None if not found
     """
-    from scripts.helpers.cryptorank_web_fetcher import fetch_cryptorank_web as _fetch
-    return _fetch(token, url)
+    with _health_monitor.track_call("cryptorank_web"):
+        from scripts.helpers.cryptorank_web_fetcher import fetch_cryptorank_web as _fetch
+        return _fetch(token, url)
 
 
 # =============================================================================
@@ -91,8 +92,9 @@ def fetch_icodrops_data(
     Returns:
         Dict with vesting, whitepaper, farming, and tokenomics data
     """
-    from scripts.helpers.icodrops_fetcher import fetch_icodrops_data as _fetch
-    return _fetch(symbol, name)
+    with _health_monitor.track_call("icodrops_scraper"):
+        from scripts.helpers.icodrops_fetcher import fetch_icodrops_data as _fetch
+        return _fetch(symbol, name)
 
 
 # =============================================================================
@@ -113,8 +115,9 @@ def fetch_dropstab_data(
     Returns:
         Dict with unlock schedule, tokenomics data
     """
-    from scripts.helpers.dropstab_fetcher import fetch_dropstab_data as _fetch
-    return _fetch(symbol, name)
+    with _health_monitor.track_call("dropstab_scraper"):
+        from scripts.helpers.dropstab_fetcher import fetch_dropstab_data as _fetch
+        return _fetch(symbol, name)
 
 
 # =============================================================================
@@ -148,15 +151,16 @@ def fetch_from_primary_sources(
     Returns:
         Dict with consolidated token data from best available source
     """
-    from scripts.helpers.primary_source_fetcher import fetch_from_primary_sources as _fetch
-    return _fetch(
-        token=token,
-        token_name=token_name,
-        tge_date=tge_date,
-        category=category,
-        min_confidence=min_confidence,
-        force_refresh=force_refresh,
-    )
+    with _health_monitor.track_call("primary_source"):
+        from scripts.helpers.primary_source_fetcher import fetch_from_primary_sources as _fetch
+        return _fetch(
+            token=token,
+            token_name=token_name,
+            tge_date=tge_date,
+            category=category,
+            min_confidence=min_confidence,
+            force_refresh=force_refresh,
+        )
 
 
 def fetch_coingecko(
@@ -173,8 +177,9 @@ def fetch_coingecko(
     Returns:
         Dict with CoinGecko data or None
     """
-    from scripts.helpers.primary_source_fetcher import fetch_coingecko as _fetch
-    return _fetch(token, token_name)
+    with _health_monitor.track_call("coingecko_api"):
+        from scripts.helpers.primary_source_fetcher import fetch_coingecko as _fetch
+        return _fetch(token, token_name)
 
 
 def fetch_coinmarketcap(
@@ -191,8 +196,9 @@ def fetch_coinmarketcap(
     Returns:
         Dict with CMC data or None
     """
-    from scripts.helpers.primary_source_fetcher import fetch_coinmarketcap as _fetch
-    return _fetch(token, token_name)
+    with _health_monitor.track_call("coinmarketcap_api"):
+        from scripts.helpers.primary_source_fetcher import fetch_coinmarketcap as _fetch
+        return _fetch(token, token_name)
 
 
 # =============================================================================
