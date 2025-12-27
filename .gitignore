@@ -104,6 +104,9 @@ yarn-error.log*
 # API cost tracking (runtime data)
 data/api_costs/
 
+# CoinGecko cache (runtime data, can be regenerated)
+data/cache/coingecko/
+
 # Webfetch cache (ephemeral data)
 data/webfetch_results/*
 !data/webfetch_results/.gitkeep
