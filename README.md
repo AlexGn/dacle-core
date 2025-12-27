@@ -755,17 +755,11 @@ python scripts/test_connection.py
 
 ### Getting Started
 - **[CLAUDE.md](CLAUDE.md)** - Current system status and session context
-- **[docs/guides/QUICK_START.md](docs/guides/QUICK_START.md)** - Quick start guide
 
 ### TGE Analysis System
 - **[.claude/agents/README.md](.claude/agents/README.md)** - Agent system overview
 - **[docs/architecture/CONVICTION_SCORING_v3.1.md](docs/architecture/CONVICTION_SCORING_v3.1.md)** - Conviction scoring formula
 - **[docs/architecture/TA_INTEGRATION_v3.1.md](docs/architecture/TA_INTEGRATION_v3.1.md)** - TA integration
-
-### Documentation
-- **[docs/architecture/](docs/architecture/)** - System architecture
-- **[docs/guides/](docs/guides/)** - User guides
-- **[docs/reference/learnings/](docs/reference/learnings/)** - 44 documented learnings (L001-L044)
 
 ---
 
