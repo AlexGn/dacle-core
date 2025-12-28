@@ -25,7 +25,22 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v4.11 - Session 265, December 28, 2025)
+## 📊 Current Status (v5.0 - SHORT MILESTONE COMPLETE, December 28, 2025)
+
+### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
+
+| Component | Status | Details |
+|-----------|--------|---------|
+| **Scoring System** | ✅ 100% | 13 components, ρ=-0.612 OUTSTANDING |
+| **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
+| **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
+| **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
+| **Learning System** | ✅ 100% | 61 learnings (L001-L061) |
+| **Paper Trade Validation** | ⏳ 30% | 6/20 STRONG_SHORT signals collected |
+
+**Next Phase**: LONG system (Sherlock-based, Option A)
+
+---
 
 **🚀 LATEST (Session 265)**: Sherlock L051-L061 Implementation ✅ **100% COMPLETE**
 - **Documentation**: 11 learnings created (L051-L061)
