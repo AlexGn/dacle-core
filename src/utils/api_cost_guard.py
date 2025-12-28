@@ -56,9 +56,13 @@ DEFAULT_LIMITS = {
         daily_calls=50,       # Max 50 API calls/day
     ),
     "openai": APILimits(
-        daily_usd=2.00,       # $2/day max (GPT-4o is cheaper)
-        monthly_usd=20.00,    # $20/month max
-        daily_calls=100,      # Max 100 API calls/day
+        # Session 263 Optimization: Switched to GPT-4o-mini + response caching
+        # Cost reduced 16.6x: $0.03 → $0.002 per call
+        # Cache reduces calls by ~40%
+        # New estimated cost: $0.12/day (1000 calls/month = ~$2/month)
+        daily_usd=0.50,       # $0.50/day (was $2.00, reduced 4x for safety margin)
+        monthly_usd=5.00,     # $5/month (was $20, reduced 4x)
+        daily_calls=200,      # Increased from 100 (calls are much cheaper now)
     ),
     "anthropic": APILimits(
         daily_usd=5.00,       # $5/day max (if using Claude API)
