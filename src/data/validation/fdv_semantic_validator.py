@@ -163,6 +163,7 @@ def _llm_validate(token: str, fdv: float, category: str, additional_context: str
     Use LLM to validate FDV realism with market context.
 
     Uses OpenAI GPT-4o-mini for cost efficiency (~$0.001 per call).
+    Includes response caching to reduce redundant API calls.
     """
     import requests
 
@@ -170,6 +171,18 @@ def _llm_validate(token: str, fdv: float, category: str, additional_context: str
     if not api_key:
         logger.warning("No OPENAI_API_KEY - skipping LLM validation")
         return {"used_llm": False, "error": "No API key"}
+
+    # Check cache first
+    try:
+        from src.utils.llm_cache import get_llm_cache
+        cache = get_llm_cache()
+        cache_key_params = f"{token}_{fdv}_{category}"
+        cached = cache.get("openai_fdv", cache_key_params, model="gpt-4o-mini")
+        if cached:
+            logger.info(f"✅ FDV validation cache HIT for {token} (saved $0.001)")
+            return cached
+    except ImportError:
+        pass  # Cache not available
 
     # Get benchmark context
     benchmarks = CATEGORY_BENCHMARKS.get(category, CATEGORY_BENCHMARKS["Unknown"])
@@ -233,6 +246,16 @@ Respond in JSON format:
 
             result = json.loads(content.strip())
             result["used_llm"] = True
+
+            # Store in cache (7 days TTL for benchmark validations)
+            try:
+                from src.utils.llm_cache import get_llm_cache
+                cache = get_llm_cache()
+                cache_key_params = f"{token}_{fdv}_{category}"
+                cache.set("openai_fdv", cache_key_params, result, ttl_hours=168, model="gpt-4o-mini")
+            except ImportError:
+                pass  # Cache not available
+
             return result
 
         except json.JSONDecodeError:

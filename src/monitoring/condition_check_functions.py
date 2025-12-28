@@ -22,19 +22,17 @@ from scripts.helpers.technical_pattern_detector import (
     CandlestickAnalyzer,
     RetestDetector
 )
-from scripts.helpers.gpt4_vision_analyzer import GPT4VisionAnalyzer, CostGuard
 from scripts.helpers.ta_decision_logger import TADecisionLogger
 import ccxt
 import os
 
-# Global cost guard instance (shared across all condition checks)
-_cost_guard = CostGuard(max_calls_per_week=15)
-
 # Global decision logger (tracks all TA decisions)
 _decision_logger = TADecisionLogger()
 
-# Global flag to enable/disable Tier 3 (set via env var)
-ENABLE_TIER3 = os.getenv('ENABLE_TIER3_VISION', 'false').lower() == 'true'
+# DEPRECATED: Tier 3 GPT-4o Vision analysis removed (Session 263 cost optimization)
+# GPT-4o Vision cost $0.01/call and showed 70-80% accuracy (not worth the cost)
+# Use Tier 1 free rule-based analysis instead
+ENABLE_TIER3 = False  # Permanently disabled
 
 
 def _get_btc_price() -> float:
