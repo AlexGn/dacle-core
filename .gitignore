@@ -134,3 +134,4 @@ supabase/.temp/
 
 # Sherlock raw trade data (runtime)
 data/sherlock/
+telegram_groups.json
