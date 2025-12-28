@@ -131,3 +131,6 @@ supabase/.temp/
 # claude-mem plugin data (local development memory)
 .claude-mem/
 .hypothesis/
+
+# Sherlock raw trade data (runtime)
+data/sherlock/
