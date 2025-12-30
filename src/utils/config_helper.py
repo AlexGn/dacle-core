@@ -36,7 +36,8 @@ from typing import Optional
 from dotenv import load_dotenv
 
 # Load environment variables once at module import
-PROJECT_ROOT = Path(__file__).parent.parent
+# Path: src/utils/config_helper.py → parent.parent.parent = project root
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 ENV_FILE = PROJECT_ROOT / ".env"
 
 if ENV_FILE.exists():
@@ -177,7 +178,7 @@ def get_config() -> DACLEConfig:
 
     Example:
         ```python
-        from scripts.helpers.config import get_config
+        from src.utils.config_helper import get_config
 
         config = get_config()
         print(f"Project root: {config.project_root}")
@@ -199,7 +200,7 @@ def get_notion_config() -> NotionConfig:
 
     Example:
         ```python
-        from scripts.helpers.config import get_notion_config
+        from src.utils.config_helper import get_notion_config
 
         notion_config = get_notion_config()
         print(f"Database ID: {notion_config.database_id}")
@@ -220,7 +221,7 @@ def get_supabase_config() -> SupabaseConfig:
 
     Example:
         ```python
-        from scripts.helpers.config import get_supabase_config
+        from src.utils.config_helper import get_supabase_config
 
         config = get_supabase_config()
         print(f"Connecting to: {config.url}")
@@ -241,7 +242,7 @@ def get_telegram_config() -> TelegramConfig:
 
     Example:
         ```python
-        from scripts.helpers.config import get_telegram_config
+        from src.utils.config_helper import get_telegram_config
 
         telegram = get_telegram_config()
         print(f"Sending to chat: {telegram.chat_id}")
@@ -259,7 +260,7 @@ def get_ai_config() -> AIConfig:
 
     Example:
         ```python
-        from scripts.helpers.config import get_ai_config
+        from src.utils.config_helper import get_ai_config
 
         ai = get_ai_config()
         if ai.together_api_key:
@@ -278,7 +279,7 @@ def get_notion_config() -> NotionConfig:
 
     Example:
         ```python
-        from scripts.helpers.config import get_notion_config
+        from src.utils.config_helper import get_notion_config
 
         notion = get_notion_config()
         if not notion.api_key:
@@ -297,7 +298,7 @@ def get_project_root() -> Path:
 
     Example:
         ```python
-        from scripts.helpers.config import get_project_root
+        from src.utils.config_helper import get_project_root
 
         root = get_project_root()
         data_dir = root / "data"
@@ -322,7 +323,7 @@ def validate_config(require_telegram: bool = False, require_ai: bool = False) ->
 
     Example:
         ```python
-        from scripts.helpers.config import validate_config
+        from src.utils.config_helper import validate_config
 
         # Script that needs Telegram
         validate_config(require_telegram=True)
