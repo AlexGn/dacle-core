@@ -138,3 +138,6 @@ telegram_groups.json
 
 # Feedback runtime data (trade outcomes, logs)
 data/feedback/
+
+# Validation runtime data (TA snapshots, test artifacts)
+data/validation/
