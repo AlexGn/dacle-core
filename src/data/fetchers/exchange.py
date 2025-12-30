@@ -180,8 +180,12 @@ def fetch_token_price_interactive(
     Returns:
         Current price as float or None
     """
-    from scripts.helpers.fetch_token_price_interactive import fetch_price as _fetch
-    return _fetch(symbol, verbose=verbose)
+    # NOTE: fetch_token_price_interactive is a CLI script, not a library
+    # This function stub exists for interface compatibility but is not implemented
+    raise NotImplementedError(
+        "fetch_price_with_interactive is not implemented. "
+        "Use src/data/fetch_token_price_interactive.py as a CLI script instead."
+    )
 
 
 # =============================================================================

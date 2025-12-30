@@ -17,7 +17,7 @@ from pathlib import Path
 
 from scripts.helpers.price_action_analyzer import PriceActionAnalyzer
 from scripts.helpers.indices_tracker import IndicesTracker
-from scripts.helpers.technical_pattern_detector import (
+from src.analysis.technical_pattern_detector import (
     TrendlineBreakDetector,
     CandlestickAnalyzer,
     RetestDetector
