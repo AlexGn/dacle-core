@@ -141,3 +141,4 @@ data/feedback/
 
 # Validation runtime data (TA snapshots, test artifacts)
 data/validation/
+notion_auth.json
