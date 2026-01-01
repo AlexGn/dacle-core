@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.0 - SHORT MILESTONE COMPLETE, December 29, 2025)
+## 📊 Current Status (v5.1 - Session 269, January 1, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -35,14 +35,29 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 61 learnings (L001-L061) |
+| **Learning System** | ✅ 100% | 71 learnings (L001-L071) |
 | **Paper Trade Validation** | ⏳ 30% | 6/20 STRONG_SHORT signals collected |
 
 **Next Phase**: LONG system (Sherlock-based, Option A)
 
 ---
 
-**🚀 LATEST (Session 265)**: Sherlock Notion Data Extraction + WIN Outcome Validation ✅ **COMPLETE**
+**🚀 LATEST (Session 269)**: L071 David's Position Management Framework ✅ **COMPLETE**
+- **L071**: Reference learning documenting David's personal risk management rules
+- **Core Rules**: 3-position limit, BE gate, free trade accumulation, margin protection
+- **Philosophy**: "DACLE informs, David decides" - no code integration (system surfaces ALL opportunities)
+- **Related**: L034 (BE SL), L068 (position exception), L050 (leverage framework), L056 (sizing matrix)
+
+**🚀 PREVIOUS (Session 268)**: Backup VPS Failover Test Plans + Health Monitoring Reality Check ✅
+- **Failover Plans**: Dry run execution checklist ready for backup VPS testing
+- **Honest Assessment**: Health monitoring daemon NOT deployed to production (documented)
+
+**🚀 PREVIOUS (Session 267)**: ML Dead Zone + Platt Calibration + Sherlock Data Fix ✅
+- **ML Dead Zone**: Narrowed 40-65% → 50-60% (229 more predictions actionable)
+- **Platt Recalibration**: Updated with N=460 OOS data
+- **Key Discovery**: Sherlock achieves 93.3% WIN+BREAKEVEN rate (56/60 trades)
+
+**🚀 PREVIOUS (Session 265)**: Sherlock Notion Data Extraction + WIN Outcome Validation ✅ **COMPLETE**
 - **Notion Data Extraction**: 100% complete across 5 Sherlock pages
   - ✅ **Long trades (1)**: 789 trades extracted (100% conviction coverage)
   - ✅ **TA & Analysis**: 520 trades extracted (Session 264)
@@ -919,14 +934,14 @@ See [LICENSE](LICENSE)
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
-- **Learnings Documented**: 61 (L001-L061), **100% integrated** (25 Sherlock learnings operational) with governance framework
+- **Learnings Documented**: 71 (L001-L071), **100% integrated** (25 Sherlock learnings operational) with governance framework
 - **Safety Mechanisms**: 5 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage, BTC CRITICAL VETO)
 - **Telegram Notifications**: ML-validated with STRONG_SHORT/MONITOR/SKIP grouping (Session 246)
 
 ---
 
-**Last Updated**: December 29, 2025
-**Version**: v5.0
-**Status**: Session 265 Complete ✅ (Sherlock Notion Data Extraction 100% + WIN Outcome Validation + Phase 3A Complete) 🚀
-**Total Sherlock Learnings**: 61 (L001-L061), **100% integrated** (25 Sherlock learnings operational)
+**Last Updated**: January 1, 2026
+**Version**: v5.1
+**Status**: Session 269 Complete ✅ (L071 David's Position Management Framework) 🚀
+**Total Learnings**: 71 (L001-L071), **100% integrated** (25 Sherlock learnings operational)
 **Sherlock Data Coverage**: 1,401 trades extracted (789 Long + 520 TA + 92 Outcomes), "Short trades" page DISCOVERED (P1 next)
