@@ -44,7 +44,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 # price_action_analyzer still at scripts.helpers (deprecation wrapper exists)
 try:
     from src.data.indices_tracker import IndicesTracker
-    from scripts.helpers.price_action_analyzer import PriceActionAnalyzer
+    from src.analysis.price_action_analyzer import PriceActionAnalyzer
 except ModuleNotFoundError:
     # Fallback for edge cases
     import importlib.util
@@ -633,7 +633,7 @@ class TADataAggregator:
 
         # Use BTC funding/OI as proxy for market conditions
         try:
-            from scripts.helpers.liquidation_tracker import LiquidationTracker
+            from src.risk.liquidation_tracker import LiquidationTracker
             liq_tracker = LiquidationTracker()
             btc_funding = liq_tracker.get_funding_rate("BTC")
             result["proxy_btc_funding"] = btc_funding.get('funding_rate')
@@ -844,7 +844,7 @@ class TADataAggregator:
 
             # Import LiquidationTracker for funding rate, OI change, and liquidations
             try:
-                from scripts.helpers.liquidation_tracker import LiquidationTracker
+                from src.risk.liquidation_tracker import LiquidationTracker
                 liq_tracker = LiquidationTracker()
                 liq_tracker_available = True
             except ImportError:
@@ -1051,7 +1051,7 @@ class TADataAggregator:
             candlestick_recommendation = "WAIT"
 
             try:
-                from scripts.helpers.candlestick_detector import CandlestickDetector
+                from src.analysis.candlestick_detector import CandlestickDetector
                 detector = CandlestickDetector(timeframe="4h")
 
                 # Use 4H OHLCV for pattern detection (per L014 - 4H candle close authority)

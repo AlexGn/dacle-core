@@ -7,7 +7,7 @@ Prevents bad data from entering the consolidation workflow.
 Created: 2025-11-24 (Session 51.5 - Automation Priority #1)
 
 Usage:
-    from scripts.helpers.perplexity_validator import validate_perplexity_data
+    from src.data.validation.perplexity_validator import validate_perplexity_data
 
     # Validate Perplexity JSON data
     validation_result = validate_perplexity_data(perplexity_data)

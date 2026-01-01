@@ -297,7 +297,7 @@ def capture_ta_snapshot(
     if ta_data is None:
         # Try to get current TA
         try:
-            from scripts.helpers.ta_aggregator import TADataAggregator
+            from src.analysis.ta_aggregator import TADataAggregator
             aggregator = TADataAggregator()
             ta_data = aggregator.get_full_analysis(symbol)
         except Exception as e:

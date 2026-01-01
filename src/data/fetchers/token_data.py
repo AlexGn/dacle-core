@@ -70,7 +70,7 @@ def fetch_cryptorank_web(
         Dict with TGE data, or None if not found
     """
     with _health_monitor.track_call("cryptorank_web"):
-        from scripts.helpers.cryptorank_web_fetcher import fetch_cryptorank_web as _fetch
+        from src.data.fetchers.cryptorank_web_fetcher import fetch_cryptorank_web as _fetch
         return _fetch(token, url)
 
 
@@ -93,7 +93,7 @@ def fetch_icodrops_data(
         Dict with vesting, whitepaper, farming, and tokenomics data
     """
     with _health_monitor.track_call("icodrops_scraper"):
-        from scripts.helpers.icodrops_fetcher import fetch_icodrops_data as _fetch
+        from src.data.fetchers.icodrops_fetcher import fetch_icodrops_data as _fetch
         return _fetch(symbol, name)
 
 
@@ -116,7 +116,7 @@ def fetch_dropstab_data(
         Dict with unlock schedule, tokenomics data
     """
     with _health_monitor.track_call("dropstab_scraper"):
-        from scripts.helpers.dropstab_fetcher import fetch_dropstab_data as _fetch
+        from src.data.fetchers.dropstab_fetcher import fetch_dropstab_data as _fetch
         return _fetch(symbol, name)
 
 
@@ -152,7 +152,7 @@ def fetch_from_primary_sources(
         Dict with consolidated token data from best available source
     """
     with _health_monitor.track_call("primary_source"):
-        from scripts.helpers.primary_source_fetcher import fetch_from_primary_sources as _fetch
+        from src.data.primary_source_fetcher import fetch_from_primary_sources as _fetch
         return _fetch(
             token=token,
             token_name=token_name,
@@ -178,7 +178,7 @@ def fetch_coingecko(
         Dict with CoinGecko data or None
     """
     with _health_monitor.track_call("coingecko_api"):
-        from scripts.helpers.primary_source_fetcher import fetch_coingecko as _fetch
+        from src.data.primary_source_fetcher import fetch_coingecko as _fetch
         return _fetch(token, token_name)
 
 
@@ -197,7 +197,7 @@ def fetch_coinmarketcap(
         Dict with CMC data or None
     """
     with _health_monitor.track_call("coinmarketcap_api"):
-        from scripts.helpers.primary_source_fetcher import fetch_coinmarketcap as _fetch
+        from src.data.primary_source_fetcher import fetch_coinmarketcap as _fetch
         return _fetch(token, token_name)
 
 

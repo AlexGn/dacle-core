@@ -57,7 +57,7 @@ def get_project_root() -> Path:
 
     Example:
         ```python
-        from scripts.helpers.path_setup import get_project_root
+        from src.utils.path_setup import get_project_root
 
         root = get_project_root()
         print(f"Project root: {root}")
@@ -75,7 +75,7 @@ def get_src_dir() -> Path:
 
     Example:
         ```python
-        from scripts.helpers.path_setup import get_src_dir
+        from src.utils.path_setup import get_src_dir
 
         src = get_src_dir()
         print(f"Source directory: {src}")
@@ -103,7 +103,7 @@ def get_data_dir() -> Path:
 
     Example:
         ```python
-        from scripts.helpers.path_setup import get_data_dir
+        from src.utils.path_setup import get_data_dir
 
         data_dir = get_data_dir()
         json_file = data_dir / "enriched_projects.json"
@@ -131,7 +131,7 @@ def get_reports_dir() -> Path:
 
     Example:
         ```python
-        from scripts.helpers.path_setup import get_reports_dir
+        from src.utils.path_setup import get_reports_dir
 
         reports = get_reports_dir()
         gaib_report = reports / "GAIB" / "report-viewer.html"
@@ -164,7 +164,7 @@ def setup_path(
     Example:
         ```python
         # At top of your script (most common usage)
-        from scripts.helpers.path_setup import setup_path
+        from src.utils.path_setup import setup_path
         setup_path()
 
         # Now you can import from src/
@@ -215,7 +215,7 @@ def verify_imports() -> bool:
 
     Example:
         ```python
-        from scripts.helpers.path_setup import setup_path, verify_imports
+        from src.utils.path_setup import setup_path, verify_imports
 
         setup_path()
         if not verify_imports():
@@ -241,7 +241,7 @@ def print_paths() -> None:
 
     Example:
         ```python
-        from scripts.helpers.path_setup import print_paths
+        from src.utils.path_setup import print_paths
 
         print_paths()
         ```

@@ -58,7 +58,7 @@ def fetch_mexc_calendar(
         - listing_date: Expected listing date
         - trading_pairs: Available trading pairs
     """
-    from scripts.helpers.mexc_calendar_enhanced import fetch_mexc_calendar as _fetch
+    from src.data.fetchers.mexc_calendar_enhanced import fetch_mexc_calendar as _fetch
     return _fetch(days_ahead=days_ahead, include_past=include_past)
 
 
@@ -156,7 +156,7 @@ def fetch_token_price(
         - volume_24h: 24h trading volume
         - source: Data source used
     """
-    from scripts.helpers.web_price_fetcher import fetch_token_price as _fetch
+    from src.data.fetchers.web_price_fetcher import fetch_token_price as _fetch
     return _fetch(
         symbol=symbol,
         source=source,
@@ -211,7 +211,7 @@ def fetch_mexc_twitter(
         - listing_date: Extracted date (if any)
         - created_at: Tweet timestamp
     """
-    from scripts.helpers.mexc_twitter_fetcher import fetch_mexc_twitter as _fetch
+    from src.data.fetchers.mexc_twitter_fetcher import fetch_mexc_twitter as _fetch
     return _fetch(limit=limit, filter_listings=filter_listings)
 
 
@@ -231,7 +231,7 @@ def fetch_chaingpt_pad(
     Returns:
         List of IDO dicts with token details
     """
-    from scripts.helpers.chaingpt_pad_fetcher import fetch_chaingpt_pad as _fetch
+    from src.data.fetchers.chaingpt_pad_fetcher import fetch_chaingpt_pad as _fetch
     return _fetch(include_ended=include_ended)
 
 
@@ -259,7 +259,7 @@ def fetch_social_hype(
         - telegram_members: Group size (if known)
         - hype_score: Normalized 0-100 score
     """
-    from scripts.helpers.social_hype_fetcher import fetch_social_hype as _fetch
+    from src.data.fetchers.social_hype_fetcher import fetch_social_hype as _fetch
     return _fetch(symbol, token_name)
 
 

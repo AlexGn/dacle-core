@@ -25,7 +25,7 @@ from datetime import datetime
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from scripts.helpers.tge_output import (
+from src.utils.tge_output import (
     print_phase, print_info, print_success, print_warning, print_error
 )
 

@@ -15,7 +15,7 @@ Purpose:
 Cost: ~$0.001 per validation (GPT-4o-mini recommended)
 
 Usage:
-    from scripts.helpers.fdv_semantic_validator import validate_fdv_realism
+    from src.data.validation.fdv_semantic_validator import validate_fdv_realism
     result = validate_fdv_realism("MONAD", 10_000_000_000, "L2")
     if result["is_outlier"]:
         print(f"WARNING: {result['reason']}")

@@ -74,7 +74,7 @@ class LLMWebFetch:
         Args:
             provider: 'openai' (recommended), 'together' (cheap), or 'anthropic'
         """
-        from scripts.helpers.llm_webfetch import LLMWebFetch as _LLMWebFetch
+        from src.data.fetchers.llm_webfetch import LLMWebFetch as _LLMWebFetch
         self._impl = _LLMWebFetch(provider=provider)
 
     def fetch(
@@ -129,7 +129,7 @@ def fetch_with_perplexity(
     Returns:
         Dict with extracted data and citations
     """
-    from scripts.helpers.auto_perplexity_trigger import fetch_with_perplexity as _fetch
+    from src.research.auto_perplexity_trigger import fetch_with_perplexity as _fetch
     return _fetch(
         query=query,
         system_prompt=system_prompt,
@@ -156,7 +156,7 @@ def validate_with_perplexity(
     Returns:
         Validation result with confidence scores
     """
-    from scripts.helpers.perplexity_validator import validate_token_data as _validate
+    from src.data.validation.perplexity_validator import validate_token_data as _validate
     return _validate(
         token=token,
         token_name=token_name,
@@ -197,7 +197,7 @@ class ClaudeWebFetcher:
     def _get_impl(self):
         """Lazy initialization of implementation."""
         if self._impl is None:
-            from scripts.helpers.claude_web_fetcher import ClaudeWebFetcher as _Impl
+            from src.data.fetchers.claude_web_fetcher import ClaudeWebFetcher as _Impl
             self._impl = _Impl(model=self.model)
         return self._impl
 
@@ -244,7 +244,7 @@ def extract_json_from_response(response: str) -> Optional[Dict]:
     Returns:
         Extracted JSON dict or None
     """
-    from scripts.helpers.webfetch_helpers import extract_json_from_response as _extract
+    from src.data.webfetch_helpers import extract_json_from_response as _extract
     return _extract(response)
 
 
@@ -262,7 +262,7 @@ def clean_html_for_llm(html: str, max_length: int = 50000) -> str:
     Returns:
         Cleaned text content
     """
-    from scripts.helpers.webfetch_helpers import clean_html_for_llm as _clean
+    from src.data.webfetch_helpers import clean_html_for_llm as _clean
     return _clean(html, max_length)
 
 

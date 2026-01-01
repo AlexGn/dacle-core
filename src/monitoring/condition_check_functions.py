@@ -15,14 +15,14 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 
-from scripts.helpers.price_action_analyzer import PriceActionAnalyzer
-from scripts.helpers.indices_tracker import IndicesTracker
+from src.analysis.price_action_analyzer import PriceActionAnalyzer
+from src.data.indices_tracker import IndicesTracker
 from src.analysis.technical_pattern_detector import (
     TrendlineBreakDetector,
     CandlestickAnalyzer,
     RetestDetector
 )
-from scripts.helpers.ta_decision_logger import TADecisionLogger
+from src.logging.ta_decision_logger import TADecisionLogger
 import ccxt
 import os
 

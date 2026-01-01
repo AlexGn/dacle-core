@@ -38,7 +38,7 @@ from src.integrations.cryptorank.scanner import TGEScanner
 
 # Import from tge_output module (still in scripts/helpers)
 try:
-    from scripts.helpers.tge_output import print_info, print_success, print_error, print_warning
+    from src.utils.tge_output import print_info, print_success, print_error, print_warning
 except ImportError:
     # Fallback: define simple print functions
     def print_info(msg): print(f"INFO: {msg}")
@@ -1608,7 +1608,7 @@ def consolidate_tge_data_if_available(token: str, automated_data: Dict[str, Any]
         # Phase 1.5: Run Perplexity validator (Priority #2)
         print_info("   Running Perplexity validator...")
         try:
-            from scripts.helpers.perplexity_validator import validate_perplexity_data
+            from src.data.validation.perplexity_validator import validate_perplexity_data
             validation_result = validate_perplexity_data(manual_data, token)
 
             if validation_result["errors"]:
@@ -1630,7 +1630,7 @@ def consolidate_tge_data_if_available(token: str, automated_data: Dict[str, Any]
         print_info("   Fetching Dropstab data for cross-validation...")
         dropstab_data = None
         try:
-            from scripts.helpers.dropstab_fetcher import fetch_dropstab_data
+            from src.data.fetchers.dropstab_fetcher import fetch_dropstab_data
             dropstab_data = fetch_dropstab_data(token)
 
             if dropstab_data:

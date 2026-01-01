@@ -712,7 +712,7 @@ def fetch_dropstab(token: str) -> Optional[Dict[str, Any]]:
         token: Token symbol
     """
     try:
-        from scripts.helpers.dropstab_fetcher import fetch_dropstab_data
+        from src.data.fetchers.dropstab_fetcher import fetch_dropstab_data
 
         data = fetch_dropstab_data(token)
         if data:
@@ -755,7 +755,7 @@ def fetch_icodrops(token_symbol: str, token_name: str = None) -> Optional[Dict[s
             print(f"Whitepaper: {data['whitepaper_url']}")
     """
     try:
-        from scripts.helpers.icodrops_fetcher import fetch_icodrops_data
+        from src.data.fetchers.icodrops_fetcher import fetch_icodrops_data
 
         logger.info(f"Fetching ICODrops data for {token_symbol}...")
         result = fetch_icodrops_data(token_symbol, token_name)
@@ -1654,7 +1654,7 @@ def fetch_from_primary_sources(
         needs_source(missing_fields, CRYPTORANK_WEB_FIELDS)):
         sources_tried.append("cryptorank_web")
         try:
-            from scripts.helpers.cryptorank_web_fetcher import fetch_cryptorank_web
+            from src.data.fetchers.cryptorank_web_fetcher import fetch_cryptorank_web
             cr_web_data = fetch_cryptorank_web(token)
             if cr_web_data and cr_web_data.get("_data_confidence", 0) > 0:
                 save_to_sources(token, "cryptorank_web.json", cr_web_data)
@@ -1680,7 +1680,7 @@ def fetch_from_primary_sources(
     if "icodrops" not in skip_sources and needs_source(missing_fields, ICODROPS_FIELDS):
         sources_tried.append("icodrops")
         try:
-            from scripts.helpers.icodrops_fetcher import fetch_icodrops_data
+            from src.data.fetchers.icodrops_fetcher import fetch_icodrops_data
             ico_data = fetch_icodrops_data(token)
             if ico_data and ico_data.get("_data_confidence", 0) > 0:
                 save_to_sources(token, "icodrops.json", ico_data)

@@ -161,7 +161,7 @@ class SourceOrchestrator:
     ) -> Optional[Dict[str, Any]]:
         """Phase 0: Check if token is already live on CoinGecko."""
         try:
-            from scripts.helpers.primary_source_fetcher import check_token_live_status
+            from src.data.primary_source_fetcher import check_token_live_status
 
             result = check_token_live_status(token_symbol, token_name)
 
@@ -201,7 +201,7 @@ class SourceOrchestrator:
         results = {}
 
         try:
-            from scripts.helpers.primary_source_fetcher import (
+            from src.data.primary_source_fetcher import (
                 fetch_cryptorank,
                 fetch_coingecko,
                 fetch_icodrops,
@@ -328,7 +328,7 @@ class SourceOrchestrator:
         """Phase 3: Query Perplexity only for specific missing fields."""
         try:
             from src.integrations.perplexity.perplexity_api_client import PerplexityAPIClient
-            from scripts.helpers.primary_source_fetcher import save_to_sources
+            from src.data.primary_source_fetcher import save_to_sources
 
             # Load prompt template
             prompt_template_path = PROJECT_ROOT / "prompts" / "perplexity_single_token_analysis_v3.6.3.md"

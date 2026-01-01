@@ -22,7 +22,7 @@ from src.models.playbook_models import (
 )
 from src.monitoring.condition_check_functions import execute_check_function
 from src.monitoring.market_regime_classifier import MarketRegimeClassifier
-from scripts.helpers.indices_tracker import IndicesTracker
+from src.data.indices_tracker import IndicesTracker
 import ccxt
 
 
