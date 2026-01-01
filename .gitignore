@@ -142,3 +142,9 @@ data/feedback/
 # Validation runtime data (TA snapshots, test artifacts)
 data/validation/
 notion_auth.json
+
+# TA Screenshot uploads (user uploads, runtime data)
+data/ta_uploads/
+
+# Internal cache (runtime, regeneratable)
+src/data/cache/
