@@ -9,7 +9,8 @@ Created: 2025-12-02
 Session: 82
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import List, Dict, Tuple
 import json
 
@@ -43,6 +44,9 @@ class PlaybookConditionChecker:
         ConditionPriority.HIGH: 20.0,      # High conditions = 20% weight each
         ConditionPriority.MEDIUM: 10.0     # Medium conditions = 10% weight each
     }
+
+    # Cooldown tracking file path
+    COOLDOWN_FILE = Path(__file__).parent.parent.parent / "data" / "alerts" / "cooldown_state.json"
 
     def __init__(self):
         """Initialize checker with indices tracker and market regime classifier."""
@@ -307,7 +311,7 @@ class PlaybookConditionChecker:
                 print(f"  🚨 Alert trigger: All CRITICAL conditions met")
                 return True
 
-        # Trigger 4: Critical condition lost (with cooldown check)
+        # Trigger 4: Critical condition lost (with 1-hour cooldown)
         if newly_lost:
             lost_critical = [
                 cid for cid in newly_lost
@@ -315,9 +319,14 @@ class PlaybookConditionChecker:
                        for c in playbook.entry_conditions)
             ]
             if lost_critical:
-                # TODO: Implement 1-hour cooldown check via database
-                print(f"  ⚠️  Critical condition lost: {lost_critical}")
-                return True
+                # Check 1-hour cooldown to prevent alert spam
+                if not self._is_in_cooldown(playbook.token_symbol, cooldown_hours=1):
+                    print(f"  ⚠️  Critical condition lost: {lost_critical}")
+                    self._record_critical_alert(playbook.token_symbol)
+                    return True
+                else:
+                    print(f"  ⏳ Critical loss alert suppressed (in cooldown)")
+                    return False
 
         return False
 
@@ -360,3 +369,62 @@ class PlaybookConditionChecker:
             if not self._get_previous_condition_state(previous_check, cid):
                 return False
         return True
+
+    def _is_in_cooldown(self, token_symbol: str, cooldown_hours: int = 1) -> bool:
+        """
+        Check if token is in cooldown period after critical condition loss.
+
+        Args:
+            token_symbol: Token to check
+            cooldown_hours: Cooldown period in hours (default: 1)
+
+        Returns:
+            True if still in cooldown, False if alert should be sent
+        """
+        try:
+            self.COOLDOWN_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            if not self.COOLDOWN_FILE.exists():
+                return False
+
+            with open(self.COOLDOWN_FILE, "r") as f:
+                cooldown_data = json.load(f)
+
+            if token_symbol not in cooldown_data:
+                return False
+
+            last_alert = datetime.fromisoformat(cooldown_data[token_symbol])
+            cooldown_end = last_alert + timedelta(hours=cooldown_hours)
+
+            if datetime.utcnow() < cooldown_end:
+                print(f"  ⏳ {token_symbol} in cooldown until {cooldown_end.isoformat()}")
+                return True
+
+            return False
+
+        except Exception as e:
+            print(f"  ⚠️ Cooldown check error: {e}")
+            return False
+
+    def _record_critical_alert(self, token_symbol: str) -> None:
+        """
+        Record that a critical condition loss alert was sent.
+
+        Args:
+            token_symbol: Token that triggered alert
+        """
+        try:
+            self.COOLDOWN_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            cooldown_data = {}
+            if self.COOLDOWN_FILE.exists():
+                with open(self.COOLDOWN_FILE, "r") as f:
+                    cooldown_data = json.load(f)
+
+            cooldown_data[token_symbol] = datetime.utcnow().isoformat()
+
+            with open(self.COOLDOWN_FILE, "w") as f:
+                json.dump(cooldown_data, f, indent=2)
+
+        except Exception as e:
+            print(f"  ⚠️ Failed to record cooldown: {e}")
