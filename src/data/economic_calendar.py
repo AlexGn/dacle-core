@@ -320,9 +320,10 @@ class EconomicCalendar:
         events = []
         now = datetime.utcnow()
 
-        # 2025 FOMC Schedule (announced dates)
+        # FOMC Schedule (announced dates)
         # Times are approximate (usually 2:00 PM ET = 19:00 UTC)
-        fomc_dates_2025 = [
+        fomc_dates = [
+            # 2025 FOMC dates
             datetime(2025, 1, 29, 19, 0),
             datetime(2025, 3, 19, 19, 0),
             datetime(2025, 5, 7, 19, 0),
@@ -331,9 +332,18 @@ class EconomicCalendar:
             datetime(2025, 9, 17, 19, 0),
             datetime(2025, 11, 5, 19, 0),
             datetime(2025, 12, 17, 19, 0),
+            # 2026 FOMC dates (Session 276: Added for L053 integration)
+            datetime(2026, 1, 28, 19, 0),
+            datetime(2026, 3, 18, 19, 0),
+            datetime(2026, 5, 6, 19, 0),
+            datetime(2026, 6, 17, 19, 0),
+            datetime(2026, 7, 29, 19, 0),
+            datetime(2026, 9, 16, 19, 0),
+            datetime(2026, 11, 4, 19, 0),
+            datetime(2026, 12, 16, 19, 0),
         ]
 
-        for date in fomc_dates_2025:
+        for date in fomc_dates:
             if date > now:
                 events.append(EconomicEvent(
                     name="FOMC Interest Rate Decision",
