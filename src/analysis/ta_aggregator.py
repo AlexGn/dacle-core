@@ -59,6 +59,14 @@ except ModuleNotFoundError:
     PriceActionAnalyzer = pa_module.PriceActionAnalyzer
 
 # Session 264 P2: Redis cache for TA data (4-6x speedup on cache hits)
+# Session 275: Graceful degradation - falls back to in-memory if Redis down
+try:
+    from src.utils.graceful_degradation import get_graceful_cache, check_service_health, ServiceHealth
+    GRACEFUL_CACHE_AVAILABLE = True
+except ImportError:
+    GRACEFUL_CACHE_AVAILABLE = False
+
+# Legacy import for backward compatibility
 try:
     from src.utils.redis_cache import get_redis_cache
     REDIS_CACHE_AVAILABLE = True
@@ -118,12 +126,24 @@ class TADataAggregator:
         """
         logger.info(f"Collecting TA data for Agent 4 execution check...")
 
-        # Session 264 P2: Check Redis cache first (4-6x speedup on cache hits)
-        if REDIS_CACHE_AVAILABLE:
+        # Session 264 P2: Check cache first (4-6x speedup on cache hits)
+        # Session 275: Use graceful cache (Redis → in-memory → file fallback)
+        cache_key = f"{token_symbol or 'macro_only'}"
+        if GRACEFUL_CACHE_AVAILABLE:
             try:
-                cache = get_redis_cache()
-                cache_key = f"{token_symbol or 'macro_only'}"
+                cache = get_graceful_cache()
                 cached_ta = cache.get(cache_key, namespace="ta")
+                if cached_ta is not None:
+                    source = "Redis" if cache.is_redis_available else "fallback"
+                    logger.info(f"✅ Cache HIT ({source}) for {cache_key} TA data (saved ~2-3s)")
+                    return cached_ta
+            except Exception as e:
+                logger.warning(f"Cache check failed for {cache_key}: {e}")
+        elif REDIS_CACHE_AVAILABLE:
+            # Legacy Redis-only fallback
+            try:
+                redis_cache = get_redis_cache()
+                cached_ta = redis_cache.get(cache_key, namespace="ta")
                 if cached_ta is not None:
                     logger.info(f"✅ Cache HIT for {cache_key} TA data (saved ~2-3s)")
                     return cached_ta
@@ -145,12 +165,20 @@ class TADataAggregator:
         logger.info(f"TA Data collected: score={result['ta_score_normalized']:.1f}/10, "
                    f"recommendation={result['ta_recommendation']}")
 
-        # Session 264 P2: Cache the result in Redis (15-min TTL, TA data changes slowly)
-        if REDIS_CACHE_AVAILABLE:
+        # Session 264 P2: Cache the result (15-min TTL, TA data changes slowly)
+        # Session 275: Use graceful cache (Redis → in-memory → file fallback)
+        if GRACEFUL_CACHE_AVAILABLE:
             try:
-                cache = get_redis_cache()
-                cache_key = f"{token_symbol or 'macro_only'}"
-                cache.set(cache_key, result, ttl_seconds=900, namespace="ta")  # 15 min TTL
+                cache = get_graceful_cache()
+                cache.set(cache_key, result, ttl=900, namespace="ta")  # 15 min TTL
+                logger.debug(f"✅ Cached TA data for {cache_key} (TTL: 15min)")
+            except Exception as e:
+                logger.warning(f"Failed to cache TA data for {cache_key}: {e}")
+        elif REDIS_CACHE_AVAILABLE:
+            # Legacy Redis-only fallback
+            try:
+                redis_cache = get_redis_cache()
+                redis_cache.set(cache_key, result, ttl_seconds=900, namespace="ta")
                 logger.debug(f"✅ Cached TA data for {cache_key} (TTL: 15min)")
             except Exception as e:
                 logger.warning(f"Failed to cache TA data for {cache_key}: {e}")
