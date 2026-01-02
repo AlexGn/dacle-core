@@ -261,8 +261,8 @@ class VPSHealthMonitor:
 
             client = get_supabase_client()
 
-            # Simple connectivity test - query learnings table
-            result = client.table("learnings").select("id").limit(1).execute()
+            # Simple connectivity test - query learning_insights table
+            result = client.table("learning_insights").select("id").limit(1).execute()
 
             return True
         except Exception as e:
