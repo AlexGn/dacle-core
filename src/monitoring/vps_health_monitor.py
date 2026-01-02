@@ -88,9 +88,10 @@ class VPSHealthMonitor:
     """
 
     # Critical services that must be running (actual VPS service names)
+    # Format: (service_name, is_timer_triggered)
     CRITICAL_SERVICES = [
-        "dacle-watchtower",  # Main TGE discovery daemon
-        "dacle-sniper",  # Execution monitoring (timer-triggered)
+        ("dacle-watchtower", False),  # Main TGE discovery daemon (continuous)
+        ("dacle-sniper", True),  # Execution monitoring (timer-triggered)
     ]
 
     # Resource thresholds
@@ -181,8 +182,11 @@ class VPSHealthMonitor:
         """Check status of critical services."""
         services = []
 
-        for service_name in self.CRITICAL_SERVICES:
-            status = self._check_systemd_service(service_name)
+        for service_name, is_timer in self.CRITICAL_SERVICES:
+            if is_timer:
+                status = self._check_timer_service(service_name)
+            else:
+                status = self._check_systemd_service(service_name)
             services.append(status)
 
         return services
@@ -246,6 +250,88 @@ class VPSHealthMonitor:
 
         except Exception as e:
             logger.error(f"Error checking service {service_name}: {e}")
+            return ServiceStatus(
+                name=service_name,
+                running=False,
+                pid=None,
+                uptime_seconds=None,
+                status_message=f"Error: {str(e)}"
+            )
+
+    def _check_timer_service(self, service_name: str) -> ServiceStatus:
+        """
+        Check timer-triggered systemd service status.
+
+        Timer-triggered services (like dacle-sniper) are not continuously running.
+        They run periodically and exit. We check:
+        1. If the timer is active and enabled
+        2. If the last service run was successful (exit code 0)
+
+        Args:
+            service_name: Service name (e.g., "dacle-sniper")
+
+        Returns:
+            ServiceStatus for the timer-triggered service
+        """
+        timer_name = f"{service_name}.timer"
+
+        try:
+            # Check if timer is active
+            timer_result = subprocess.run(
+                ["systemctl", "is-active", timer_name],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+            timer_active = timer_result.returncode == 0
+
+            if not timer_active:
+                return ServiceStatus(
+                    name=service_name,
+                    running=False,
+                    pid=None,
+                    uptime_seconds=None,
+                    status_message=f"Timer {timer_name} not active"
+                )
+
+            # Check last run result using ExecMainStatus
+            show_result = subprocess.run(
+                ["systemctl", "show", service_name, "-p", "ExecMainStatus", "-p", "Result"],
+                capture_output=True,
+                text=True,
+                timeout=5
+            )
+
+            exit_status = None
+            result_status = None
+            for line in show_result.stdout.split('\n'):
+                if line.startswith("ExecMainStatus="):
+                    exit_status = line.split('=')[1]
+                elif line.startswith("Result="):
+                    result_status = line.split('=')[1]
+
+            # Timer service is healthy if timer is active and last run succeeded
+            is_healthy = timer_active and result_status == "success"
+
+            if is_healthy:
+                return ServiceStatus(
+                    name=service_name,
+                    running=True,  # Conceptually "running" = healthy timer
+                    pid=None,
+                    uptime_seconds=None,
+                    status_message=f"Timer active, last run: success"
+                )
+            else:
+                return ServiceStatus(
+                    name=service_name,
+                    running=False,
+                    pid=None,
+                    uptime_seconds=None,
+                    status_message=f"Timer active but last run failed: {result_status}"
+                )
+
+        except Exception as e:
+            logger.error(f"Error checking timer service {service_name}: {e}")
             return ServiceStatus(
                 name=service_name,
                 running=False,
