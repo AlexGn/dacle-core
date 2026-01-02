@@ -48,6 +48,7 @@ class LLMCache:
     - Automatic cleanup of expired entries
     - Per-provider cache separation
     - SHA256 hashing for cache keys
+    - Hit/miss tracking for monitoring (Session 273)
     """
 
     def __init__(self, cache_dir: Optional[Path] = None, default_ttl_hours: int = 24):
@@ -65,6 +66,35 @@ class LLMCache:
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.default_ttl_hours = default_ttl_hours
+
+        # Session 273: Hit/miss tracking for monitoring
+        self._hits = 0
+        self._misses = 0
+        self._stats_file = self.cache_dir / "_cache_stats.json"
+        self._load_stats()
+
+    def _load_stats(self) -> None:
+        """Load hit/miss stats from persistent storage."""
+        try:
+            if self._stats_file.exists():
+                with open(self._stats_file, 'r') as f:
+                    data = json.load(f)
+                    self._hits = data.get('hits', 0)
+                    self._misses = data.get('misses', 0)
+        except Exception:
+            pass  # Start fresh if corrupted
+
+    def _save_stats(self) -> None:
+        """Save hit/miss stats to persistent storage."""
+        try:
+            with open(self._stats_file, 'w') as f:
+                json.dump({
+                    'hits': self._hits,
+                    'misses': self._misses,
+                    'last_updated': datetime.now().isoformat()
+                }, f)
+        except Exception as e:
+            logger.warning(f"Failed to save cache stats: {e}")
 
     def _get_cache_key(self, provider: str, prompt: str, **kwargs) -> str:
         """
@@ -113,6 +143,8 @@ class LLMCache:
         cache_file = self._get_cache_file(provider, cache_key)
 
         if not cache_file.exists():
+            self._misses += 1
+            self._save_stats()
             return None
 
         try:
@@ -124,14 +156,21 @@ class LLMCache:
             if datetime.now() > expires_at:
                 logger.debug(f"Cache expired for {provider}: {cache_key[:8]}...")
                 cache_file.unlink()  # Delete expired cache
+                self._misses += 1
+                self._save_stats()
                 return None
 
+            # Session 273: Track cache hit
+            self._hits += 1
+            self._save_stats()
             logger.info(f"✅ Cache HIT for {provider}: {cache_key[:8]}... (saved API call)")
             return cache_data['response']
 
         except (json.JSONDecodeError, KeyError, ValueError) as e:
             logger.warning(f"Corrupted cache file: {cache_file}, removing. Error: {e}")
             cache_file.unlink()
+            self._misses += 1
+            self._save_stats()
             return None
 
     def set(
@@ -255,10 +294,17 @@ class LLMCache:
         Returns:
             Dict with cache statistics
         """
+        # Session 273: Calculate hit rate from tracked stats
+        total_requests = self._hits + self._misses
+        hit_rate = (self._hits / total_requests * 100) if total_requests > 0 else 0.0
+
         stats = {
             'total_entries': 0,
             'expired_entries': 0,
             'active_entries': 0,
+            'hits': self._hits,
+            'misses': self._misses,
+            'hit_rate': hit_rate,
             'providers': {}
         }
 
