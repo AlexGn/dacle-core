@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.1 - Session 269, January 1, 2026)
+## 📊 Current Status (v5.2 - Session 270, January 2, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -36,21 +36,22 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
 | **Learning System** | ✅ 100% | 71 learnings (L001-L071) |
+| **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
 | **Paper Trade Validation** | ⏳ 30% | 6/20 STRONG_SHORT signals collected |
 
 **Next Phase**: LONG system (Sherlock-based, Option A)
 
 ---
 
-**🚀 LATEST (Session 269)**: L071 David's Position Management Framework ✅ **COMPLETE**
-- **L071**: Reference learning documenting David's personal risk management rules
-- **Core Rules**: 3-position limit, BE gate, free trade accumulation, margin protection
-- **Philosophy**: "DACLE informs, David decides" - no code integration (system surfaces ALL opportunities)
-- **Related**: L034 (BE SL), L068 (position exception), L050 (leverage framework), L056 (sizing matrix)
+**🚀 LATEST (Session 270)**: Health Check Daemon VPS Deployment ✅ **COMPLETE**
+- **Deployed**: `health-check-daemon.service` running on VPS 37.27.217.82
+- **Fixes**: Config loading order, Supabase table name (`learning_insights`)
+- **Status**: 5-min health checks active, Supabase connected
+- **Closes**: Session 268 reality check gap (daemon was NOT deployed)
 
-**🚀 PREVIOUS (Session 268)**: Backup VPS Failover Test Plans + Health Monitoring Reality Check ✅
-- **Failover Plans**: Dry run execution checklist ready for backup VPS testing
-- **Honest Assessment**: Health monitoring daemon NOT deployed to production (documented)
+**🚀 PREVIOUS (Session 269)**: L071 David's Position Management Framework ✅
+- **L071**: Reference learning for David's personal risk rules (3-position limit, BE gate)
+- **Philosophy**: "DACLE informs, David decides" - no code integration
 
 **🚀 PREVIOUS (Session 267)**: ML Dead Zone + Platt Calibration + Sherlock Data Fix ✅
 - **ML Dead Zone**: Narrowed 40-65% → 50-60% (229 more predictions actionable)
@@ -940,8 +941,8 @@ See [LICENSE](LICENSE)
 
 ---
 
-**Last Updated**: January 1, 2026
-**Version**: v5.1
-**Status**: Session 269 Complete ✅ (L071 David's Position Management Framework) 🚀
+**Last Updated**: January 2, 2026
+**Version**: v5.2
+**Status**: Session 270 Complete ✅ (Health Check Daemon VPS Deployment) 🚀
 **Total Learnings**: 71 (L001-L071), **100% integrated** (25 Sherlock learnings operational)
 **Sherlock Data Coverage**: 1,401 trades extracted (789 Long + 520 TA + 92 Outcomes), "Short trades" page DISCOVERED (P1 next)
