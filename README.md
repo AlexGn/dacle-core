@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.2 - Session 270, January 2, 2026)
+## 📊 Current Status (v5.3 - Session 272, January 2, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -35,7 +35,8 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 71 learnings (L001-L071) |
+| **Learning System** | ✅ 100% | 72 learnings (L001-L072) |
+| **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
 | **Paper Trade Validation** | ⏳ 30% | 6/20 STRONG_SHORT signals collected |
 
@@ -43,11 +44,18 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🚀 LATEST (Session 270)**: Health Check Daemon VPS Deployment ✅ **COMPLETE**
+**🚀 LATEST (Session 272)**: Phase 6 Learnings (L032-L037) Pipeline Integration ✅ **COMPLETE**
+- **Pipeline**: `_apply_phase6_learnings()` method (198 lines) in `tge_pipeline.py`
+- **L032-L037**: ATH reversal, overextension tiers, index deviation, entry checklist, spot-short DCA
+- **Conviction Adjustments**: +3.0 EXTREME (≥5x), +2.0 HIGH (≥3x), +1.0 MODERATE (≥2x)
+- **CI/CD**: 807 tests passed, 31 skipped (GitHub Actions green)
+
+**🚀 PREVIOUS (Session 271)**: December 2025 PnL Analysis & L072 ✅
+- **L072**: December 2025 PnL Analysis - Portfolio Growth Patterns
+- **December Performance**: +$78.23 USDT (+3.86%), Win days 17/31 (54.8%)
+
+**🚀 PREVIOUS (Session 270)**: Health Check Daemon VPS Deployment ✅
 - **Deployed**: `health-check-daemon.service` running on VPS 37.27.217.82
-- **Fixes**: Config loading order, Supabase table name (`learning_insights`)
-- **Status**: 5-min health checks active, Supabase connected
-- **Closes**: Session 268 reality check gap (daemon was NOT deployed)
 
 **🚀 PREVIOUS (Session 269)**: L071 David's Position Management Framework ✅
 - **L071**: Reference learning for David's personal risk rules (3-position limit, BE gate)
