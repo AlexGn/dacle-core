@@ -87,10 +87,10 @@ class VPSHealthMonitor:
     - Supabase unreachable = CRITICAL
     """
 
-    # Critical services that must be running
+    # Critical services that must be running (actual VPS service names)
     CRITICAL_SERVICES = [
-        "watchtower",  # Main TGE discovery daemon
-        "sniper-monitor",  # Execution monitoring
+        "dacle-watchtower",  # Main TGE discovery daemon
+        "dacle-sniper",  # Execution monitoring (timer-triggered)
     ]
 
     # Resource thresholds
