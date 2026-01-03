@@ -1,29 +1,45 @@
 #!/usr/bin/env python3
 """
-Automated Confluence Counter - Phase 1 Session 268
+Automated Confluence Counter - Phase 1 Session 268 / Phase C Session 280
 
 Counts technical confluence factors from multiple indicators to classify
 setup quality as SINGLE/DOUBLE/TRIPLE/QUAD.
 
 Purpose:
     Replace hardcoded confluence_count=4 default with automated scoring
-    based on actual technical alignment across 9 confluence types.
+    based on actual technical alignment across 11 confluence types.
 
 Integration:
     - Pipeline: integrated_pipeline.py (replaces hardcoded count)
     - Alerts: alert_generator.py (displays confluence breakdown)
     - Sherlock Risk: Used in position sizing calculations
 
-Author: Claude Code (Session 268 Phase 1)
-Date: 2026-01-01
+Session 280 F5: Added Sherlock chart pattern integration
+    - Integrated CandlestickDetector for automatic pattern detection
+    - Added CHART_PATTERN confluence type for detected candlestick patterns
+    - Patterns: DOJI, Shooting Star, Engulfing, Evening Star, etc.
+
+Author: Claude Code (Session 268 Phase 1, Session 280 Phase C)
+Date: 2026-01-01, Updated: 2026-01-03
 """
 
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 
 logger = logging.getLogger(__name__)
+
+# Session 280 F5: Import CandlestickDetector for Sherlock patterns
+try:
+    from src.analysis.technical_patterns import CandlestickDetector, PatternResult, PatternType
+    CANDLESTICK_DETECTOR_AVAILABLE = True
+except ImportError:
+    CANDLESTICK_DETECTOR_AVAILABLE = False
+    CandlestickDetector = None
+    PatternResult = None
+    PatternType = None
+    logger.debug("CandlestickDetector not available, chart pattern detection disabled")
 
 
 class ConfluenceType(Enum):
@@ -36,10 +52,14 @@ class ConfluenceType(Enum):
     SUPPORT_RETEST = "support_retest"  # L029: S/R level retest
     RESISTANCE_RETEST = "resistance_retest"  # L029: Resistance retest
     TRENDLINE_BREAK = "trendline_break"  # Trendline breakout
-    PATTERN_DETECTED = "pattern_detected"  # L059: Chart pattern
+    PATTERN_DETECTED = "pattern_detected"  # L059: Chart pattern (legacy - basic detection)
     VOLUME_SPIKE = "volume_spike"  # Volume >1.5x average
     FUNDING_RATE = "funding_rate"  # L051: Funding rate extreme
     TVEM_BAND = "tvem_band"  # L058: TVEM band confluence
+    # Session 280 F5: Sherlock candlestick patterns
+    CHART_PATTERN_STRONG = "chart_pattern_strong"  # L032: 3-candle patterns (Evening/Morning Star)
+    CHART_PATTERN_MODERATE = "chart_pattern_moderate"  # 2-candle patterns (Engulfing)
+    CHART_PATTERN_WEAK = "chart_pattern_weak"  # 1-candle patterns (Doji, Shooting Star)
 
 
 @dataclass
@@ -106,6 +126,8 @@ class ConfluenceCounter:
         volume_data: Dict,
         funding_rate: Optional[float] = None,
         tvem_data: Optional[Dict] = None,
+        ohlcv_data: Optional[List[List]] = None,
+        timeframe: str = "4h",
     ) -> ConfluenceResult:
         """
         Count active confluence factors.
@@ -121,12 +143,16 @@ class ConfluenceCounter:
                 - near_resistance: True/False
                 - near_support: True/False
                 - retest_number: 1, 2, 3+
-            patterns: Detected chart patterns (e.g., ["inverse_h_and_s"])
+            patterns: Detected chart patterns (e.g., ["inverse_h_and_s"]) - legacy
             volume_data: Volume analysis
                 - volume_spike: True/False
             funding_rate: Funding rate (optional, for SHORT trades)
             tvem_data: TVEM band data (optional)
                 - signal: "bearish"/"bullish"
+            ohlcv_data: OHLCV candlestick data for automatic pattern detection
+                - List of [timestamp, open, high, low, close, volume]
+                - Session 280 F5: Enables Sherlock pattern detection
+            timeframe: Chart timeframe for pattern detection (default "4h")
 
         Returns:
             ConfluenceResult with score 1-4, rating, factors, and conviction modifier
@@ -188,6 +214,16 @@ class ConfluenceCounter:
             factors.append(ConfluenceType.TVEM_BAND)
             descriptions.append("TVEM band bearish signal")
 
+        # 10. Session 280 F5: Sherlock Chart Pattern Detection
+        # Uses CandlestickDetector for automatic pattern recognition
+        if ohlcv_data and CANDLESTICK_DETECTOR_AVAILABLE:
+            detected_patterns = self._detect_sherlock_patterns(
+                ohlcv_data, timeframe, sr_levels
+            )
+            for pattern_type, pattern_info in detected_patterns:
+                factors.append(pattern_type)
+                descriptions.append(pattern_info["description"])
+
         # Calculate score (1-4, capped at QUAD)
         count = len(factors)
         if count >= 4:
@@ -224,6 +260,133 @@ class ConfluenceCounter:
             factor_descriptions=descriptions,
             conviction_modifier=conviction_modifier,
         )
+
+    def _detect_sherlock_patterns(
+        self,
+        ohlcv_data: List[List],
+        timeframe: str,
+        sr_levels: Dict,
+    ) -> List[tuple]:
+        """
+        Session 280 F5: Detect Sherlock candlestick patterns.
+
+        Uses CandlestickDetector to identify reversal patterns:
+        - STRONG (3-candle): Evening Star, Morning Star (L032)
+        - MODERATE (2-candle): Bearish/Bullish Engulfing
+        - WEAK (1-candle): Doji, Shooting Star, Hammer
+
+        Args:
+            ohlcv_data: OHLCV candlestick data
+            timeframe: Chart timeframe (e.g., "4h")
+            sr_levels: S/R context for pattern strength
+
+        Returns:
+            List of (ConfluenceType, pattern_info) tuples
+        """
+        if not CANDLESTICK_DETECTOR_AVAILABLE:
+            return []
+
+        detected = []
+
+        try:
+            # Initialize detector
+            detector = CandlestickDetector(timeframe=timeframe)
+
+            # Determine context for pattern strength
+            context = "mid_trend"
+            if sr_levels.get("near_resistance", False):
+                context = "at_resistance"
+            elif sr_levels.get("near_support", False):
+                context = "at_support"
+
+            # Get short signal with all detected patterns
+            signal = detector.get_short_signal(ohlcv_data, context=context)
+
+            if signal["signal"] == "NO_PATTERN":
+                return []
+
+            # Process detected patterns
+            patterns_detail = signal.get("patterns_detail", [])
+            bearish_patterns = []
+            bullish_patterns = []
+
+            for pattern in patterns_detail:
+                pattern_name = pattern.get("pattern_name", "unknown")
+                pattern_type_str = pattern.get("pattern_type", "neutral")
+                strength = pattern.get("strength", "WEAK")
+                confidence = pattern.get("confidence", 0.5)
+                signal_for_short = pattern.get("signal_for_short", "WAIT")
+
+                # Only count bearish patterns for SHORT confluence
+                # (bullish patterns = warning, not confluence)
+                if pattern_type_str == "bearish_reversal":
+                    bearish_patterns.append({
+                        "name": pattern_name,
+                        "strength": strength,
+                        "confidence": confidence,
+                        "signal": signal_for_short,
+                    })
+
+            # Classify by strength and add as confluence
+            # Only add the STRONGEST pattern as confluence (avoid double counting)
+            if bearish_patterns:
+                # Sort by strength: STRONG > MODERATE > WEAK
+                strength_order = {"STRONG": 3, "MODERATE": 2, "WEAK": 1}
+                bearish_patterns.sort(
+                    key=lambda p: (strength_order.get(p["strength"], 0), p["confidence"]),
+                    reverse=True
+                )
+
+                best_pattern = bearish_patterns[0]
+                pattern_name_display = best_pattern["name"].replace("_", " ").title()
+
+                if best_pattern["strength"] == "STRONG":
+                    # 3-candle patterns: Evening Star, etc.
+                    detected.append((
+                        ConfluenceType.CHART_PATTERN_STRONG,
+                        {
+                            "description": f"⭐ {pattern_name_display} (3-candle reversal)",
+                            "strength": "STRONG",
+                            "confidence": best_pattern["confidence"],
+                        }
+                    ))
+                    logger.info(
+                        f"[PATTERN] STRONG bearish pattern: {pattern_name_display} "
+                        f"(confidence: {best_pattern['confidence']:.0%})"
+                    )
+                elif best_pattern["strength"] == "MODERATE":
+                    # 2-candle patterns: Engulfing
+                    detected.append((
+                        ConfluenceType.CHART_PATTERN_MODERATE,
+                        {
+                            "description": f"📊 {pattern_name_display} (2-candle reversal)",
+                            "strength": "MODERATE",
+                            "confidence": best_pattern["confidence"],
+                        }
+                    ))
+                    logger.info(
+                        f"[PATTERN] MODERATE bearish pattern: {pattern_name_display} "
+                        f"(confidence: {best_pattern['confidence']:.0%})"
+                    )
+                else:
+                    # 1-candle patterns: Doji, Shooting Star
+                    detected.append((
+                        ConfluenceType.CHART_PATTERN_WEAK,
+                        {
+                            "description": f"🕯️ {pattern_name_display} (1-candle signal)",
+                            "strength": "WEAK",
+                            "confidence": best_pattern["confidence"],
+                        }
+                    ))
+                    logger.debug(
+                        f"[PATTERN] WEAK bearish pattern: {pattern_name_display} "
+                        f"(confidence: {best_pattern['confidence']:.0%})"
+                    )
+
+        except Exception as e:
+            logger.warning(f"[PATTERN] Error detecting Sherlock patterns: {e}")
+
+        return detected
 
 
 # Example usage
