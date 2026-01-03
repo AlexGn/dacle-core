@@ -76,6 +76,125 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# =============================================================================
+# SESSION 280: Per-Indicator Staleness Tracking
+# =============================================================================
+# Each indicator has different acceptable freshness thresholds
+# FRESH: Data is current and reliable
+# STALE: Data is old but usable with reduced confidence
+# CRITICAL: Data is very old, use with caution
+# EXPIRED: Data is too old to trust
+
+INDICATOR_FRESHNESS = {
+    # Macro indices (slower updates - checked less frequently)
+    "fear_greed": {"fresh": 60, "stale": 120, "critical": 360},      # F&G updates ~hourly
+    "btc_dominance": {"fresh": 30, "stale": 60, "critical": 180},    # Dominance updates frequently
+    "usdt_dominance": {"fresh": 30, "stale": 60, "critical": 180},
+    "total3": {"fresh": 30, "stale": 60, "critical": 180},
+    "btc_structure": {"fresh": 15, "stale": 60, "critical": 180},
+    "eth_structure": {"fresh": 15, "stale": 60, "critical": 180},
+
+    # Core TA (real-time price data)
+    "rsi_1h": {"fresh": 5, "stale": 15, "critical": 60},
+    "rsi_4h": {"fresh": 15, "stale": 60, "critical": 240},
+    "price": {"fresh": 1, "stale": 5, "critical": 15},
+    "volatility": {"fresh": 15, "stale": 60, "critical": 240},
+    "price_vs_ma20": {"fresh": 5, "stale": 30, "critical": 120},
+
+    # Advanced TA (most volatile, need real-time)
+    "funding_rate": {"fresh": 5, "stale": 15, "critical": 60},
+    "order_book": {"fresh": 1, "stale": 5, "critical": 15},
+    "open_interest": {"fresh": 5, "stale": 15, "critical": 60},
+    "liquidations": {"fresh": 2, "stale": 10, "critical": 30},
+    "volume_24h": {"fresh": 5, "stale": 30, "critical": 120},
+
+    # BTC context (critical for position sizing)
+    "btc_trend": {"fresh": 5, "stale": 15, "critical": 60},
+    "btc_support_distance": {"fresh": 5, "stale": 15, "critical": 60},
+}
+
+
+def _calculate_staleness(indicator_name: str, collected_at: datetime) -> Dict:
+    """
+    Calculate staleness status for an indicator.
+
+    Args:
+        indicator_name: Name of the indicator (must match INDICATOR_FRESHNESS keys)
+        collected_at: When the data was collected (UTC datetime)
+
+    Returns:
+        Dict with age_minutes, status (FRESH/STALE/CRITICAL/EXPIRED), confidence (0-1)
+    """
+    thresholds = INDICATOR_FRESHNESS.get(
+        indicator_name,
+        {"fresh": 15, "stale": 60, "critical": 240}  # Default thresholds
+    )
+
+    age_minutes = (datetime.utcnow() - collected_at).total_seconds() / 60
+
+    if age_minutes <= thresholds["fresh"]:
+        status = "FRESH"
+        confidence = 1.0
+    elif age_minutes <= thresholds["stale"]:
+        status = "STALE"
+        # Linear decay from 1.0 to 0.7 over stale period
+        decay_pct = (age_minutes - thresholds["fresh"]) / (thresholds["stale"] - thresholds["fresh"])
+        confidence = 1.0 - (0.3 * decay_pct)
+    elif age_minutes <= thresholds["critical"]:
+        status = "CRITICAL"
+        confidence = 0.5
+    else:
+        status = "EXPIRED"
+        confidence = 0.0
+
+    return {
+        "age_minutes": round(age_minutes, 1),
+        "status": status,
+        "confidence": round(confidence, 2),
+        "threshold": thresholds
+    }
+
+
+def get_stale_indicators(ta_data: Dict) -> List[str]:
+    """
+    Return list of indicators that are STALE or worse.
+
+    Args:
+        ta_data: TA payload from collect_all()
+
+    Returns:
+        List of "indicator_name:STATUS" strings for stale/critical/expired indicators
+    """
+    stale = []
+    now = datetime.utcnow()
+
+    # Check each indicator category
+    for category in ["macro_indices", "core_ta", "advanced_ta"]:
+        if category not in ta_data:
+            continue
+        cat_data = ta_data[category]
+        cat_timestamp = cat_data.get("_collected_at", ta_data.get("timestamp"))
+
+        if cat_timestamp:
+            try:
+                if isinstance(cat_timestamp, str):
+                    # Handle ISO format with or without timezone
+                    collected_at = datetime.fromisoformat(cat_timestamp.replace("Z", "+00:00").replace("+00:00", ""))
+                else:
+                    collected_at = cat_timestamp
+
+                for indicator_name in cat_data:
+                    if indicator_name.startswith("_"):
+                        continue
+                    staleness = _calculate_staleness(indicator_name, collected_at)
+                    if staleness["status"] in ["STALE", "CRITICAL", "EXPIRED"]:
+                        stale.append(f"{indicator_name}:{staleness['status']}")
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Failed to parse timestamp for {category}: {e}")
+
+    return stale
+
+
 class TADataAggregator:
     """
     Aggregates all 21 TA indicators into structured payload for Agent 4.
@@ -150,12 +269,24 @@ class TADataAggregator:
             except Exception as e:
                 logger.warning(f"Redis cache check failed for {cache_key}: {e}")
 
+        # Session 280: Collect each category with its own timestamp for staleness tracking
+        collection_time = datetime.utcnow().isoformat()
+
+        macro_data = self._collect_macro()
+        macro_data["_collected_at"] = collection_time
+
+        core_data = self._collect_core_ta(token_symbol)
+        core_data["_collected_at"] = collection_time
+
+        advanced_data = self._collect_advanced(token_symbol)
+        advanced_data["_collected_at"] = collection_time
+
         result = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": collection_time,
             "token_symbol": token_symbol,
-            "macro_indices": self._collect_macro(),
-            "core_ta": self._collect_core_ta(token_symbol),
-            "advanced_ta": self._collect_advanced(token_symbol),
+            "macro_indices": macro_data,
+            "core_ta": core_data,
+            "advanced_ta": advanced_data,
         }
 
         # Calculate aggregate scores
@@ -537,8 +668,14 @@ class TADataAggregator:
         # Session 92: Track if macro came from cache
         macro_from_cache = macro.get('_from_cache', False)
 
+        # Session 280: Add per-category timestamps for staleness tracking
+        collection_time = datetime.utcnow().isoformat()
+        macro["_collected_at"] = collection_time
+        core["_collected_at"] = collection_time
+        advanced["_collected_at"] = collection_time
+
         result = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": collection_time,
             "token_symbol": token_symbol,
             "collection_mode": "parallel",
             "collection_time_sec": round(elapsed, 2),
