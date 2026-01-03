@@ -195,6 +195,120 @@ def get_stale_indicators(ta_data: Dict) -> List[str]:
     return stale
 
 
+# =============================================================================
+# SESSION 280 F3: ATR-Based Threshold Calculation for BTC Pre-Check
+# =============================================================================
+# Hardcoded thresholds (5% flash crash, 3% near support) don't adapt to
+# volatile vs calm markets. ATR-adjusted thresholds scale with actual
+# BTC volatility for more accurate VETO decisions.
+
+def calculate_btc_atr(ohlcv_data: List, period: int = 14) -> Optional[float]:
+    """
+    Calculate Average True Range (ATR) for BTC from OHLCV data.
+
+    ATR measures average range of price movement, accounting for gaps.
+    Higher ATR = more volatile market = need wider thresholds.
+
+    Args:
+        ohlcv_data: List of [timestamp, open, high, low, close, volume] candles
+        period: ATR period (default 14 candles)
+
+    Returns:
+        ATR as percentage of current price, or None if calculation fails
+    """
+    if not ohlcv_data or len(ohlcv_data) < period + 1:
+        return None
+
+    try:
+        true_ranges = []
+        for i in range(1, len(ohlcv_data)):
+            high = ohlcv_data[i][2]
+            low = ohlcv_data[i][3]
+            prev_close = ohlcv_data[i - 1][4]
+
+            # True Range = max of:
+            # 1. Current High - Current Low
+            # 2. |Current High - Previous Close|
+            # 3. |Current Low - Previous Close|
+            tr = max(
+                high - low,
+                abs(high - prev_close),
+                abs(low - prev_close)
+            )
+            true_ranges.append(tr)
+
+        if len(true_ranges) < period:
+            return None
+
+        # Simple Moving Average of last 'period' true ranges
+        atr_absolute = sum(true_ranges[-period:]) / period
+
+        # Convert to percentage of current price
+        current_price = ohlcv_data[-1][4]
+        if current_price <= 0:
+            return None
+
+        atr_pct = (atr_absolute / current_price) * 100
+        return round(atr_pct, 2)
+
+    except (IndexError, TypeError, ZeroDivisionError) as e:
+        logger.debug(f"ATR calculation failed: {e}")
+        return None
+
+
+def get_atr_adjusted_thresholds(atr_pct: Optional[float]) -> Dict[str, float]:
+    """
+    Calculate dynamic thresholds based on BTC ATR.
+
+    In volatile markets (high ATR), thresholds are wider.
+    In calm markets (low ATR), thresholds are tighter.
+
+    Default thresholds (when ATR unavailable):
+    - Flash crash: 5%
+    - Near support: 3%
+    - Imminent breakdown: 1%
+    - Near resistance: 2%
+
+    Args:
+        atr_pct: ATR as percentage of price (e.g., 2.5 = 2.5%)
+
+    Returns:
+        Dict with adjusted thresholds
+    """
+    # Default thresholds (current hardcoded values)
+    defaults = {
+        "flash_crash_pct": 5.0,          # > X% drop in 4H = flash crash
+        "near_support_pct": 3.0,         # < X% from support = risky
+        "imminent_breakdown_pct": 1.0,   # < X% from support = critical
+        "near_resistance_pct": 2.0,      # < X% from resistance = caution
+    }
+
+    if atr_pct is None:
+        logger.debug("ATR unavailable, using default thresholds")
+        return defaults
+
+    # ATR-adjusted thresholds:
+    # - Flash crash = max(3%, ATR * 2) - at least 3% but scales with volatility
+    # - Near support = max(2%, ATR * 1.5) - at least 2%
+    # - Imminent breakdown = max(0.5%, ATR * 0.5) - at least 0.5%
+    # - Near resistance = max(1.5%, ATR * 1.0) - at least 1.5%
+    adjusted = {
+        "flash_crash_pct": max(3.0, atr_pct * 2.0),
+        "near_support_pct": max(2.0, atr_pct * 1.5),
+        "imminent_breakdown_pct": max(0.5, atr_pct * 0.5),
+        "near_resistance_pct": max(1.5, atr_pct * 1.0),
+    }
+
+    logger.debug(
+        f"ATR={atr_pct:.2f}% → Thresholds: flash={adjusted['flash_crash_pct']:.1f}%, "
+        f"support={adjusted['near_support_pct']:.1f}%, "
+        f"breakdown={adjusted['imminent_breakdown_pct']:.1f}%, "
+        f"resistance={adjusted['near_resistance_pct']:.1f}%"
+    )
+
+    return adjusted
+
+
 class TADataAggregator:
     """
     Aggregates all 21 TA indicators into structured payload for Agent 4.
@@ -385,11 +499,19 @@ class TADataAggregator:
             result["btc_trend"] = btc_structure or "unknown"
 
             # Get BTC price data for key levels
+            btc_ohlcv = None  # Initialize for later ATR calculation
+            btc_atr_pct = None  # Session 280 F3: ATR for dynamic thresholds
             try:
                 btc_ohlcv = self.price_analyzer._fetch_ohlcv("BTC", "4h", limit=50)
                 if btc_ohlcv:
                     current_price = btc_ohlcv[-1][4]  # Close price
                     result["btc_key_levels"]["current_price"] = current_price
+
+                    # Session 280 F3: Calculate BTC ATR for dynamic thresholds
+                    btc_atr_pct = calculate_btc_atr(btc_ohlcv, period=14)
+                    if btc_atr_pct:
+                        result["btc_atr_pct"] = btc_atr_pct
+                        logger.debug(f"[BTC-PRECHECK] ATR(14) = {btc_atr_pct:.2f}%")
 
                     # Calculate simple S/R from recent highs/lows
                     highs = [c[2] for c in btc_ohlcv]
@@ -419,9 +541,14 @@ class TADataAggregator:
             dist_to_support = result["btc_key_levels"].get("distance_to_support_pct")
             dist_to_resistance = result["btc_key_levels"].get("distance_to_resistance_pct")
 
+            # Session 280 F3: Get ATR-adjusted thresholds (scales with BTC volatility)
+            thresholds = get_atr_adjusted_thresholds(btc_atr_pct)
+            result["btc_thresholds"] = thresholds  # Store for debugging/transparency
+
             if btc_structure == "uptrend":
                 # Uptrend: Check if near resistance (potential pullback)
-                if dist_to_resistance and dist_to_resistance < 2:
+                # Session 280 F3: Use ATR-adjusted threshold (was hardcoded 2%)
+                if dist_to_resistance and dist_to_resistance < thresholds["near_resistance_pct"]:
                     result["btc_risk_assessment"] = "MODERATE"
                     result["alt_trade_recommendation"] = "CAUTION"
                     result["position_size_multiplier"] = 0.75
@@ -494,34 +621,41 @@ class TADataAggregator:
                 result["sherlock_recommendation"] = "UNAVAILABLE"
 
             # Session 246: CRITICAL state for flash crash conditions (Gemini P2 VETO)
+            # Session 280 F3: Now uses ATR-adjusted thresholds for dynamic risk detection
             # CRITICAL = force SKIP all alt trades, VETO any signals
             # Conditions for CRITICAL:
-            # 1. BTC downtrend + near support (< 3%) = potential breakdown
-            # 2. BTC dropped > 5% in last 4H = active flash crash
-            # 3. Distance to support is very small (< 1%) = imminent breakdown
+            # 1. BTC downtrend + near support (< near_support_pct) = potential breakdown
+            # 2. BTC dropped > flash_crash_pct in last 4H = active flash crash
+            # 3. Distance to support is very small (< imminent_breakdown_pct) = imminent breakdown
 
             is_critical = False
             critical_reasons = []
 
             # Check for downtrend + near support breakdown risk
-            if btc_structure == "downtrend" and dist_to_support and dist_to_support < 3:
+            # Session 280 F3: ATR-adjusted threshold (was hardcoded 3%)
+            near_support_threshold = thresholds["near_support_pct"]
+            if btc_structure == "downtrend" and dist_to_support and dist_to_support < near_support_threshold:
                 is_critical = True
-                critical_reasons.append(f"BTC downtrend near support ({dist_to_support:.1f}% away)")
+                critical_reasons.append(f"BTC downtrend near support ({dist_to_support:.1f}% away, threshold: {near_support_threshold:.1f}%)")
 
             # Check for imminent breakdown (very close to support)
-            if dist_to_support and dist_to_support < 1:
+            # Session 280 F3: ATR-adjusted threshold (was hardcoded 1%)
+            imminent_threshold = thresholds["imminent_breakdown_pct"]
+            if dist_to_support and dist_to_support < imminent_threshold:
                 is_critical = True
-                critical_reasons.append(f"BTC at critical support ({dist_to_support:.1f}% away)")
+                critical_reasons.append(f"BTC at critical support ({dist_to_support:.1f}% away, threshold: {imminent_threshold:.1f}%)")
 
             # Check for active flash crash (large recent move)
+            # Session 280 F3: ATR-adjusted threshold (was hardcoded 5%)
+            flash_crash_threshold = thresholds["flash_crash_pct"]
             try:
                 if btc_ohlcv and len(btc_ohlcv) >= 2:
                     current_close = btc_ohlcv[-1][4]
                     prev_close = btc_ohlcv[-2][4]
                     pct_change = ((current_close - prev_close) / prev_close) * 100
-                    if pct_change < -5:  # > 5% drop in 4H = flash crash
+                    if pct_change < -flash_crash_threshold:
                         is_critical = True
-                        critical_reasons.append(f"BTC crashed {pct_change:.1f}% in last 4H")
+                        critical_reasons.append(f"BTC crashed {pct_change:.1f}% in last 4H (threshold: -{flash_crash_threshold:.1f}%)")
             except Exception:
                 pass  # Silently fail - don't break on this check
 

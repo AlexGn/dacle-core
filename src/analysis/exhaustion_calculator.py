@@ -185,7 +185,12 @@ def calculate_cvd_divergence_score(
     exit liquidity."
 
     CVD = Σ(buy_volume - sell_volume) over time
-    Approximation: If close > open, volume is "buy"; else "sell"
+
+    Session 280 Improvement: Volume-weighted CVD calculation
+    Instead of binary buy/sell, we weight by candle body proportion:
+    - delta = volume × (close - open) / (high - low)
+    - Range: -1.0 (full bearish) to +1.0 (full bullish)
+    This better captures the strength of buying/selling within each candle.
 
     Divergence detected when:
     - Price making higher highs (ATH)
@@ -216,11 +221,23 @@ def calculate_cvd_divergence_score(
             if open_price == 0:
                 continue
 
-            # If close > open, count as buy volume; else sell volume
-            if close_price >= open_price:
-                delta = volume  # Buy pressure
+            # Session 280: Volume-weighted CVD calculation
+            # Instead of binary buy/sell, weight by candle body proportion
+            # Green candle: +volume * (close-open)/(high-low) = partial buy pressure
+            # Red candle: -volume * (open-close)/(high-low) = partial sell pressure
+            # This better captures the strength of buying/selling within each candle
+            high_price = candle.get("high", 0)
+            low_price = candle.get("low", 0)
+            candle_range = high_price - low_price
+
+            if candle_range <= 0:
+                # Doji or invalid candle - use simple proxy
+                delta = volume if close_price >= open_price else -volume
             else:
-                delta = -volume  # Sell pressure
+                # Volume-weighted: proportion of range that's bullish/bearish
+                body_size = close_price - open_price  # Positive = green, negative = red
+                range_proportion = body_size / candle_range  # -1 to +1
+                delta = volume * range_proportion
 
             cumulative_cvd += delta
             cvd_values.append(cumulative_cvd)
