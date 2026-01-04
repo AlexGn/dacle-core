@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Automated Confluence Counter - Phase 1 Session 268 / Phase C Session 280
+Automated Confluence Counter - Phase 1 Session 268 / Phase C Session 280 / Session 278 LONG
 
 Counts technical confluence factors from multiple indicators to classify
 setup quality as SINGLE/DOUBLE/TRIPLE/QUAD.
@@ -13,14 +13,22 @@ Integration:
     - Pipeline: integrated_pipeline.py (replaces hardcoded count)
     - Alerts: alert_generator.py (displays confluence breakdown)
     - Sherlock Risk: Used in position sizing calculations
+    - LONG Scorer: src/conviction/long_scorer.py (Session 278)
 
 Session 280 F5: Added Sherlock chart pattern integration
     - Integrated CandlestickDetector for automatic pattern detection
     - Added CHART_PATTERN confluence type for detected candlestick patterns
     - Patterns: DOJI, Shooting Star, Engulfing, Evening Star, etc.
 
-Author: Claude Code (Session 268 Phase 1, Session 280 Phase C)
-Date: 2026-01-01, Updated: 2026-01-03
+Session 278 LONG: Added direction-aware confluence counting
+    - New `direction` parameter: "SHORT" (default) or "LONG"
+    - For LONG: filters for bullish_reversal patterns instead of bearish_reversal
+    - For LONG: EMA alignment looks for "bullish" instead of "bearish"
+    - For LONG: SUPPORT_RETEST is positive confluence (vs RESISTANCE_RETEST for SHORT)
+    - For LONG: Funding rate uses inverted thresholds (L079)
+
+Author: Claude Code (Session 268 Phase 1, Session 280 Phase C, Session 278 LONG)
+Date: 2026-01-01, Updated: 2026-01-04
 """
 
 import logging
@@ -114,7 +122,8 @@ class ConfluenceCounter:
     # Thresholds
     QVWAP_DISTANCE_THRESHOLD = 1.0  # <1% from QVWAP = confluence
     YVWAP_DISTANCE_THRESHOLD = 1.0  # <1% from YVWAP = confluence
-    FUNDING_RATE_EXTREME = -0.05  # <-0.05% = extremely negative (squeeze risk)
+    FUNDING_RATE_EXTREME_SHORT = -0.05  # <-0.05% = squeeze risk for SHORTs (L051)
+    FUNDING_RATE_EXTREME_LONG = 0.05  # >+0.05% = squeeze risk for LONGs (L079)
     VOLUME_SPIKE_THRESHOLD = 1.5  # >1.5x average volume
 
     def count_confluence(
@@ -128,6 +137,7 @@ class ConfluenceCounter:
         tvem_data: Optional[Dict] = None,
         ohlcv_data: Optional[List[List]] = None,
         timeframe: str = "4h",
+        direction: str = "SHORT",
     ) -> ConfluenceResult:
         """
         Count active confluence factors.
@@ -146,13 +156,18 @@ class ConfluenceCounter:
             patterns: Detected chart patterns (e.g., ["inverse_h_and_s"]) - legacy
             volume_data: Volume analysis
                 - volume_spike: True/False
-            funding_rate: Funding rate (optional, for SHORT trades)
+            funding_rate: Funding rate (optional)
+                - For SHORT: <-0.05% = squeeze risk (L051)
+                - For LONG: >+0.05% = squeeze risk (L079)
             tvem_data: TVEM band data (optional)
                 - signal: "bearish"/"bullish"
             ohlcv_data: OHLCV candlestick data for automatic pattern detection
                 - List of [timestamp, open, high, low, close, volume]
                 - Session 280 F5: Enables Sherlock pattern detection
             timeframe: Chart timeframe for pattern detection (default "4h")
+            direction: Trade direction "SHORT" (default) or "LONG"
+                - SHORT: looks for bearish EMA alignment, resistance retests, bearish patterns
+                - LONG: looks for bullish EMA alignment, support retests, bullish patterns
 
         Returns:
             ConfluenceResult with score 1-4, rating, factors, and conviction modifier
@@ -160,15 +175,42 @@ class ConfluenceCounter:
         factors = []
         descriptions = []
 
+        # Normalize direction
+        direction = direction.upper()
+        is_long = direction == "LONG"
+
         # 1. EMA Alignment (L046: 1D 24 EMA)
-        if ema_data.get("dual_ema", {}).get("alignment") == "bearish":
-            factors.append(ConfluenceType.EMA_ALIGNMENT)
-            descriptions.append("12+24 EMA bearish alignment")
+        # For SHORT: bearish alignment = confluence
+        # For LONG: bullish alignment = confluence (recovery confirmation)
+        alignment = ema_data.get("dual_ema", {}).get("alignment")
+        if is_long:
+            if alignment == "bullish":
+                factors.append(ConfluenceType.EMA_ALIGNMENT)
+                descriptions.append("12+24 EMA bullish alignment (recovery)")
+        else:
+            if alignment == "bearish":
+                factors.append(ConfluenceType.EMA_ALIGNMENT)
+                descriptions.append("12+24 EMA bearish alignment")
 
         # 2. EMA 200 Position (L047: MTF 200 EMA)
-        if ema_data.get("mtf_ema_200", {}).get("position_vs_ema") == "below":
-            factors.append(ConfluenceType.EMA_200_POSITION)
-            descriptions.append("Price below 200 EMA")
+        # For SHORT: below 200 EMA = downtrend (good)
+        # For LONG: below 200 EMA = deep value (good), above = recovery confirmed
+        position_vs_ema = ema_data.get("mtf_ema_200", {}).get("position_vs_ema")
+        if is_long:
+            # For LONG, we want to see price recovering toward or above 200 EMA
+            if position_vs_ema == "above":
+                factors.append(ConfluenceType.EMA_200_POSITION)
+                descriptions.append("Price above 200 EMA (recovery confirmed)")
+            elif position_vs_ema == "below":
+                # Below 200 EMA can still be confluence for LONG if price is bouncing
+                # Check if there's an EMA bounce signal
+                if ema_data.get("mtf_ema_200", {}).get("bouncing_off_ema"):
+                    factors.append(ConfluenceType.EMA_200_POSITION)
+                    descriptions.append("Price bouncing off 200 EMA (support)")
+        else:
+            if position_vs_ema == "below":
+                factors.append(ConfluenceType.EMA_200_POSITION)
+                descriptions.append("Price below 200 EMA")
 
         # 3. QVWAP Retest (L038)
         qvwap_distance = abs(vwap_data.get("qvwap_distance_pct", 100))
@@ -183,14 +225,24 @@ class ConfluenceCounter:
             descriptions.append(f"YVWAP support ({yvwap_distance:.1f}% away)")
 
         # 5. S/R Retest (L029)
-        if sr_levels.get("near_resistance", False):
-            factors.append(ConfluenceType.RESISTANCE_RETEST)
-            retest_num = sr_levels.get("retest_number", 1)
-            descriptions.append(f"Resistance retest #{retest_num}")
-        elif sr_levels.get("near_support", False):
-            factors.append(ConfluenceType.SUPPORT_RETEST)
-            retest_num = sr_levels.get("retest_number", 1)
-            descriptions.append(f"Support retest #{retest_num}")
+        # For SHORT: resistance retest = good (rejection zone)
+        # For LONG: support retest = good (bounce zone)
+        if is_long:
+            # For LONG trades, support holding is confluence
+            if sr_levels.get("near_support", False):
+                factors.append(ConfluenceType.SUPPORT_RETEST)
+                retest_num = sr_levels.get("retest_number", 1)
+                descriptions.append(f"Support retest #{retest_num} (bounce zone)")
+        else:
+            # For SHORT trades, resistance retest is confluence
+            if sr_levels.get("near_resistance", False):
+                factors.append(ConfluenceType.RESISTANCE_RETEST)
+                retest_num = sr_levels.get("retest_number", 1)
+                descriptions.append(f"Resistance retest #{retest_num}")
+            elif sr_levels.get("near_support", False):
+                factors.append(ConfluenceType.SUPPORT_RETEST)
+                retest_num = sr_levels.get("retest_number", 1)
+                descriptions.append(f"Support retest #{retest_num}")
 
         # 6. Chart Pattern (L059)
         if patterns:
@@ -204,21 +256,45 @@ class ConfluenceCounter:
             volume_ratio = volume_data.get("volume_ratio", 0)
             descriptions.append(f"Volume spike ({volume_ratio:.1f}x avg)")
 
-        # 8. Funding Rate (L051)
-        if funding_rate is not None and funding_rate < self.FUNDING_RATE_EXTREME:
-            factors.append(ConfluenceType.FUNDING_RATE)
-            descriptions.append(f"Extreme funding rate: {funding_rate:.3f}%")
+        # 8. Funding Rate (L051 for SHORT, L079 for LONG)
+        # For SHORT: extremely negative funding = crowded shorts = squeeze risk (L051)
+        # For LONG: neutral/negative funding = safe for longs (L079)
+        if funding_rate is not None:
+            if is_long:
+                # L079: For LONGs, negative or neutral funding is good (shorts crowded)
+                # High positive funding = crowded longs = risk
+                if funding_rate < self.FUNDING_RATE_EXTREME_LONG:
+                    factors.append(ConfluenceType.FUNDING_RATE)
+                    if funding_rate < 0:
+                        descriptions.append(f"Funding rate negative: {funding_rate:.3f}% (shorts crowded)")
+                    else:
+                        descriptions.append(f"Funding rate neutral: {funding_rate:.3f}% (safe for LONG)")
+            else:
+                # L051: For SHORTs, extremely negative = squeeze risk
+                if funding_rate < self.FUNDING_RATE_EXTREME_SHORT:
+                    factors.append(ConfluenceType.FUNDING_RATE)
+                    descriptions.append(f"Extreme funding rate: {funding_rate:.3f}%")
 
         # 9. TVEM Band (L058)
-        if tvem_data and tvem_data.get("signal") == "bearish":
-            factors.append(ConfluenceType.TVEM_BAND)
-            descriptions.append("TVEM band bearish signal")
+        # For SHORT: bearish signal = good
+        # For LONG: bullish signal = good
+        if tvem_data:
+            tvem_signal = tvem_data.get("signal")
+            if is_long:
+                if tvem_signal == "bullish":
+                    factors.append(ConfluenceType.TVEM_BAND)
+                    descriptions.append("TVEM band bullish signal (recovery)")
+            else:
+                if tvem_signal == "bearish":
+                    factors.append(ConfluenceType.TVEM_BAND)
+                    descriptions.append("TVEM band bearish signal")
 
         # 10. Session 280 F5: Sherlock Chart Pattern Detection
         # Uses CandlestickDetector for automatic pattern recognition
+        # Session 278: Now direction-aware (bullish patterns for LONG)
         if ohlcv_data and CANDLESTICK_DETECTOR_AVAILABLE:
             detected_patterns = self._detect_sherlock_patterns(
-                ohlcv_data, timeframe, sr_levels
+                ohlcv_data, timeframe, sr_levels, direction=direction
             )
             for pattern_type, pattern_info in detected_patterns:
                 factors.append(pattern_type)
@@ -266,19 +342,25 @@ class ConfluenceCounter:
         ohlcv_data: List[List],
         timeframe: str,
         sr_levels: Dict,
+        direction: str = "SHORT",
     ) -> List[tuple]:
         """
-        Session 280 F5: Detect Sherlock candlestick patterns.
+        Session 280 F5 + Session 278 LONG: Detect Sherlock candlestick patterns.
 
         Uses CandlestickDetector to identify reversal patterns:
         - STRONG (3-candle): Evening Star, Morning Star (L032)
         - MODERATE (2-candle): Bearish/Bullish Engulfing
         - WEAK (1-candle): Doji, Shooting Star, Hammer
 
+        Session 278 LONG: Added direction-aware pattern filtering:
+        - For SHORT: filters for bearish_reversal patterns
+        - For LONG: filters for bullish_reversal patterns (L077 confirmation signals)
+
         Args:
             ohlcv_data: OHLCV candlestick data
             timeframe: Chart timeframe (e.g., "4h")
             sr_levels: S/R context for pattern strength
+            direction: "SHORT" or "LONG" - determines pattern type filtering
 
         Returns:
             List of (ConfluenceType, pattern_info) tuples
@@ -299,16 +381,21 @@ class ConfluenceCounter:
             elif sr_levels.get("near_support", False):
                 context = "at_support"
 
-            # Get short signal with all detected patterns
+            # Get signal with all detected patterns
+            # Note: get_short_signal still returns ALL patterns, we filter by direction below
             signal = detector.get_short_signal(ohlcv_data, context=context)
 
             if signal["signal"] == "NO_PATTERN":
                 return []
 
+            # Determine which pattern type to filter for based on direction
+            is_long = direction.upper() == "LONG"
+            target_pattern_type = "bullish_reversal" if is_long else "bearish_reversal"
+            pattern_label = "bullish" if is_long else "bearish"
+
             # Process detected patterns
             patterns_detail = signal.get("patterns_detail", [])
-            bearish_patterns = []
-            bullish_patterns = []
+            relevant_patterns = []
 
             for pattern in patterns_detail:
                 pattern_name = pattern.get("pattern_name", "unknown")
@@ -317,10 +404,11 @@ class ConfluenceCounter:
                 confidence = pattern.get("confidence", 0.5)
                 signal_for_short = pattern.get("signal_for_short", "WAIT")
 
-                # Only count bearish patterns for SHORT confluence
-                # (bullish patterns = warning, not confluence)
-                if pattern_type_str == "bearish_reversal":
-                    bearish_patterns.append({
+                # Session 278: Direction-aware pattern filtering
+                # For SHORT: bearish_reversal patterns (rejection patterns)
+                # For LONG: bullish_reversal patterns (L077 recovery confirmation signals)
+                if pattern_type_str == target_pattern_type:
+                    relevant_patterns.append({
                         "name": pattern_name,
                         "strength": strength,
                         "confidence": confidence,
@@ -329,47 +417,53 @@ class ConfluenceCounter:
 
             # Classify by strength and add as confluence
             # Only add the STRONGEST pattern as confluence (avoid double counting)
-            if bearish_patterns:
+            if relevant_patterns:
                 # Sort by strength: STRONG > MODERATE > WEAK
                 strength_order = {"STRONG": 3, "MODERATE": 2, "WEAK": 1}
-                bearish_patterns.sort(
+                relevant_patterns.sort(
                     key=lambda p: (strength_order.get(p["strength"], 0), p["confidence"]),
                     reverse=True
                 )
 
-                best_pattern = bearish_patterns[0]
+                best_pattern = relevant_patterns[0]
                 pattern_name_display = best_pattern["name"].replace("_", " ").title()
 
+                # Description suffix based on direction
+                if is_long:
+                    reversal_desc = "recovery signal"
+                else:
+                    reversal_desc = "reversal"
+
                 if best_pattern["strength"] == "STRONG":
-                    # 3-candle patterns: Evening Star, etc.
+                    # 3-candle patterns: Evening Star (SHORT), Morning Star (LONG)
                     detected.append((
                         ConfluenceType.CHART_PATTERN_STRONG,
                         {
-                            "description": f"⭐ {pattern_name_display} (3-candle reversal)",
+                            "description": f"⭐ {pattern_name_display} (3-candle {reversal_desc})",
                             "strength": "STRONG",
                             "confidence": best_pattern["confidence"],
                         }
                     ))
                     logger.info(
-                        f"[PATTERN] STRONG bearish pattern: {pattern_name_display} "
+                        f"[PATTERN] STRONG {pattern_label} pattern: {pattern_name_display} "
                         f"(confidence: {best_pattern['confidence']:.0%})"
                     )
                 elif best_pattern["strength"] == "MODERATE":
-                    # 2-candle patterns: Engulfing
+                    # 2-candle patterns: Bearish/Bullish Engulfing
                     detected.append((
                         ConfluenceType.CHART_PATTERN_MODERATE,
                         {
-                            "description": f"📊 {pattern_name_display} (2-candle reversal)",
+                            "description": f"📊 {pattern_name_display} (2-candle {reversal_desc})",
                             "strength": "MODERATE",
                             "confidence": best_pattern["confidence"],
                         }
                     ))
                     logger.info(
-                        f"[PATTERN] MODERATE bearish pattern: {pattern_name_display} "
+                        f"[PATTERN] MODERATE {pattern_label} pattern: {pattern_name_display} "
                         f"(confidence: {best_pattern['confidence']:.0%})"
                     )
                 else:
-                    # 1-candle patterns: Doji, Shooting Star
+                    # 1-candle patterns: Doji, Shooting Star (SHORT), Hammer (LONG)
                     detected.append((
                         ConfluenceType.CHART_PATTERN_WEAK,
                         {
@@ -379,7 +473,7 @@ class ConfluenceCounter:
                         }
                     ))
                     logger.debug(
-                        f"[PATTERN] WEAK bearish pattern: {pattern_name_display} "
+                        f"[PATTERN] WEAK {pattern_label} pattern: {pattern_name_display} "
                         f"(confidence: {best_pattern['confidence']:.0%})"
                     )
 
@@ -432,4 +526,30 @@ if __name__ == "__main__":
     print(f"\nScore: {result.score}/4")
     print(f"Rating: {result.rating}")
     print(f"Conviction Modifier: {result.conviction_modifier:+.1f}")
+    print()
+
+    # Example 3: LONG confluence (Session 278 - Recovery trade)
+    print("=" * 70)
+    print("TEST 3: LONG Confluence (Recovery setup)")
+    print("=" * 70)
+
+    result = counter.count_confluence(
+        ema_data={
+            "dual_ema": {"alignment": "bullish"},  # Bullish for LONG
+            "mtf_ema_200": {"position_vs_ema": "above"},  # Recovery confirmed
+        },
+        vwap_data={"qvwap_distance_pct": 0.8},  # <1% from QVWAP
+        sr_levels={"near_support": True, "retest_number": 3},  # Support holding
+        patterns=[],
+        volume_data={"volume_spike": True, "volume_ratio": 2.5},  # Accumulation volume
+        funding_rate=-0.02,  # Negative funding = safe for longs (L079)
+        tvem_data={"signal": "bullish"},  # Bullish TVEM for LONG
+        direction="LONG",  # NEW: Specify LONG direction
+    )
+
+    print(f"\nScore: {result.score}/4")
+    print(f"Rating: {result.rating}")
+    print(f"Conviction Modifier: {result.conviction_modifier:+.1f}")
+    print(f"Factors: {', '.join([f.value for f in result.factors])}")
+    print(f"Descriptions: {result.factor_descriptions}")
     print()

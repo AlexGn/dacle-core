@@ -759,6 +759,346 @@ class TADataAggregator:
             result["reasoning"] = f"Error calculating range: {e}"
             return result
 
+    # =========================================================================
+    # SESSION 278: LONG System Integration Methods
+    # =========================================================================
+
+    def collect_long_signals(self, token_symbol: str) -> Dict:
+        """
+        Session 278: Collect TA signals specifically for LONG (recovery) opportunities.
+
+        Collects:
+        - RSI oversold status (4H and 1D)
+        - Support level detection (EMA200, VWAP, horizontal)
+        - Volume analysis for capitulation detection
+        - BTC regime for LONG viability
+        - Funding rate for squeeze risk
+
+        Returns:
+            Dict formatted for LONGConvictionScorer input
+        """
+        logger.info(f"[LONG] Collecting recovery signals for {token_symbol}")
+
+        result = {
+            "symbol": token_symbol,
+            "timestamp": datetime.utcnow().isoformat(),
+            # RSI signals
+            "rsi_4h": None,
+            "rsi_1d": None,
+            "rsi_bullish_divergence": False,
+            # Support signals
+            "at_ema_200_support": False,
+            "at_qvwap_support": False,
+            "at_yvwap_support": False,
+            "at_horizontal_support": False,
+            "at_fib_618": False,
+            "support_level": None,
+            "support_touches": 0,
+            # Volume signals
+            "dump_volume_ratio": 1.0,
+            "volume_capitulation": False,
+            "volume_exhaustion": False,
+            # BTC context (L080)
+            "btc_7d_change": 0.0,
+            "btc_regime": "UNKNOWN",
+            # Funding rate (L079)
+            "funding_rate": 0.0,
+            # Fear & Greed
+            "fear_greed_index": 50,
+            "sentiment_shift": False,
+        }
+
+        try:
+            # 1. Collect RSI data
+            rsi_data = self._collect_rsi_for_long(token_symbol)
+            result.update(rsi_data)
+
+            # 2. Collect support levels
+            support_data = self._collect_support_levels(token_symbol)
+            result.update(support_data)
+
+            # 3. Collect volume analysis
+            volume_data = self._collect_volume_analysis(token_symbol)
+            result.update(volume_data)
+
+            # 4. Collect BTC context (L080)
+            btc_data = self._collect_btc_context_for_long()
+            result.update(btc_data)
+
+            # 5. Collect funding rate (L079)
+            funding_data = self._collect_funding_rate(token_symbol)
+            result.update(funding_data)
+
+            # 6. Collect sentiment
+            sentiment_data = self._collect_sentiment()
+            result.update(sentiment_data)
+
+            logger.info(f"[LONG] Collected signals for {token_symbol}: "
+                       f"RSI_4H={result.get('rsi_4h')}, "
+                       f"Support={result.get('support_level')}, "
+                       f"BTC={result.get('btc_regime')}")
+
+        except Exception as e:
+            logger.error(f"[LONG] Failed to collect signals for {token_symbol}: {e}")
+
+        return result
+
+    def _collect_rsi_for_long(self, token_symbol: str) -> Dict:
+        """Collect RSI data for LONG analysis."""
+        result = {
+            "rsi_4h": None,
+            "rsi_1d": None,
+            "rsi_bullish_divergence": False,
+        }
+
+        try:
+            # Get 4H RSI
+            ohlcv_4h = self.price_analyzer._fetch_ohlcv(token_symbol, "4h", limit=50)
+            if ohlcv_4h and len(ohlcv_4h) >= 14:
+                closes = [c[4] for c in ohlcv_4h]
+                result["rsi_4h"] = self._calculate_rsi(closes)
+
+            # Get 1D RSI
+            ohlcv_1d = self.price_analyzer._fetch_ohlcv(token_symbol, "1d", limit=50)
+            if ohlcv_1d and len(ohlcv_1d) >= 14:
+                closes = [c[4] for c in ohlcv_1d]
+                result["rsi_1d"] = self._calculate_rsi(closes)
+
+            # Check for bullish divergence (simplified)
+            # Price lower low but RSI higher low = bullish divergence
+            if result["rsi_4h"] and len(ohlcv_4h) >= 20:
+                # Compare last 10 vs previous 10 candles
+                recent_closes = [c[4] for c in ohlcv_4h[-10:]]
+                prior_closes = [c[4] for c in ohlcv_4h[-20:-10]]
+                recent_low = min(recent_closes)
+                prior_low = min(prior_closes)
+
+                # Simple divergence check
+                if recent_low <= prior_low and result["rsi_4h"] is not None:
+                    # Price made lower low - check if RSI is higher
+                    prior_rsi = self._calculate_rsi([c[4] for c in ohlcv_4h[-20:-10]])
+                    if prior_rsi and result["rsi_4h"] > prior_rsi:
+                        result["rsi_bullish_divergence"] = True
+
+        except Exception as e:
+            logger.warning(f"[LONG] RSI collection failed for {token_symbol}: {e}")
+
+        return result
+
+    def _collect_support_levels(self, token_symbol: str) -> Dict:
+        """Collect support level data for LONG analysis."""
+        result = {
+            "at_ema_200_support": False,
+            "at_qvwap_support": False,
+            "at_yvwap_support": False,
+            "at_horizontal_support": False,
+            "at_fib_618": False,
+            "support_level": None,
+            "support_touches": 0,
+        }
+
+        try:
+            # Get current price
+            ohlcv = self.price_analyzer._fetch_ohlcv(token_symbol, "4h", limit=200)
+            if not ohlcv or len(ohlcv) < 50:
+                return result
+
+            current_price = ohlcv[-1][4]  # Latest close
+            closes = [c[4] for c in ohlcv]
+
+            # Calculate 200 EMA
+            ema_200 = self._calculate_ema(closes, 200)
+            if ema_200:
+                # Check if price is within 2% of EMA 200 (at support)
+                distance_pct = abs(current_price - ema_200) / ema_200 * 100
+                if distance_pct < 2 and current_price >= ema_200 * 0.98:
+                    result["at_ema_200_support"] = True
+                    result["support_level"] = ema_200
+
+            # Calculate horizontal support (local lows)
+            if len(closes) >= 50:
+                lows = [c[3] for c in ohlcv[-50:]]  # Last 50 low prices
+                support_zone = min(lows)
+                distance_pct = abs(current_price - support_zone) / support_zone * 100
+                if distance_pct < 3:
+                    result["at_horizontal_support"] = True
+                    if not result["support_level"]:
+                        result["support_level"] = support_zone
+
+                    # Count touches
+                    touches = sum(1 for low in lows if abs(low - support_zone) / support_zone < 0.02)
+                    result["support_touches"] = touches
+
+            # Calculate 0.618 Fibonacci level
+            if len(closes) >= 100:
+                high = max(closes)
+                low = min(closes[-30:])  # Recent low
+                fib_618 = high - (high - low) * 0.618
+                distance_pct = abs(current_price - fib_618) / fib_618 * 100
+                if distance_pct < 2:
+                    result["at_fib_618"] = True
+
+        except Exception as e:
+            logger.warning(f"[LONG] Support level collection failed for {token_symbol}: {e}")
+
+        return result
+
+    def _collect_volume_analysis(self, token_symbol: str) -> Dict:
+        """Collect volume analysis for capitulation detection."""
+        result = {
+            "dump_volume_ratio": 1.0,
+            "volume_capitulation": False,
+            "volume_exhaustion": False,
+        }
+
+        try:
+            ohlcv = self.price_analyzer._fetch_ohlcv(token_symbol, "4h", limit=100)
+            if not ohlcv or len(ohlcv) < 20:
+                return result
+
+            volumes = [c[5] for c in ohlcv]
+            closes = [c[4] for c in ohlcv]
+
+            # Average volume (excluding last 5 candles)
+            avg_volume = sum(volumes[:-5]) / (len(volumes) - 5) if len(volumes) > 5 else sum(volumes) / len(volumes)
+
+            # Find dump candles (price drop + high volume)
+            dump_volumes = []
+            for i in range(1, len(ohlcv)):
+                price_change = (closes[i] - closes[i-1]) / closes[i-1] if closes[i-1] else 0
+                if price_change < -0.03:  # >3% dump
+                    dump_volumes.append(volumes[i])
+
+            if dump_volumes:
+                max_dump_volume = max(dump_volumes)
+                result["dump_volume_ratio"] = max_dump_volume / avg_volume if avg_volume else 1.0
+
+                # Capitulation = 2x+ average volume on dump
+                if result["dump_volume_ratio"] >= 2.0:
+                    result["volume_capitulation"] = True
+
+            # Volume exhaustion (declining volume after dump)
+            recent_volumes = volumes[-5:]
+            if all(recent_volumes[i] >= recent_volumes[i+1] for i in range(len(recent_volumes)-1)):
+                result["volume_exhaustion"] = True
+
+        except Exception as e:
+            logger.warning(f"[LONG] Volume analysis failed for {token_symbol}: {e}")
+
+        return result
+
+    def _collect_btc_context_for_long(self) -> Dict:
+        """Collect BTC context for LONG viability (L080)."""
+        result = {
+            "btc_7d_change": 0.0,
+            "btc_regime": "UNKNOWN",
+        }
+
+        try:
+            ohlcv = self.price_analyzer._fetch_ohlcv("BTC", "1d", limit=8)
+            if ohlcv and len(ohlcv) >= 7:
+                price_7d_ago = ohlcv[0][4]
+                current_price = ohlcv[-1][4]
+                change_7d = (current_price - price_7d_ago) / price_7d_ago
+                result["btc_7d_change"] = change_7d
+
+                # Determine regime per L080
+                if change_7d > 0.05:
+                    result["btc_regime"] = "BULL"
+                elif change_7d > -0.05:
+                    result["btc_regime"] = "SIDEWAYS"
+                elif change_7d > -0.10:
+                    result["btc_regime"] = "BEAR"
+                else:
+                    result["btc_regime"] = "CRITICAL_BEAR"
+
+        except Exception as e:
+            logger.warning(f"[LONG] BTC context collection failed: {e}")
+
+        return result
+
+    def _collect_funding_rate(self, token_symbol: str) -> Dict:
+        """Collect funding rate for L079 squeeze risk."""
+        result = {"funding_rate": 0.0}
+
+        try:
+            # Try to get funding rate from exchange
+            # This is a simplified implementation - actual would use exchange API
+            funding = self.price_analyzer._fetch_funding_rate(token_symbol)
+            if funding is not None:
+                result["funding_rate"] = funding
+        except Exception as e:
+            logger.debug(f"[LONG] Funding rate not available for {token_symbol}: {e}")
+
+        return result
+
+    def _collect_sentiment(self) -> Dict:
+        """Collect Fear & Greed and sentiment data."""
+        result = {
+            "fear_greed_index": 50,
+            "sentiment_shift": False,
+        }
+
+        try:
+            # Get Fear & Greed from indices tracker
+            fear_greed = self.indices_tracker.get_fear_greed()
+            if fear_greed is not None:
+                result["fear_greed_index"] = fear_greed
+
+                # Check for sentiment shift (extreme fear recovering)
+                if fear_greed < 25:
+                    # In fear zone - check if improving
+                    result["sentiment_shift"] = True  # Simplified - would compare to prior value
+
+        except Exception as e:
+            logger.debug(f"[LONG] Sentiment collection failed: {e}")
+
+        return result
+
+    def _calculate_rsi(self, closes: List[float], period: int = 14) -> Optional[float]:
+        """Calculate RSI from closing prices."""
+        if len(closes) < period + 1:
+            return None
+
+        gains = []
+        losses = []
+
+        for i in range(1, len(closes)):
+            change = closes[i] - closes[i-1]
+            if change > 0:
+                gains.append(change)
+                losses.append(0)
+            else:
+                gains.append(0)
+                losses.append(abs(change))
+
+        if len(gains) < period:
+            return None
+
+        avg_gain = sum(gains[-period:]) / period
+        avg_loss = sum(losses[-period:]) / period
+
+        if avg_loss == 0:
+            return 100.0
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+
+        return round(rsi, 2)
+
+    def _calculate_ema(self, closes: List[float], period: int) -> Optional[float]:
+        """Calculate EMA from closing prices."""
+        if len(closes) < period:
+            return None
+
+        multiplier = 2 / (period + 1)
+        ema = sum(closes[:period]) / period  # SMA for first value
+
+        for price in closes[period:]:
+            ema = (price - ema) * multiplier + ema
+
+        return round(ema, 8)
+
     def collect_all_fast(self, token_symbol: Optional[str] = None) -> Dict:
         """
         FAST version: Collect all 21 TA indicators in PARALLEL.
