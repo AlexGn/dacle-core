@@ -149,6 +149,34 @@ class IndicesTracker:
             logger.debug(f"Cache invalidation failed: {e}")
             return False
 
+    def get_usdt_dominance(self) -> Dict:
+        """
+        Session 286: Get current USDT dominance data (convenience wrapper).
+
+        Used by Agent 6 playbook generator for macro context.
+        Returns cached data if available, fetches fresh if not.
+
+        Returns:
+            Dict with:
+                - value: float (e.g., 5.76)
+                - signal: str (RISK_ON/NEUTRAL/RISK_OFF)
+                - note: str (interpretation)
+        """
+        try:
+            indices = self.fetch_all_indices()
+            if indices and 'indices' in indices:
+                usdt_d = indices['indices'].get('usdt_d', {})
+                return {
+                    'value': usdt_d.get('value', 0),
+                    'signal': usdt_d.get('signal', 'UNKNOWN'),
+                    'note': usdt_d.get('note', '')
+                }
+        except Exception as e:
+            logger.debug(f"get_usdt_dominance failed: {e}")
+
+        # Fallback
+        return {'value': 0, 'signal': 'UNKNOWN', 'note': 'Data unavailable'}
+
     def fetch_all_indices(self, force_refresh: bool = False) -> Dict:
         """
         Fetch all 7 indices in one optimized call sequence.
