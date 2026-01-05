@@ -41,6 +41,17 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 
 @dataclass
+class ProcessMemory:
+    """Memory profile for a process - Session 286."""
+    name: str
+    pid: int
+    rss_mb: float  # Resident Set Size (actual memory used)
+    vms_mb: float  # Virtual Memory Size
+    percent: float  # Percentage of total system memory
+    num_threads: int
+
+
+@dataclass
 class ServiceStatus:
     """Status of a monitored service."""
     name: str
@@ -48,6 +59,7 @@ class ServiceStatus:
     pid: Optional[int]
     uptime_seconds: Optional[int]
     status_message: str
+    memory_mb: Optional[float] = None  # Session 286: Add memory tracking
 
 
 @dataclass
@@ -73,6 +85,10 @@ class SystemHealth:
     # Alerts
     critical_issues: List[str]
     warnings: List[str]
+
+    # Session 286: Per-process memory profiling
+    process_memory: Optional[List[ProcessMemory]] = None
+    total_dacle_memory_mb: Optional[float] = None
 
 
 class VPSHealthMonitor:
@@ -163,6 +179,9 @@ class VPSHealthMonitor:
         # Overall health
         healthy = len(critical_issues) == 0
 
+        # Session 286: Collect per-process memory profiling
+        process_memory, total_dacle_memory = self._profile_dacle_memory()
+
         return SystemHealth(
             timestamp=timestamp,
             hostname=self.hostname,
@@ -175,8 +194,93 @@ class VPSHealthMonitor:
             supabase_reachable=supabase_reachable,
             redis_reachable=redis_reachable,
             critical_issues=critical_issues,
-            warnings=warnings
+            warnings=warnings,
+            process_memory=process_memory,
+            total_dacle_memory_mb=total_dacle_memory
         )
+
+    def _profile_dacle_memory(self) -> tuple[List[ProcessMemory], float]:
+        """
+        Profile memory usage of all DACLE-related processes.
+
+        Session 286: Added per-process memory profiling for observability.
+        Tracks Python processes related to DACLE (watchtower, sniper, etc.)
+
+        Returns:
+            Tuple of (list of ProcessMemory, total DACLE memory in MB)
+        """
+        dacle_processes = []
+        total_mb = 0.0
+
+        # Keywords to identify DACLE processes
+        dacle_keywords = [
+            'dacle', 'watchtower', 'sniper', 'health_check',
+            'entry_zone', 'recovery_signal', 'telegram_tge'
+        ]
+
+        try:
+            for proc in psutil.process_iter(['pid', 'name', 'cmdline', 'memory_info', 'num_threads']):
+                try:
+                    cmdline = ' '.join(proc.info.get('cmdline') or []).lower()
+                    name = proc.info.get('name', '').lower()
+
+                    # Check if this is a DACLE process
+                    is_dacle = any(kw in cmdline or kw in name for kw in dacle_keywords)
+
+                    if is_dacle and proc.info.get('memory_info'):
+                        mem = proc.info['memory_info']
+                        rss_mb = mem.rss / (1024 * 1024)
+                        vms_mb = mem.vms / (1024 * 1024)
+                        mem_percent = proc.memory_percent()
+
+                        # Get a friendly process name
+                        process_name = self._get_process_name(cmdline, name)
+
+                        dacle_processes.append(ProcessMemory(
+                            name=process_name,
+                            pid=proc.info['pid'],
+                            rss_mb=round(rss_mb, 2),
+                            vms_mb=round(vms_mb, 2),
+                            percent=round(mem_percent, 2),
+                            num_threads=proc.info.get('num_threads', 0)
+                        ))
+
+                        total_mb += rss_mb
+
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    continue
+
+        except Exception as e:
+            logger.warning(f"Memory profiling failed: {e}")
+
+        # Sort by memory usage (highest first)
+        dacle_processes.sort(key=lambda p: p.rss_mb, reverse=True)
+
+        return dacle_processes, round(total_mb, 2)
+
+    def _get_process_name(self, cmdline: str, name: str) -> str:
+        """Extract a friendly process name from cmdline."""
+        # Try to identify specific DACLE processes
+        if 'dacle_watchtower' in cmdline or 'watchtower' in cmdline:
+            return 'watchtower'
+        elif 'sniper_monitor' in cmdline or 'sniper' in cmdline:
+            return 'sniper-monitor'
+        elif 'health_check_daemon' in cmdline:
+            return 'health-daemon'
+        elif 'entry_zone_monitor' in cmdline:
+            return 'entry-zone-monitor'
+        elif 'recovery_signal' in cmdline:
+            return 'recovery-signal-monitor'
+        elif 'telegram_tge' in cmdline:
+            return 'telegram-monitor'
+        elif 'python' in name:
+            # Try to get script name from cmdline
+            parts = cmdline.split()
+            for part in parts:
+                if '.py' in part:
+                    return Path(part).stem
+            return 'python-worker'
+        return name or 'unknown'
 
     def _check_services(self) -> List[ServiceStatus]:
         """Check status of critical services."""
