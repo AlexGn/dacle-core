@@ -33,29 +33,29 @@ class MultiSourceFetcher:
 
     def _init_exchanges(self):
         """Initialize CCXT exchange instances."""
-        try:
-            self.exchanges['binance'] = ccxt.binance({'enableRateLimit': True})
-            logger.info("✅ Binance initialized")
-        except Exception as e:
-            logger.warning(f"⚠️ Binance init failed: {e}")
+        # Session 286: Consolidated logging - single line per batch
+        initialized = []
+        failed = []
 
-        try:
-            self.exchanges['bybit'] = ccxt.bybit({'enableRateLimit': True})
-            logger.info("✅ Bybit initialized")
-        except Exception as e:
-            logger.warning(f"⚠️ Bybit init failed: {e}")
+        exchange_configs = [
+            ('binance', ccxt.binance),
+            ('bybit', ccxt.bybit),
+            ('gate', ccxt.gateio),
+            ('mexc', ccxt.mexc),
+        ]
 
-        try:
-            self.exchanges['gate'] = ccxt.gateio({'enableRateLimit': True})
-            logger.info("✅ Gate.io initialized")
-        except Exception as e:
-            logger.warning(f"⚠️ Gate.io init failed: {e}")
+        for name, exchange_class in exchange_configs:
+            try:
+                self.exchanges[name] = exchange_class({'enableRateLimit': True})
+                initialized.append(name)
+            except Exception as e:
+                failed.append(f"{name}({str(e)[:20]})")
 
-        try:
-            self.exchanges['mexc'] = ccxt.mexc({'enableRateLimit': True})
-            logger.info("✅ MEXC initialized")
-        except Exception as e:
-            logger.warning(f"⚠️ MEXC init failed: {e}")
+        # Single consolidated log line
+        if initialized:
+            logger.info(f"✅ Exchanges initialized: {', '.join(initialized)}")
+        if failed:
+            logger.warning(f"⚠️ Exchange init failed: {', '.join(failed)}")
 
     def get_funding_rate(self, symbol: str) -> Dict:
         """
