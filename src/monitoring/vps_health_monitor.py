@@ -523,23 +523,27 @@ class VPSHealthMonitor:
         except Exception as e:
             logger.error(f"Failed to send Sentry alert: {e}")
 
-        # Send Telegram alert
-        try:
-            from src.alerts.telegram_notifier import send_telegram_message
+        # Send Telegram alert (respects HEALTH_TELEGRAM_ALERTS env var)
+        telegram_alerts_enabled = os.environ.get("HEALTH_TELEGRAM_ALERTS", "true").lower() == "true"
+        if telegram_alerts_enabled:
+            try:
+                from src.alerts.telegram_notifier import send_telegram_message
 
-            alert_msg = f"🚨 VPS HEALTH CRITICAL ({health.hostname})\n\n"
-            alert_msg += f"Critical Issues ({len(health.critical_issues)}):\n"
-            for issue in health.critical_issues:
-                alert_msg += f"  • {issue}\n"
-            alert_msg += f"\nCPU: {health.cpu_percent:.1f}%\n"
-            alert_msg += f"Memory: {health.memory_percent:.1f}%\n"
-            alert_msg += f"Disk: {health.disk_percent:.1f}%\n"
-            alert_msg += f"\nFailed Services: {', '.join(health.failed_services) if health.failed_services else 'None'}\n"
-            alert_msg += f"\n⚠️ Manual intervention required or initiate failover to backup VPS"
+                alert_msg = f"🚨 VPS HEALTH CRITICAL ({health.hostname})\n\n"
+                alert_msg += f"Critical Issues ({len(health.critical_issues)}):\n"
+                for issue in health.critical_issues:
+                    alert_msg += f"  • {issue}\n"
+                alert_msg += f"\nCPU: {health.cpu_percent:.1f}%\n"
+                alert_msg += f"Memory: {health.memory_percent:.1f}%\n"
+                alert_msg += f"Disk: {health.disk_percent:.1f}%\n"
+                alert_msg += f"\nFailed Services: {', '.join(health.failed_services) if health.failed_services else 'None'}\n"
+                alert_msg += f"\n⚠️ Manual intervention required or initiate failover to backup VPS"
 
-            send_telegram_message(alert_msg)
-        except Exception as e:
-            logger.error(f"Failed to send Telegram alert: {e}")
+                send_telegram_message(alert_msg)
+            except Exception as e:
+                logger.error(f"Failed to send Telegram alert: {e}")
+        else:
+            logger.info("Telegram alerts disabled (HEALTH_TELEGRAM_ALERTS=false)")
 
         logger.critical(f"FAILOVER ALERT TRIGGERED: {health.critical_issues}")
 

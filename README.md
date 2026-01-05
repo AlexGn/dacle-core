@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.5 - Session 277 Feedback Auto-Analysis, January 3, 2026)
+## 📊 Current Status (v5.6 - Session 286 BTC Structure Gating, January 5, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -35,7 +35,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 72 learnings (L001-L072) |
+| **Learning System** | ✅ 100% | 83 learnings (L001-L083) |
 | **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
 | **Paper Trade Validation** | ⏳ 30% | 6/20 STRONG_SHORT signals collected |
@@ -44,7 +44,14 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🚀 LATEST (Session 277)**: Feedback System Auto-Analysis with OpenAI ✅ **COMPLETE**
+**🚀 LATEST (Session 286)**: L083 BTC Structure-Based Trade Gating ✅ **COMPLETE**
+- **L083 Learning**: BTC Structure-Based Trade Gating from Sherlock's key levels
+- **Key Levels**: $94.5K (MSS), $93.5K-$94K (resistance), $90.5K (support)
+- **Zone-Based Modifiers**: Position sizing by BTC zone (SHORT/LONG specific)
+- **Daily Opportunities Report**: `scripts/reports/daily_opportunities_report.py`
+- **Integration**: `check_btc_structure_levels()` in ta_aggregator.py
+
+**🚀 PREVIOUS (Session 277)**: Feedback System Auto-Analysis with OpenAI ✅ **COMPLETE**
 - **Auto-Analysis Endpoint**: `POST /api/feedback/trades/{trade_id}/auto-analyze`
 - **OpenAI GPT-4o-mini**: Structured JSON output with psychological bias detection
 - **Semantic Learning Matching**: 20+ learnings mapped, result-based priorities
@@ -955,14 +962,14 @@ See [LICENSE](LICENSE)
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
-- **Learnings Documented**: 71 (L001-L071), **100% integrated** (25 Sherlock learnings operational) with governance framework
+- **Learnings Documented**: 83 (L001-L083), **100% integrated** (25 Sherlock learnings operational) with governance framework
 - **Safety Mechanisms**: 5 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage, BTC CRITICAL VETO)
 - **Telegram Notifications**: ML-validated with STRONG_SHORT/MONITOR/SKIP grouping (Session 246)
 
 ---
 
-**Last Updated**: January 3, 2026
-**Version**: v5.4
-**Status**: Session 275 Test Fixes Complete ✅ (807 tests passing, 0 skipped) 🚀
-**Total Learnings**: 72 (L001-L072), **100% integrated** (25 Sherlock learnings operational)
+**Last Updated**: January 5, 2026
+**Version**: v5.6
+**Status**: Session 286 BTC Structure Gating Complete ✅ (L083 + Daily Opportunities Report) 🚀
+**Total Learnings**: 83 (L001-L083), **100% integrated** (25 Sherlock learnings operational)
 **Sherlock Data Coverage**: 1,401 trades extracted (789 Long + 520 TA + 92 Outcomes), "Short trades" page DISCOVERED (P1 next)

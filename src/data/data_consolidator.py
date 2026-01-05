@@ -1062,6 +1062,130 @@ class DataConsolidator:
         # Session 84 Phase 2: Calculate initial_market_cap from circulating_supply × listing_price
         # This is a prerequisite for FDV/MC ratio calculation
         circ_supply = consolidated.get("circulating_supply_at_tge")
+
+        # Session 282: On-chain supply - both fallback AND cross-validation
+        contract_address = consolidated.get("contract_address")
+        blockchain = consolidated.get("blockchain", "").lower()
+        total_supply = consolidated.get("total_supply")
+
+        # Map DACLE blockchain names to fetcher chain names
+        chain_map = {
+            "ethereum": "ethereum",
+            "eth": "ethereum",
+            "bsc": "bsc",
+            "binance smart chain": "bsc",
+            "polygon": "polygon",
+            "matic": "polygon",
+            "arbitrum": "arbitrum",
+            "arbitrum one": "arbitrum",
+            "base": "base",
+            "avalanche": "avalanche",
+            "avax": "avalanche",
+            "optimism": "optimism",
+            "op": "optimism",
+        }
+
+        chain = chain_map.get(blockchain) if blockchain else None
+        onchain_data = None
+
+        # Try to fetch on-chain data if we have contract and supported chain
+        if contract_address and chain:
+            try:
+                from src.data.fetchers.onchain_supply_fetcher import OnChainSupplyFetcher
+
+                token_symbol = consolidated.get("token_symbol", "UNKNOWN")
+                logger.info(f"   🔗 Fetching on-chain supply for {token_symbol} ({contract_address}) on {chain}...")
+                fetcher = OnChainSupplyFetcher()
+                onchain_data = fetcher.fetch_for_token(token_symbol, contract_address, chain)
+
+                if onchain_data:
+                    # Store on-chain data for reference
+                    consolidated["_onchain_supply_data"] = {
+                        "total_supply": onchain_data.get("total_supply"),
+                        "circulating_supply": onchain_data.get("circulating_supply"),
+                        "float_percent": onchain_data.get("float_percent"),
+                        "chain": chain,
+                        "contract": contract_address,
+                    }
+
+            except ImportError:
+                logger.debug("   ⚠️ On-chain supply fetcher not available")
+            except Exception as e:
+                logger.debug(f"   ⚠️ On-chain supply fetch failed: {e}")
+
+        # Mode 1: FALLBACK - Use on-chain data when sources fail
+        if not circ_supply or circ_supply == 0:
+            if onchain_data and onchain_data.get("circulating_supply"):
+                onchain_circ = onchain_data["circulating_supply"]
+                consolidated["circulating_supply_at_tge"] = onchain_circ
+                consolidated["circulating_supply"] = onchain_circ
+                consolidated["_onchain_supply_source"] = f"{chain}:{contract_address}"
+                circ_supply = onchain_circ
+                derived_fields.append(f"circulating_supply={onchain_circ} (on-chain fallback)")
+                logger.info(f"   ✅ On-chain circulating supply (fallback): {onchain_circ:,.0f}")
+
+                # Also calculate float_percent directly from on-chain data
+                if total_supply and total_supply > 0:
+                    float_pct = round((onchain_circ / total_supply) * 100, 2)
+                    consolidated["float_percent"] = float_pct
+                    derived_fields.append(f"float_percent={float_pct} (on-chain)")
+                    logger.info(f"   ✅ On-chain float_percent: {float_pct}%")
+
+        # Mode 2: CROSS-VALIDATION - Compare on-chain vs source data
+        elif onchain_data and onchain_data.get("circulating_supply") and circ_supply:
+            onchain_circ = onchain_data["circulating_supply"]
+            source_circ = circ_supply
+
+            # Calculate deviation percentage
+            if source_circ > 0:
+                deviation_pct = abs(onchain_circ - source_circ) / source_circ * 100
+
+                if deviation_pct > 20:
+                    # Significant deviation - TRUST ON-CHAIN (Option A)
+                    # Blockchain is ground truth, source data may be stale
+                    consolidated["_supply_validation"] = {
+                        "status": "OVERRIDE",
+                        "action": "TRUST_ONCHAIN",
+                        "source_circulating": source_circ,
+                        "onchain_circulating": onchain_circ,
+                        "deviation_pct": round(deviation_pct, 1),
+                        "reason": "On-chain differs >20% - using blockchain as ground truth"
+                    }
+                    # Override with on-chain data
+                    consolidated["circulating_supply_at_tge_original"] = source_circ  # Preserve original
+                    consolidated["circulating_supply_at_tge"] = onchain_circ
+                    consolidated["circulating_supply"] = onchain_circ
+                    consolidated["_onchain_supply_source"] = f"{chain}:{contract_address}"
+                    circ_supply = onchain_circ  # Update for downstream calculations
+                    derived_fields.append(f"circulating_supply={onchain_circ} (on-chain override)")
+                    logger.warning(f"   🔄 Supply OVERRIDE: source={source_circ:,.0f} → on-chain={onchain_circ:,.0f} ({deviation_pct:.1f}% deviation)")
+
+                    # Recalculate float_percent with on-chain data
+                    if total_supply and total_supply > 0:
+                        float_pct = round((onchain_circ / total_supply) * 100, 2)
+                        consolidated["float_percent"] = float_pct
+                        derived_fields.append(f"float_percent={float_pct} (on-chain)")
+                        logger.info(f"   ✅ Recalculated float_percent: {float_pct}%")
+
+                elif deviation_pct > 5:
+                    # Minor deviation - note it but trust source
+                    consolidated["_supply_validation"] = {
+                        "status": "MINOR_DEVIATION",
+                        "source_circulating": source_circ,
+                        "onchain_circulating": onchain_circ,
+                        "deviation_pct": round(deviation_pct, 1),
+                    }
+                    logger.info(f"   ℹ️ Supply minor deviation: source={source_circ:,.0f} vs on-chain={onchain_circ:,.0f} ({deviation_pct:.1f}%)")
+                else:
+                    # Match - data is validated
+                    consolidated["_supply_validation"] = {
+                        "status": "VALIDATED",
+                        "source_circulating": source_circ,
+                        "onchain_circulating": onchain_circ,
+                        "deviation_pct": round(deviation_pct, 1),
+                    }
+                    logger.info(f"   ✅ Supply validated: source matches on-chain ({deviation_pct:.1f}% deviation)")
+
         price_low = consolidated.get("listing_price_low")
         price_high = consolidated.get("listing_price_high")
 
