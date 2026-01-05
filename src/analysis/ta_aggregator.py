@@ -309,6 +309,146 @@ def get_atr_adjusted_thresholds(atr_pct: Optional[float]) -> Dict[str, float]:
     return adjusted
 
 
+# =============================================================================
+# SESSION 286 L083: BTC Structure-Based Trade Gating
+# =============================================================================
+# Sherlock emphasizes 4H structure levels over internal HH/HL patterns.
+# Key levels are cached and loaded from data/macro/btc_structure_levels.json
+
+def load_btc_structure_levels() -> Optional[Dict]:
+    """
+    Load BTC structure levels from cache file.
+
+    Returns:
+        Dict with structure levels and bias, or None if unavailable
+    """
+    cache_path = Path(__file__).parent.parent.parent / "data" / "macro" / "btc_structure_levels.json"
+
+    try:
+        if cache_path.exists():
+            with open(cache_path, "r") as f:
+                data = json.load(f)
+                logger.debug(f"[BTC-STRUCTURE] Loaded levels from {cache_path}")
+                return data
+        else:
+            logger.warning(f"[BTC-STRUCTURE] Cache file not found: {cache_path}")
+            return None
+    except Exception as e:
+        logger.error(f"[BTC-STRUCTURE] Failed to load levels: {e}")
+        return None
+
+
+def check_btc_structure_levels(btc_price: float, direction: str = "SHORT") -> Dict:
+    """
+    Session 286 L083: Check BTC position relative to Sherlock's key structure levels.
+
+    Per Sherlock: "4-Hour structure is still bearish and will remain the same
+    until we close above $94.5K. Internal structure HH/HL on lower timeframes
+    is largely irrelevant - I only care about 4-Hour structure."
+
+    Args:
+        btc_price: Current BTC price
+        direction: Trade direction ("SHORT" or "LONG")
+
+    Returns:
+        {
+            "zone": "BELOW_SUPPORT" | "SUPPORT_TO_RESISTANCE" | "RESISTANCE_ZONE" | "ABOVE_MSS",
+            "structure_bias": "BEARISH" | "BULLISH" | "UNKNOWN",
+            "nearest_level": {"name": str, "price": float, "distance_pct": float},
+            "short_modifier": float,  # 0.25-1.0
+            "long_modifier": float,   # 0.25-1.0
+            "position_modifier": float,  # Modifier for current direction
+            "warning": str | None,
+            "levels_source": str,
+            "levels_updated": str | None
+        }
+    """
+    levels_data = load_btc_structure_levels()
+
+    # Default result when levels unavailable
+    default_result = {
+        "zone": "UNKNOWN",
+        "structure_bias": "UNKNOWN",
+        "nearest_level": None,
+        "short_modifier": 0.75,  # Cautious default
+        "long_modifier": 0.75,
+        "position_modifier": 0.75,
+        "warning": "BTC structure levels unavailable - using cautious defaults",
+        "levels_source": "defaults",
+        "levels_updated": None
+    }
+
+    if not levels_data or "levels" not in levels_data:
+        return default_result
+
+    levels = levels_data["levels"]
+    structure_shift = levels.get("structure_shift", 94500)
+    resistance_high = levels.get("resistance_high", 94000)
+    resistance_low = levels.get("resistance_low", 93500)
+    support = levels.get("support", 90500)
+
+    result = {
+        "levels_source": levels_data.get("source", "cache"),
+        "levels_updated": levels_data.get("updated"),
+        "structure_bias": levels_data.get("structure_bias", "UNKNOWN"),
+    }
+
+    # Determine zone and modifiers based on price position
+    if btc_price < support:
+        result.update({
+            "zone": "BELOW_SUPPORT",
+            "short_modifier": 1.0,  # Full SHORT confidence (breakdown)
+            "long_modifier": 0.25,  # Avoid LONGs below support
+            "warning": f"BTC below support ${support:,.0f} - structure breakdown, avoid LONGs",
+            "nearest_level": {"name": "support", "price": support, "distance_pct": round(((support - btc_price) / btc_price) * 100, 2)}
+        })
+    elif btc_price < resistance_low:
+        result.update({
+            "zone": "SUPPORT_TO_RESISTANCE",
+            "short_modifier": 0.75,  # Resistance overhead favors shorts
+            "long_modifier": 0.5,   # Support below gives some long confidence
+            "warning": f"BTC in neutral zone - resistance overhead at ${resistance_low:,.0f}-${resistance_high:,.0f}",
+            "nearest_level": {"name": "resistance_low", "price": resistance_low, "distance_pct": round(((resistance_low - btc_price) / btc_price) * 100, 2)}
+        })
+    elif btc_price <= resistance_high:
+        result.update({
+            "zone": "RESISTANCE_ZONE",
+            "short_modifier": 0.5,   # Could reject or break - wait for resolution
+            "long_modifier": 0.5,
+            "warning": f"BTC at major resistance ${resistance_low:,.0f}-${resistance_high:,.0f} (rejected 5-6 times since Nov 17) - wait for resolution",
+            "nearest_level": {"name": "resistance_zone", "price": resistance_high, "distance_pct": round(((resistance_high - btc_price) / btc_price) * 100, 2)}
+        })
+    elif btc_price < structure_shift:
+        result.update({
+            "zone": "ABOVE_RESISTANCE_BELOW_MSS",
+            "short_modifier": 0.5,   # Above resistance but no MSS confirmation
+            "long_modifier": 0.75,  # Slightly bullish bias
+            "warning": f"BTC above resistance but below MSS ${structure_shift:,.0f} - confirmation needed",
+            "nearest_level": {"name": "structure_shift", "price": structure_shift, "distance_pct": round(((structure_shift - btc_price) / btc_price) * 100, 2)}
+        })
+    else:
+        # Above MSS - structure flipped bullish
+        result.update({
+            "zone": "ABOVE_MSS",
+            "structure_bias": "BULLISH",  # Override cached bias - MSS confirmed
+            "short_modifier": 0.25,  # Shorts very risky after MSS
+            "long_modifier": 1.0,    # Full LONG confidence
+            "warning": None,  # Bullish structure - no warning needed
+            "nearest_level": {"name": "structure_shift", "price": structure_shift, "distance_pct": round(((btc_price - structure_shift) / btc_price) * 100, 2)}
+        })
+
+    # Set position modifier based on direction
+    if direction.upper() == "SHORT":
+        result["position_modifier"] = result["short_modifier"]
+    else:
+        result["position_modifier"] = result["long_modifier"]
+
+    logger.info(f"[BTC-STRUCTURE] Price: ${btc_price:,.0f} | Zone: {result['zone']} | "
+                f"Bias: {result['structure_bias']} | SHORT: {result['short_modifier']}x | LONG: {result['long_modifier']}x")
+
+    return result
+
+
 class TADataAggregator:
     """
     Aggregates all 21 TA indicators into structured payload for Agent 4.
@@ -619,6 +759,50 @@ class TADataAggregator:
                 logger.warning(f"[SHERLOCK-FILTER] Failed to load Sherlock sentiment: {e}")
                 result["sherlock_macro_sentiment"] = None
                 result["sherlock_recommendation"] = "UNAVAILABLE"
+
+            # Session 286 L083: BTC Structure-Based Trade Gating
+            # Integrate Sherlock's key BTC levels for more accurate position sizing
+            try:
+                current_price = result["btc_key_levels"].get("current_price")
+                if current_price:
+                    structure_check = check_btc_structure_levels(current_price, "SHORT")
+                    result["btc_structure_levels"] = {
+                        "zone": structure_check["zone"],
+                        "structure_bias": structure_check["structure_bias"],
+                        "nearest_level": structure_check["nearest_level"],
+                        "short_modifier": structure_check["short_modifier"],
+                        "long_modifier": structure_check["long_modifier"],
+                        "levels_source": structure_check["levels_source"],
+                        "levels_updated": structure_check["levels_updated"]
+                    }
+
+                    # Apply structure-based modifier (combines with existing multiplier)
+                    # Example: BTC=0.75, Sherlock=0.5, Structure=0.75 → Combined=0.28 (28% size)
+                    structure_modifier = structure_check["short_modifier"]  # For TGE shorts
+                    current_multiplier = result["position_size_multiplier"]
+
+                    # Only apply structure modifier if it's more restrictive
+                    if structure_modifier < current_multiplier:
+                        result["position_size_multiplier"] = structure_modifier
+                        result["position_size_multiplier_breakdown"]["structure_modifier"] = structure_modifier
+                        result["position_size_multiplier_breakdown"]["combined"] = structure_modifier
+
+                    # Update warning message if structure has warning
+                    if structure_check.get("warning"):
+                        existing_warning = result.get("warning_message") or ""
+                        if existing_warning:
+                            result["warning_message"] = f"{existing_warning}; L083: {structure_check['warning']}"
+                        else:
+                            result["warning_message"] = f"L083: {structure_check['warning']}"
+
+                    logger.info(f"[BTC-STRUCTURE] Zone: {structure_check['zone']} | "
+                               f"SHORT: {structure_check['short_modifier']}x | "
+                               f"LONG: {structure_check['long_modifier']}x | "
+                               f"Updated: {structure_check['levels_updated']}")
+
+            except Exception as e:
+                logger.warning(f"[BTC-STRUCTURE] Failed to check structure levels: {e}")
+                result["btc_structure_levels"] = {"zone": "UNAVAILABLE", "error": str(e)}
 
             # Session 246: CRITICAL state for flash crash conditions (Gemini P2 VETO)
             # Session 280 F3: Now uses ATR-adjusted thresholds for dynamic risk detection
