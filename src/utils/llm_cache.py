@@ -38,6 +38,9 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Define constants for providers to avoid magic strings
+KNOWN_PROVIDERS = ["screenshot_tv", "screenshot_mexc", "openai", "openai_fdv", "perplexity"]
+
 
 class LLMCache:
     """
@@ -64,7 +67,18 @@ class LLMCache:
             cache_dir = project_root / "data" / "llm_cache"
 
         self.cache_dir = Path(cache_dir)
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # Level 1: Ensure base and provider directories exist immediately
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            for provider in KNOWN_PROVIDERS:
+                provider_dir = self.cache_dir / provider
+                provider_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"LLMCache initialized with {len(KNOWN_PROVIDERS)} providers at {self.cache_dir}")
+        except Exception as e:
+            logger.error(f"Failed to initialize cache directories: {e}")
+            # Do not raise here to allow API to start, but Level 2 will catch it
+
         self.default_ttl_hours = default_ttl_hours
 
         # Session 273: Hit/miss tracking for monitoring
@@ -122,9 +136,15 @@ class LLMCache:
         return hashlib.sha256(cache_str.encode()).hexdigest()
 
     def _get_cache_file(self, provider: str, cache_key: str) -> Path:
-        """Get cache file path for a given provider and key."""
+        """
+        Get cache file path for a given provider and key.
+
+        Directory creation is now redundant (done in __init__), but kept for safety
+        in case unknown providers are used.
+        """
         provider_dir = self.cache_dir / provider
-        provider_dir.mkdir(exist_ok=True)
+        if provider not in KNOWN_PROVIDERS:
+            provider_dir.mkdir(parents=True, exist_ok=True)
         return provider_dir / f"{cache_key}.json"
 
     def get(self, provider: str, prompt: str, **kwargs) -> Optional[Dict[str, Any]]:
