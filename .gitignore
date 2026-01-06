@@ -149,3 +149,4 @@ data/ta_uploads/
 
 # Internal cache (runtime, regeneratable)
 src/data/cache/
+dashboard/feedback_v*.html
