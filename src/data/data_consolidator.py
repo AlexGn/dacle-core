@@ -81,6 +81,22 @@ except ImportError:
     VC_CLASSIFIER_AVAILABLE = False
     logging.warning("VC tier classifier not available - skipping VC tier auto-classification")
 
+# Session 291: Import liquidity validator (P0 Critical Safety)
+try:
+    from src.data.validation.liquidity_validator import validate_token_liquidity
+    LIQUIDITY_VALIDATOR_AVAILABLE = True
+except ImportError:
+    LIQUIDITY_VALIDATOR_AVAILABLE = False
+    logging.warning("Liquidity validator not available - skipping liquidity validation")
+
+# Session 291: Import vesting schedule LLM parser (P0 Critical Feature)
+try:
+    from src.data.validation.vesting_parser import parse_vesting_schedule
+    VESTING_PARSER_AVAILABLE = True
+except ImportError:
+    VESTING_PARSER_AVAILABLE = False
+    logging.warning("Vesting parser not available - using basic regex fallback")
+
 # Session 86A: Import live status check for TGE date validation
 try:
     from src.data.primary_source_fetcher import (
@@ -500,6 +516,28 @@ class DataConsolidator:
             for warning in sanity_check_results["warnings"]:
                 logger.warning(f"⚠️  SANITY CHECK WARNING: {warning}")
 
+        # Session 291: P0 Liquidity Validation (Critical Safety)
+        # Prevents honeypot tokens with $5K liquidity from getting 8/10 conviction scores
+        if LIQUIDITY_VALIDATOR_AVAILABLE:
+            logger.info(f"🔍 Validating liquidity for {token}...")
+            liquidity_result = validate_token_liquidity(
+                coingecko_id=consolidated.get("coingecko_id"),
+                symbol=token,
+                fdv=consolidated.get("fdv_at_tge_low") or consolidated.get("fdv_low"),
+                current_price=consolidated.get("listing_price_low") or consolidated.get("listing_price")
+            )
+
+            # Store in _validation metadata
+            if "_validation" not in consolidated:
+                consolidated["_validation"] = {}
+
+            consolidated["_validation"]["liquidity"] = liquidity_result
+
+            # Log warnings for low liquidity
+            if liquidity_result["warning_message"]:
+                logger.warning(f"⚠️  LIQUIDITY WARNING: {liquidity_result['warning_message']}")
+                logger.warning(f"   Conviction penalty: {liquidity_result['conviction_penalty']}")
+
         # Add metadata
         consolidated["_consolidation_metadata"] = {
             "consolidated_at": datetime.utcnow().isoformat() + "Z",
@@ -510,7 +548,8 @@ class DataConsolidator:
             "data_confidence": self._calculate_confidence(),
             "sanity_checks_passed": len(sanity_check_results["errors"]) == 0,
             "sanity_check_warnings": len(sanity_check_results["warnings"]),
-            "dry_run": dry_run
+            "dry_run": dry_run,
+            "liquidity_validated": LIQUIDITY_VALIDATOR_AVAILABLE
         }
 
         if not dry_run:
@@ -1404,7 +1443,30 @@ class DataConsolidator:
             return None
 
     def _parse_vesting_string(self, vesting_str: str) -> Optional[Dict[str, Any]]:
-        """Parse vesting schedule from string format"""
+        """
+        Parse vesting schedule from string format
+
+        Session 291: Enhanced with LLM parser for complex schedules
+        - Primary: OpenAI GPT-4o-mini (~$0.001/parse)
+        - Fallback: Regex-based parser
+        """
+        # Session 291: Try LLM parser first (if available)
+        if VESTING_PARSER_AVAILABLE:
+            try:
+                logger.debug(f"🤖 Parsing vesting with LLM: {vesting_str[:100]}...")
+                parsed = parse_vesting_schedule(vesting_str, use_llm=True)
+
+                # Check if LLM parsing was successful (HIGH or MEDIUM confidence)
+                if parsed.get("confidence") in ("HIGH", "MEDIUM"):
+                    logger.info(f"✅ LLM vesting parse ({parsed['confidence']}): {parsed['tge_unlock_pct']}% TGE, {parsed['cliff_months']}mo cliff, {parsed['vesting_months']}mo vest")
+                    return parsed
+                elif parsed.get("parsing_method") == "llm":
+                    # LLM parsed but LOW confidence - log warning and fall back to regex
+                    logger.warning(f"⚠️  LLM parse LOW confidence, falling back to regex")
+            except Exception as e:
+                logger.warning(f"LLM vesting parse failed: {e}, falling back to regex")
+
+        # Fallback: Regex-based parser (original implementation)
         import re
 
         result = {
@@ -1412,7 +1474,9 @@ class DataConsolidator:
             "cliff_months": 0,
             "vesting_months": None,
             "vesting_type": "unknown",
-            "raw_schedule": vesting_str
+            "raw_schedule": vesting_str,
+            "parsing_method": "regex",
+            "confidence": "LOW"
         }
 
         # Extract TGE unlock percentage
