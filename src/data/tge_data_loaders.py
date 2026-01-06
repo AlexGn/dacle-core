@@ -28,6 +28,14 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+# Session 290: Redis caching for API data fetching
+try:
+    from src.utils.redis_cache import get_redis_cache
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+    logging.warning("Redis cache not available - caching disabled")
+
 # Initialize logger
 logger = logging.getLogger(__name__)
 
@@ -216,6 +224,19 @@ def load_existing_consolidated(token: str) -> Optional[Dict[str, Any]]:
     Returns:
         Dict with consolidated data, or None if not found/invalid
     """
+    # Session 290: Redis caching (1h TTL - file reads are expensive)
+    if REDIS_AVAILABLE:
+        redis_cache = get_redis_cache()
+        cache_key = f"consolidated:{token.upper()}"
+
+        # Try to get from cache
+        cached = redis_cache.get(cache_key, namespace="tge_data")
+        if cached is not None:
+            logger.debug(f"✅ Cache HIT: load_existing_consolidated({token})")
+            return cached
+
+        logger.debug(f"❌ Cache MISS: load_existing_consolidated({token}) - reading file")
+
     consolidated_path = Path(__file__).parent.parent.parent / "data" / "tokens" / token.upper() / "consolidated.json"
 
     if not consolidated_path.exists():
@@ -240,6 +261,14 @@ def load_existing_consolidated(token: str) -> Optional[Dict[str, Any]]:
             return None
 
         logging.info(f"Loaded existing consolidated.json for {token}")
+
+        # Session 290: Cache result for 1h
+        if REDIS_AVAILABLE:
+            redis_cache = get_redis_cache()
+            cache_key = f"consolidated:{token.upper()}"
+            redis_cache.set(cache_key, data, ttl_seconds=3600, namespace="tge_data")
+            logger.debug(f"💾 Cached consolidated({token}) for 1h")
+
         return data
 
     except json.JSONDecodeError as e:
@@ -1467,6 +1496,20 @@ def fetch_tge_data_from_cryptorank(token: str) -> Optional[Dict[str, Any]]:
     Returns:
         Dict with TGE data if found, None otherwise
     """
+    # Session 290: Redis caching (6h TTL - API data changes infrequently)
+    if REDIS_AVAILABLE:
+        redis_cache = get_redis_cache()
+        cache_key = f"cryptorank:{token.upper()}"
+
+        # Try to get from cache
+        cached = redis_cache.get(cache_key, namespace="tge_data")
+        if cached is not None:
+            logger.debug(f"✅ Cache HIT: fetch_tge_data_from_cryptorank({token})")
+            print_info(f"✅ Using cached CryptoRank data for {token}")
+            return cached
+
+        logger.debug(f"❌ Cache MISS: fetch_tge_data_from_cryptorank({token}) - fetching from API")
+
     print_info(f"🔍 Fetching TGE data from CryptoRank for: {token}")
 
     try:
@@ -1501,7 +1544,7 @@ def fetch_tge_data_from_cryptorank(token: str) -> Optional[Dict[str, Any]]:
                 print_info(f"  Launchpad: {tge.get('launchpad', 'N/A')}")
 
                 # Convert scanner format to pipeline format
-                return {
+                result = {
                     "name": tge.get("project_name", token),
                     "symbol": tge.get("symbol", token),
                     "tge_date": tge.get("ido_date"),
@@ -1512,6 +1555,15 @@ def fetch_tge_data_from_cryptorank(token: str) -> Optional[Dict[str, Any]]:
                     "raise_amount": tge.get("raise_amount"),
                 }
 
+                # Session 290: Cache result for 6h
+                if REDIS_AVAILABLE:
+                    redis_cache = get_redis_cache()
+                    cache_key = f"cryptorank:{token.upper()}"
+                    redis_cache.set(cache_key, result, ttl_seconds=21600, namespace="tge_data")
+                    logger.debug(f"💾 Cached cryptorank({token}) for 6h")
+
+                return result
+
         # Token not found in CryptoRank upcoming API - try direct page fetch
         print_warning(f"Token {token} not found in CryptoRank upcoming API")
         print_info("🔍 Trying direct CryptoRank page fetch (handles already-launched tokens)...")
@@ -1519,6 +1571,12 @@ def fetch_tge_data_from_cryptorank(token: str) -> Optional[Dict[str, Any]]:
         # Try fetching from CryptoRank price page directly
         page_data = _fetch_from_cryptorank_page(token)
         if page_data:
+            # Session 290: Cache result for 6h
+            if REDIS_AVAILABLE:
+                redis_cache = get_redis_cache()
+                cache_key = f"cryptorank:{token.upper()}"
+                redis_cache.set(cache_key, page_data, ttl_seconds=21600, namespace="tge_data")
+                logger.debug(f"💾 Cached cryptorank_page({token}) for 6h")
             return page_data
 
         # Still not found - try WebSearch fallback
@@ -1526,6 +1584,12 @@ def fetch_tge_data_from_cryptorank(token: str) -> Optional[Dict[str, Any]]:
 
         websearch_data = fetch_tge_via_websearch(token)
         if websearch_data:
+            # Session 290: Cache result for 6h
+            if REDIS_AVAILABLE:
+                redis_cache = get_redis_cache()
+                cache_key = f"cryptorank:{token.upper()}"
+                redis_cache.set(cache_key, websearch_data, ttl_seconds=21600, namespace="tge_data")
+                logger.debug(f"💾 Cached websearch({token}) for 6h")
             return websearch_data
 
         print_error(f"Token {token} not found via CryptoRank or WebSearch")
@@ -1548,6 +1612,12 @@ def fetch_tge_data_from_cryptorank(token: str) -> Optional[Dict[str, Any]]:
         try:
             websearch_data = fetch_tge_via_websearch(token)
             if websearch_data:
+                # Session 290: Cache result for 6h
+                if REDIS_AVAILABLE:
+                    redis_cache = get_redis_cache()
+                    cache_key = f"cryptorank:{token.upper()}"
+                    redis_cache.set(cache_key, websearch_data, ttl_seconds=21600, namespace="tge_data")
+                    logger.debug(f"💾 Cached websearch_fallback({token}) for 6h")
                 return websearch_data
         except Exception as ws_error:
             print_error(f"WebSearch fallback also failed: {str(ws_error)}")

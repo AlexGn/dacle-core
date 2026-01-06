@@ -49,6 +49,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+# Session 290: Redis caching for consolidate() operations
+try:
+    from src.utils.redis_cache import get_redis_cache
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+    logging.warning("Redis cache not available - caching disabled")
+
 # Import Perplexity validator for pre-consolidation validation
 try:
     from src.data.validation.perplexity_validator import validate_perplexity_data
@@ -390,6 +398,19 @@ class DataConsolidator:
         Returns:
             Consolidated data dictionary with validation notes
         """
+        # Session 290: Redis caching (24h TTL - consolidated data rarely changes)
+        if REDIS_AVAILABLE and not dry_run:
+            redis_cache = get_redis_cache()
+            cache_key = f"consolidate:{token}"
+
+            # Try to get from cache
+            cached = redis_cache.get(cache_key, namespace="data")
+            if cached is not None:
+                logger.debug(f"✅ Cache HIT: consolidate({token})")
+                return cached
+
+            logger.debug(f"❌ Cache MISS: consolidate({token}) - executing consolidation")
+
         self.resolutions = []
         self.agreements = []
         self.missing_fields = []
@@ -494,6 +515,13 @@ class DataConsolidator:
 
         if not dry_run:
             logger.info(f"✅ Consolidated {token}: {len(self.agreements)} agreements, {len(self.resolutions)} conflicts resolved")
+
+            # Session 290: Cache result for 24h (consolidated data rarely changes)
+            if REDIS_AVAILABLE:
+                redis_cache = get_redis_cache()
+                cache_key = f"consolidate:{token}"
+                redis_cache.set(cache_key, consolidated, ttl_seconds=86400, namespace="data")
+                logger.debug(f"💾 Cached consolidate({token}) for 24h")
 
         return consolidated
 
