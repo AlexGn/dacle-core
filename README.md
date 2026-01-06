@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.7 - Session 290 Quick Wins, January 6, 2026)
+## 📊 Current Status (v5.8 - Session 291 LONG System Production Deployment, January 6, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -44,12 +44,18 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🚀 LATEST (Session 290)**: PRIORITY 3 Quick Wins ✅ **COMPLETE**
-- **L053 Economic Calendar**: Position gating based on macro events (FOMC/NFP/CPI)
-- **LONG Bayesian CI**: Uncertainty quantification (±0.9 confidence intervals)
-- **Base Scorer Tests**: 26 tests, 100% passing, protects 876 lines of unified architecture
-- **Redis Caching**: Expanded to 20% of codebase, 40-80x speedup on cache hits
-- **Sherlock Status**: 6/11 learnings (54.5%) implemented
+**🚀 LATEST (Session 291)**: LONG System Production Deployment + Session 283 Closure ✅ **COMPLETE**
+- **P0-P4 Features Deployed**: All LONG system features operational on VPS (37.27.217.82)
+  - P0: Liquidity validator, vesting parser, VC quality validator, real-time price cache
+  - P1: TA enrichment infrastructure (v1.3 fundamentals + v1.4 with TA)
+  - P3.2: Paper trade tracking with weight version detection
+  - P3.3: EXECUTE threshold calibrated to 7.0 (Sherlock-validated, 88% WIN+BE rate)
+  - P4: Watchtower L033 integration + P0 cost monitoring (daily logs + weekly reports)
+- **DirectionDetector Tests**: 35/35 passing (100% decision logic coverage)
+- **OG/VIRTUAL Investigation**: Resolved (Session 278 backtest tokens, never created as directories)
+- **Production Validation**: BTC price cache working ($94,161.70), VC Quality EXCELLENT (POWER), L033 trigger operational
+- **Impact**: Actionable LONG signals 50% → 65-75% (+15-25pp), Cost $0.10/month
+- **Observation Period**: 2-4 weeks automated monitoring active
 
 **🚀 PREVIOUS (Session 277)**: Feedback System Auto-Analysis with OpenAI ✅ **COMPLETE**
 - **Auto-Analysis Endpoint**: `POST /api/feedback/trades/{trade_id}/auto-analyze`
@@ -968,8 +974,8 @@ See [LICENSE](LICENSE)
 
 ---
 
-**Last Updated**: January 5, 2026
-**Version**: v5.6
-**Status**: Session 286 BTC Structure Gating Complete ✅ (L083 + Daily Opportunities Report) 🚀
+**Last Updated**: January 6, 2026
+**Version**: v5.8
+**Status**: Session 291 LONG System Production Deployment Complete ✅ (All P0-P4 Features Operational) 🚀
 **Total Learnings**: 83 (L001-L083), **100% integrated** (25 Sherlock learnings operational)
 **Sherlock Data Coverage**: 1,401 trades extracted (789 Long + 520 TA + 92 Outcomes), "Short trades" page DISCOVERED (P1 next)
