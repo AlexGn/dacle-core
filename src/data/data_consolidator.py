@@ -108,6 +108,14 @@ except ImportError:
     LIVE_STATUS_CHECK_AVAILABLE = False
     logging.warning("Live status check not available - skipping TGE date live validation")
 
+# Session 297: Import DEX data fetcher for DEX-only tokens (ALLOCA on Monad use case)
+try:
+    from src.data.fetchers.dex_data_fetcher import DEXDataFetcher
+    DEX_FETCHER_AVAILABLE = True
+except ImportError:
+    DEX_FETCHER_AVAILABLE = False
+    logging.warning("DEX data fetcher not available - DEX-only token enhancement disabled")
+
 logger = logging.getLogger(__name__)
 
 
@@ -537,6 +545,13 @@ class DataConsolidator:
             if liquidity_result["warning_message"]:
                 logger.warning(f"⚠️  LIQUIDITY WARNING: {liquidity_result['warning_message']}")
                 logger.warning(f"   Conviction penalty: {liquidity_result['conviction_penalty']}")
+
+        # Session 297: DEX Data Enhancement for missing fields
+        # Fills market_cap, float_pct, RSI, ATH, drawdown, EMA support, volume ratio for DEX-only tokens
+        if DEX_FETCHER_AVAILABLE:
+            dex_enhanced_fields = self._enhance_with_dex_data(consolidated, token)
+            if dex_enhanced_fields:
+                logger.info(f"🔗 DEX enhancement: Added {len(dex_enhanced_fields)} fields: {dex_enhanced_fields}")
 
         # Add metadata
         consolidated["_consolidation_metadata"] = {
@@ -1742,6 +1757,144 @@ class DataConsolidator:
             return dt.strftime("%b %d, %Y at %H:%M UTC")
         except (ValueError, AttributeError):
             return date_str
+
+    def _enhance_with_dex_data(self, consolidated: Dict[str, Any], token: str) -> List[str]:
+        """
+        Session 297: Enhance consolidated data with DEX sources for missing fields.
+
+        Fills missing data from DexScreener + GeckoTerminal + On-chain RPC:
+        - market_cap, float_pct, fdv_mc_ratio (from DEX pair + on-chain supply)
+        - rsi_4h, rsi_14, ath_price, drawdown_from_ath (from OHLCV TA calculations)
+        - days_since_ath, at_ema_200_support, dump_volume_ratio, bottom_signals_count
+        - exchange_tier (DEX_ONLY), binance_listing (False)
+
+        Only fetches if critical fields are missing - avoids redundant API calls.
+
+        Args:
+            consolidated: Current consolidated data
+            token: Token symbol
+
+        Returns:
+            List of field names that were enhanced
+        """
+        # Define fields that trigger DEX enhancement when missing
+        TRIGGER_FIELDS = [
+            "market_cap", "float_pct", "float_percent",
+            "rsi_4h", "rsi_14", "ath_price", "drawdown_from_ath"
+        ]
+
+        # Numeric trigger fields where 0.0 counts as "missing"
+        NUMERIC_TRIGGER_FIELDS = {"market_cap", "float_pct", "float_percent", "ath_price"}
+
+        # Check if we need enhancement (0.0 counts as missing for numeric fields)
+        def is_trigger_missing(field: str) -> bool:
+            val = consolidated.get(field)
+            if val is None or val == "MISSING":
+                return True
+            if field in NUMERIC_TRIGGER_FIELDS and val in (0, 0.0):
+                return True
+            return False
+
+        missing_triggers = [f for f in TRIGGER_FIELDS if is_trigger_missing(f)]
+
+        if not missing_triggers:
+            logger.debug(f"DEX enhancement skipped: No missing trigger fields for {token}")
+            return []
+
+        # Try to get contract address and chain
+        contract_address = consolidated.get("contract_address")
+        chain = consolidated.get("chain") or consolidated.get("blockchain")
+
+        # If no contract address, try to find via DexScreener search
+        try:
+            fetcher = DEXDataFetcher()
+            dex_data = fetcher.fetch_complete_data(
+                symbol=token,
+                contract_address=contract_address,
+                chain=chain
+            )
+
+            if not dex_data or dex_data.errors:
+                logger.debug(f"DEX enhancement: No data found for {token}")
+                return []
+
+            # Get consolidated format from DEX data
+            dex_consolidated = fetcher.to_consolidated_format(dex_data)
+
+            # Track which fields we enhance
+            enhanced_fields = []
+
+            # Fields to potentially fill (only if missing in consolidated)
+            DEX_FIELDS_TO_FILL = [
+                # Market data
+                ("current_price", "current_price"),
+                ("market_cap", "market_cap"),
+                ("fdv", "fdv"),
+                ("fdv_mc_ratio", "fdv_mc_ratio"),
+                ("circulating_supply", "circulating_supply"),
+                ("total_supply", "total_supply"),
+                ("float_pct", "float_pct"),
+                ("float_percent", "float_pct"),  # Alias
+                ("liquidity_usd", "liquidity_usd"),
+                ("volume_24h", "volume_24h"),
+                ("chain", "chain"),
+                # TA indicators
+                ("rsi_4h", "rsi_4h"),
+                ("rsi_14", "rsi_14"),
+                ("ath_price", "ath_price"),
+                ("drawdown_from_ath", "drawdown_from_ath"),
+                ("days_since_ath", "days_since_ath"),
+                ("at_ema_200_support", "at_ema_200_support"),
+                ("dump_volume_ratio", "dump_volume_ratio"),
+                ("bottom_signals_count", "bottom_signals_count"),
+                # Exchange tier for DEX-only tokens
+                ("exchange_tier", "exchange_tier"),
+                ("binance_listing", "binance_listing"),
+            ]
+
+            # Numeric fields where 0 or 0.0 should be treated as "missing"
+            NUMERIC_FIELDS = {
+                "market_cap", "fdv", "circulating_supply", "total_supply",
+                "float_pct", "float_percent", "liquidity_usd", "volume_24h",
+                "current_price", "ath_price"
+            }
+
+            for consolidated_key, dex_key in DEX_FIELDS_TO_FILL:
+                # Only fill if missing in consolidated AND available from DEX
+                current_val = consolidated.get(consolidated_key)
+                dex_val = dex_consolidated.get(dex_key)
+
+                # Check if value is "missing" - None, "MISSING", "N/A", or 0 for numeric fields
+                is_missing = (
+                    current_val is None or
+                    current_val == "MISSING" or
+                    current_val == "N/A" or
+                    (consolidated_key in NUMERIC_FIELDS and current_val in (0, 0.0))
+                )
+
+                if is_missing and dex_val is not None:
+                    consolidated[consolidated_key] = dex_val
+                    enhanced_fields.append(consolidated_key)
+
+            # Also store contract address if we discovered it
+            if not contract_address and dex_data.contract_address:
+                consolidated["contract_address"] = dex_data.contract_address
+                enhanced_fields.append("contract_address")
+
+            # Store DEX info for reference
+            if dex_data.dex_pair:
+                consolidated["_dex_source"] = {
+                    "dex": dex_data.dex_pair.dex,
+                    "pair_address": dex_data.dex_pair.pair_address,
+                    "chain": dex_data.chain,
+                    "enhanced_at": dex_data.fetch_timestamp,
+                }
+
+            return enhanced_fields
+
+        except Exception as e:
+            logger.warning(f"DEX enhancement failed for {token}: {e}")
+            return []
 
     def _run_sanity_checks(self, data: Dict[str, Any], token: str) -> Dict[str, List[str]]:
         """

@@ -72,9 +72,11 @@ RPC_ENDPOINTS = {
         "https://mainnet.optimism.io",
         "https://rpc.ankr.com/optimism",
     ],
-    # Monad - placeholder for when mainnet launches
+    # Monad mainnet (launched Nov 24, 2025)
     "monad": [
-        # Monad mainnet RPC TBD
+        "https://rpc.monad.xyz",
+        "https://rpc1.monad.xyz",  # Alchemy
+        "https://rpc3.monad.xyz",  # Ankr
     ],
 }
 
