@@ -349,6 +349,13 @@ class MarketStructureAnalyzer:
                 logger.info(f"   FVG Entry Zone: ${nearest_bearish_fvg.bottom:.4f}-${nearest_bearish_fvg.top:.4f} "
                            f"({nearest_bearish_fvg.strength})")
 
+            # Session 297: Get nearest unfilled FVG for LONG entry (bullish FVG below price)
+            nearest_bullish_fvg = self._get_nearest_unfilled_fvg(all_fvgs, 'bullish', current_price)
+
+            if nearest_bullish_fvg:
+                logger.info(f"   Bullish FVG Entry Zone: ${nearest_bullish_fvg.bottom:.4f}-${nearest_bullish_fvg.top:.4f} "
+                           f"({nearest_bullish_fvg.strength})")
+
             # 5. Session 121 SMC Series - Liquidity Sweeps, Order Blocks, EQH/EQL, Equilibrium
             liquidity_sweeps = self._detect_liquidity_sweeps(ohlcv, swing_highs, swing_lows)
             order_blocks = self._detect_order_blocks(ohlcv, liquidity_sweeps, current_price)
@@ -440,6 +447,18 @@ class MarketStructureAnalyzer:
                 'fvg_entry_zone': (nearest_bearish_fvg.bottom, nearest_bearish_fvg.top) if nearest_bearish_fvg else None,
                 'in_fvg_zone': (nearest_bearish_fvg.bottom <= current_price <= nearest_bearish_fvg.top) if nearest_bearish_fvg else False,
 
+                # Session 297: Bullish FVG for LONG entries (P1.1A - LONG System Parity)
+                'nearest_bullish_fvg': {
+                    'top': nearest_bullish_fvg.top,
+                    'bottom': nearest_bullish_fvg.bottom,
+                    'midpoint': nearest_bullish_fvg.midpoint,
+                    'strength': nearest_bullish_fvg.strength,
+                    'filled': nearest_bullish_fvg.filled,
+                    'timestamp': nearest_bullish_fvg.timestamp.isoformat(),
+                } if nearest_bullish_fvg else None,
+                'bullish_fvg_entry_zone': (nearest_bullish_fvg.bottom, nearest_bullish_fvg.top) if nearest_bullish_fvg else None,
+                'in_bullish_fvg_zone': (nearest_bullish_fvg.bottom <= current_price <= nearest_bullish_fvg.top) if nearest_bullish_fvg else False,
+
                 # Trendline Analysis (Session 120 - US/Talus Learning)
                 'trendline_detected': trendline.detected if trendline else False,
                 'trendline': {
@@ -474,6 +493,11 @@ class MarketStructureAnalyzer:
                     (s for s in liquidity_sweeps if s.direction == 'bearish'), None
                 ) is not None,  # True if there's a recent bearish sweep (good for shorts)
 
+                # Session 297: Bullish sweep for LONG entries (P1.1A - LONG System Parity)
+                'recent_bullish_sweep': next(
+                    (s for s in liquidity_sweeps if s.direction == 'bullish'), None
+                ) is not None,  # True if there's a recent bullish sweep (good for longs - swept lows)
+
                 'order_blocks': [
                     {
                         'direction': ob.direction,
@@ -500,6 +524,17 @@ class MarketStructureAnalyzer:
                     (ob for ob in order_blocks if ob.direction == 'bearish' and not ob.mitigated), None
                 )),  # Entry zone for shorts
 
+                # Session 297: Bullish order block for LONG entries (P1.1A - LONG System Parity)
+                'unmitigated_bullish_ob': (lambda ob: {
+                    'top': ob.top,
+                    'bottom': ob.bottom,
+                    'midpoint': ob.midpoint,
+                    'strength': ob.strength,
+                    'preceded_by_sweep': ob.preceded_by_sweep,
+                } if ob else None)(next(
+                    (ob for ob in order_blocks if ob.direction == 'bullish' and not ob.mitigated), None
+                )),  # Entry zone for longs
+
                 'equal_levels': [
                     {
                         'type': el.type,
@@ -515,10 +550,20 @@ class MarketStructureAnalyzer:
                     el.type == 'EQH' and el.price > current_price for el in equal_levels
                 ),  # True = liquidity target above for shorts
 
+                # Session 297: EQL below price for LONG entries (P1.1A - LONG System Parity)
+                'eql_below_price': any(
+                    el.type == 'EQL' and el.price < current_price for el in equal_levels
+                ),  # True = liquidity target below (swept lows = bullish setup)
+
                 # Session 122 (PIEVERSE Learning): EQH implies CHoCH when last swing high fails new high
                 'eqh_implies_choch': any(
                     el.type == 'EQH' and el.implies_choch for el in equal_levels
                 ),  # True = EQH at recent high suggests bearish CHoCH
+
+                # Session 297: EQL implies bullish CHoCH (P1.1A - LONG System Parity)
+                'eql_implies_bullish_choch': any(
+                    el.type == 'EQL' and el.implies_choch for el in equal_levels
+                ),  # True = EQL at recent low suggests bullish CHoCH (swept lows + reclaim)
 
                 'equilibrium': {
                     'swing_high': equilibrium.swing_high,
