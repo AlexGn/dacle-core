@@ -141,7 +141,7 @@ class StartupValidator:
 
         Checks:
         - SUPABASE_URL and SUPABASE_KEY are set
-        - Can connect and query learning_insights table
+        - Can connect and query learnings table (Session 298: unified table)
         """
         try:
             url = os.getenv("SUPABASE_URL")
@@ -171,26 +171,26 @@ class StartupValidator:
                     from supabase import create_client
                     client = create_client(url, key)
 
-                    # Test query
-                    result = client.table("learning_insights").select("id").limit(1).execute()
+                    # Test query - Session 298: Use unified 'learnings' table
+                    result = client.table("learnings").select("id").limit(1).execute()
 
                     return ValidationResult(
                         name="supabase",
                         passed=True,
                         critical=True,
-                        message=f"Supabase connected (learning_insights table accessible)"
+                        message=f"Supabase connected (learnings table accessible)"
                     )
 
                 client = get_supabase_client()
 
-                # Test query on learning_insights table
-                result = client.table("learning_insights").select("id").limit(1).execute()
+                # Test query on learnings table - Session 298: unified table
+                result = client.table("learnings").select("id").limit(1).execute()
 
                 return ValidationResult(
                     name="supabase",
                     passed=True,
                     critical=True,
-                    message=f"Supabase connected (learning_insights table accessible)"
+                    message=f"Supabase connected (learnings table accessible)"
                 )
 
             except Exception as conn_err:
