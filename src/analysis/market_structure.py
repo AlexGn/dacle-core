@@ -2130,6 +2130,203 @@ class MarketStructureAnalyzer:
             'timestamp': datetime.utcnow().isoformat()
         }
 
+    def detect_choch_for_tge(
+        self,
+        token_symbol: str,
+        token_age_hours: float,
+        direction: str = 'SHORT'
+    ) -> Dict:
+        """
+        SESSION 300: Learning 043 Multi-Timeframe Fractal CHoCH Detection
+
+        Detect CHoCH (Change of Character) using lifecycle-appropriate timeframe.
+
+        Problem (from L043):
+            4H timeframe authority (L013) creates timing gap for TGE tokens.
+            Most TGE dumps complete 60-80% in first 4-8 hours.
+            Waiting for 4H candle close loses optimal R:R entries.
+
+        Solution:
+            Use faster timeframes for TGE-Zero phase, then transition to 4H:
+            - TGE-Zero (0-24h): 15m for fast CHoCH, 1h confirmation, 2 swing touches
+            - Fresh (24-72h): 30m for balanced speed, 1h confirmation, 2 swing touches
+            - Standard (72h+): 4H per L013, 3 swing touches
+
+        Args:
+            token_symbol: Token to analyze (e.g., "POWER")
+            token_age_hours: Hours since TGE launch
+            direction: 'SHORT' or 'LONG' (default SHORT for TGE shorts)
+
+        Returns:
+            Dict with:
+                - choch_detected: bool
+                - choch_details: CHoCH metadata
+                - entry_timeframe: Timeframe context from L043
+                - lifecycle_mode: TGE_ZERO, FRESH, or STANDARD
+                - min_touches_required: 2 or 3 based on mode
+                - position_multiplier: 0.5/0.75/1.0 based on mode
+                - recommendation: Entry recommendation
+        """
+        # Get lifecycle-based timeframe settings (L043)
+        entry_context = self._get_entry_timeframe_context(token_age_hours)
+        entry_tf = entry_context['entry_tf']
+        confirm_tf = entry_context['confirm_tf']
+        min_touches = entry_context['choch_min_touches']
+        mode = entry_context['mode']
+        position_multiplier = entry_context['position_multiplier']
+
+        logger.info(
+            f"L043 TGE CHoCH Detection: {token_symbol} | Age: {token_age_hours:.1f}h | "
+            f"Mode: {mode} | Entry TF: {entry_tf} | Confirm TF: {confirm_tf}"
+        )
+
+        try:
+            # Analyze on entry timeframe
+            entry_result = self.analyze(token_symbol, timeframe=entry_tf)
+
+            # Analyze on confirmation timeframe if different
+            confirm_result = None
+            if confirm_tf != entry_tf:
+                confirm_result = self.analyze(token_symbol, timeframe=confirm_tf)
+
+            # Extract CHoCH from entry timeframe
+            entry_choch = entry_result.get('choch_detected', False)
+            entry_choch_details = entry_result.get('choch_details')
+
+            # Confirmation check (L043: 15m CHoCH needs 1h confirmation)
+            confirm_aligned = True
+            if confirm_result:
+                confirm_structure = confirm_result.get('current_structure', 'unknown')
+                if direction == 'SHORT':
+                    # For shorts, confirmation TF should not be bullish
+                    confirm_aligned = confirm_structure in ['bearish', 'ranging']
+                else:
+                    # For longs, confirmation TF should not be bearish
+                    confirm_aligned = confirm_structure in ['bullish', 'ranging']
+
+            # Validate swing touches (L043: TGE-Zero needs 2, Standard needs 3)
+            touches_valid = True
+            if entry_choch_details and entry_choch_details.get('metadata'):
+                metadata = entry_choch_details['metadata']
+                if metadata.get('source') == 'trendline_break':
+                    trendline_touches = metadata.get('trendline_touches', 0)
+                    touches_valid = trendline_touches >= min_touches
+
+            # Determine CHoCH validity
+            choch_valid = entry_choch and confirm_aligned and touches_valid
+
+            # Build recommendation
+            if choch_valid:
+                if mode == 'TGE_ZERO':
+                    recommendation = f"FAST ENTRY: 15m CHoCH valid. Reduce position to {int(position_multiplier*100)}%"
+                elif mode == 'FRESH':
+                    recommendation = f"BALANCED ENTRY: 30m CHoCH valid. Position at {int(position_multiplier*100)}%"
+                else:
+                    recommendation = "STANDARD ENTRY: 4H CHoCH confirmed per L013"
+            else:
+                reasons = []
+                if not entry_choch:
+                    reasons.append(f"No CHoCH on {entry_tf}")
+                if not confirm_aligned:
+                    reasons.append(f"{confirm_tf} not aligned")
+                if not touches_valid:
+                    reasons.append(f"Need {min_touches}+ swing touches")
+                recommendation = f"WAIT: {', '.join(reasons)}"
+
+            return {
+                'token_symbol': token_symbol,
+                'token_age_hours': token_age_hours,
+                'direction': direction,
+
+                # CHoCH Detection
+                'choch_detected': choch_valid,
+                'choch_details': entry_choch_details if choch_valid else None,
+                'entry_timeframe_choch': entry_choch,
+                'confirmation_aligned': confirm_aligned,
+                'touches_valid': touches_valid,
+
+                # L043 Timeframe Context
+                'lifecycle_mode': mode,
+                'entry_timeframe': entry_tf,
+                'confirmation_timeframe': confirm_tf,
+                'min_touches_required': min_touches,
+                'position_multiplier': position_multiplier,
+                'stop_loss_pct': entry_context.get('stop_loss_pct', 30.0),
+
+                # Entry Recommendation
+                'recommendation': recommendation,
+                'ready_for_entry': choch_valid,
+
+                # Structure from entry TF
+                'current_structure': entry_result.get('current_structure'),
+                'entry_zone': entry_result.get('entry_zone'),
+                'fib_levels': entry_result.get('fib_levels'),
+                'dynamic_sl': entry_result.get('dynamic_sl'),
+
+                # Metadata
+                'timestamp': datetime.utcnow().isoformat(),
+                'note': entry_context.get('note', ''),
+                'warning': entry_context.get('warning', '')
+            }
+
+        except Exception as e:
+            logger.error(f"L043 CHoCH detection failed for {token_symbol}: {e}")
+            return {
+                'token_symbol': token_symbol,
+                'token_age_hours': token_age_hours,
+                'error': str(e),
+                'choch_detected': False,
+                'lifecycle_mode': mode,
+                'entry_timeframe': entry_tf,
+                'recommendation': f"ERROR: {str(e)}",
+                'ready_for_entry': False,
+                'timestamp': datetime.utcnow().isoformat()
+            }
+
+    def _get_entry_timeframe_context(self, token_age_hours: float) -> Dict:
+        """
+        SESSION 300: Get lifecycle-based timeframe context (L043).
+
+        Returns the appropriate entry timeframe based on token age.
+        TGE tokens complete 60-80% of dumps in first 4-8 hours.
+
+        Timeframe Hierarchy:
+        - TGE-Zero (0-24h): 15m for fast CHoCH detection
+        - Fresh (24-72h): 30m for balanced speed
+        - Standard (72h+): 4H per L013
+        """
+        if token_age_hours <= 24:
+            return {
+                'mode': 'TGE_ZERO',
+                'entry_tf': '15m',
+                'confirm_tf': '1h',
+                'choch_min_touches': 2,
+                'position_multiplier': 0.50,
+                'stop_loss_pct': 15.0,
+                'note': 'Fast entry mode - 15m CHoCH valid',
+                'warning': 'High volatility expected - position reduced 50%'
+            }
+        elif token_age_hours <= 72:
+            return {
+                'mode': 'FRESH',
+                'entry_tf': '30m',
+                'confirm_tf': '1h',
+                'choch_min_touches': 2,
+                'position_multiplier': 0.75,
+                'stop_loss_pct': 20.0,
+                'note': 'Balanced entry mode - 30m CHoCH valid'
+            }
+        else:
+            return {
+                'mode': 'STANDARD',
+                'entry_tf': '4h',
+                'confirm_tf': '4h',
+                'choch_min_touches': 3,
+                'position_multiplier': 1.0,
+                'stop_loss_pct': 30.0,
+                'note': 'Standard mode per L013'
+            }
+
 
 # Convenience function
 def analyze_structure(token_symbol: str, exchange: str = "mexc", timeframe: str = "4h") -> Dict:
