@@ -310,7 +310,7 @@ def get_atr_adjusted_thresholds(atr_pct: Optional[float]) -> Dict[str, float]:
 
 
 # =============================================================================
-# SESSION 286 L083: BTC Structure-Based Trade Gating
+# SESSION 286 L081: BTC Structure-Based Trade Gating
 # =============================================================================
 # Sherlock emphasizes 4H structure levels over internal HH/HL patterns.
 # Key levels are cached and loaded from data/macro/btc_structure_levels.json
@@ -340,7 +340,7 @@ def load_btc_structure_levels() -> Optional[Dict]:
 
 def check_btc_structure_levels(btc_price: float, direction: str = "SHORT") -> Dict:
     """
-    Session 286 L083: Check BTC position relative to Sherlock's key structure levels.
+    Session 286 L081: Check BTC position relative to Sherlock's key structure levels.
 
     Per Sherlock: "4-Hour structure is still bearish and will remain the same
     until we close above $94.5K. Internal structure HH/HL on lower timeframes
@@ -760,7 +760,7 @@ class TADataAggregator:
                 result["sherlock_macro_sentiment"] = None
                 result["sherlock_recommendation"] = "UNAVAILABLE"
 
-            # Session 286 L083: BTC Structure-Based Trade Gating
+            # Session 286 L081: BTC Structure-Based Trade Gating
             # Integrate Sherlock's key BTC levels for more accurate position sizing
             try:
                 current_price = result["btc_key_levels"].get("current_price")
@@ -791,9 +791,9 @@ class TADataAggregator:
                     if structure_check.get("warning"):
                         existing_warning = result.get("warning_message") or ""
                         if existing_warning:
-                            result["warning_message"] = f"{existing_warning}; L083: {structure_check['warning']}"
+                            result["warning_message"] = f"{existing_warning}; L081: {structure_check['warning']}"
                         else:
-                            result["warning_message"] = f"L083: {structure_check['warning']}"
+                            result["warning_message"] = f"L081: {structure_check['warning']}"
 
                     logger.info(f"[BTC-STRUCTURE] Zone: {structure_check['zone']} | "
                                f"SHORT: {structure_check['short_modifier']}x | "
@@ -982,10 +982,10 @@ class TADataAggregator:
             "dump_volume_ratio": 1.0,
             "volume_capitulation": False,
             "volume_exhaustion": False,
-            # BTC context (L080)
+            # BTC context (L078)
             "btc_7d_change": 0.0,
             "btc_regime": "UNKNOWN",
-            # Funding rate (L079)
+            # Funding rate (L077)
             "funding_rate": 0.0,
             # Fear & Greed
             "fear_greed_index": 50,
@@ -1005,11 +1005,11 @@ class TADataAggregator:
             volume_data = self._collect_volume_analysis(token_symbol)
             result.update(volume_data)
 
-            # 4. Collect BTC context (L080)
+            # 4. Collect BTC context (L078)
             btc_data = self._collect_btc_context_for_long()
             result.update(btc_data)
 
-            # 5. Collect funding rate (L079)
+            # 5. Collect funding rate (L077)
             funding_data = self._collect_funding_rate(token_symbol)
             result.update(funding_data)
 
@@ -1172,7 +1172,7 @@ class TADataAggregator:
         return result
 
     def _collect_btc_context_for_long(self) -> Dict:
-        """Collect BTC context for LONG viability (L080)."""
+        """Collect BTC context for LONG viability (L078)."""
         result = {
             "btc_7d_change": 0.0,
             "btc_regime": "UNKNOWN",
@@ -1186,7 +1186,7 @@ class TADataAggregator:
                 change_7d = (current_price - price_7d_ago) / price_7d_ago
                 result["btc_7d_change"] = change_7d
 
-                # Determine regime per L080
+                # Determine regime per L078
                 if change_7d > 0.05:
                     result["btc_regime"] = "BULL"
                 elif change_7d > -0.05:
@@ -1202,7 +1202,7 @@ class TADataAggregator:
         return result
 
     def _collect_funding_rate(self, token_symbol: str) -> Dict:
-        """Collect funding rate for L079 squeeze risk."""
+        """Collect funding rate for L077 squeeze risk."""
         result = {"funding_rate": 0.0}
 
         try:

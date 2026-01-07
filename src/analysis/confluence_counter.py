@@ -25,7 +25,7 @@ Session 278 LONG: Added direction-aware confluence counting
     - For LONG: filters for bullish_reversal patterns instead of bearish_reversal
     - For LONG: EMA alignment looks for "bullish" instead of "bearish"
     - For LONG: SUPPORT_RETEST is positive confluence (vs RESISTANCE_RETEST for SHORT)
-    - For LONG: Funding rate uses inverted thresholds (L079)
+    - For LONG: Funding rate uses inverted thresholds (L077)
 
 Author: Claude Code (Session 268 Phase 1, Session 280 Phase C, Session 278 LONG)
 Date: 2026-01-01, Updated: 2026-01-04
@@ -123,7 +123,7 @@ class ConfluenceCounter:
     QVWAP_DISTANCE_THRESHOLD = 1.0  # <1% from QVWAP = confluence
     YVWAP_DISTANCE_THRESHOLD = 1.0  # <1% from YVWAP = confluence
     FUNDING_RATE_EXTREME_SHORT = -0.05  # <-0.05% = squeeze risk for SHORTs (L051)
-    FUNDING_RATE_EXTREME_LONG = 0.05  # >+0.05% = squeeze risk for LONGs (L079)
+    FUNDING_RATE_EXTREME_LONG = 0.05  # >+0.05% = squeeze risk for LONGs (L077)
     VOLUME_SPIKE_THRESHOLD = 1.5  # >1.5x average volume
 
     def count_confluence(
@@ -158,7 +158,7 @@ class ConfluenceCounter:
                 - volume_spike: True/False
             funding_rate: Funding rate (optional)
                 - For SHORT: <-0.05% = squeeze risk (L051)
-                - For LONG: >+0.05% = squeeze risk (L079)
+                - For LONG: >+0.05% = squeeze risk (L077)
             tvem_data: TVEM band data (optional)
                 - signal: "bearish"/"bullish"
             ohlcv_data: OHLCV candlestick data for automatic pattern detection
@@ -256,12 +256,12 @@ class ConfluenceCounter:
             volume_ratio = volume_data.get("volume_ratio", 0)
             descriptions.append(f"Volume spike ({volume_ratio:.1f}x avg)")
 
-        # 8. Funding Rate (L051 for SHORT, L079 for LONG)
+        # 8. Funding Rate (L051 for SHORT, L077 for LONG)
         # For SHORT: extremely negative funding = crowded shorts = squeeze risk (L051)
-        # For LONG: neutral/negative funding = safe for longs (L079)
+        # For LONG: neutral/negative funding = safe for longs (L077)
         if funding_rate is not None:
             if is_long:
-                # L079: For LONGs, negative or neutral funding is good (shorts crowded)
+                # L077: For LONGs, negative or neutral funding is good (shorts crowded)
                 # High positive funding = crowded longs = risk
                 if funding_rate < self.FUNDING_RATE_EXTREME_LONG:
                     factors.append(ConfluenceType.FUNDING_RATE)
@@ -354,7 +354,7 @@ class ConfluenceCounter:
 
         Session 278 LONG: Added direction-aware pattern filtering:
         - For SHORT: filters for bearish_reversal patterns
-        - For LONG: filters for bullish_reversal patterns (L077 confirmation signals)
+        - For LONG: filters for bullish_reversal patterns (L075 confirmation signals)
 
         Args:
             ohlcv_data: OHLCV candlestick data
@@ -406,7 +406,7 @@ class ConfluenceCounter:
 
                 # Session 278: Direction-aware pattern filtering
                 # For SHORT: bearish_reversal patterns (rejection patterns)
-                # For LONG: bullish_reversal patterns (L077 recovery confirmation signals)
+                # For LONG: bullish_reversal patterns (L075 recovery confirmation signals)
                 if pattern_type_str == target_pattern_type:
                     relevant_patterns.append({
                         "name": pattern_name,
@@ -542,7 +542,7 @@ if __name__ == "__main__":
         sr_levels={"near_support": True, "retest_number": 3},  # Support holding
         patterns=[],
         volume_data={"volume_spike": True, "volume_ratio": 2.5},  # Accumulation volume
-        funding_rate=-0.02,  # Negative funding = safe for longs (L079)
+        funding_rate=-0.02,  # Negative funding = safe for longs (L077)
         tvem_data={"signal": "bullish"},  # Bullish TVEM for LONG
         direction="LONG",  # NEW: Specify LONG direction
     )

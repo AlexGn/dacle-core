@@ -35,7 +35,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 83 learnings (L001-L083) |
+| **Learning System** | ✅ 100% | 83 learnings (L001-L081) |
 | **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
 | **Paper Trade Validation** | ⏳ 30% | 6/20 STRONG_SHORT signals collected |
@@ -61,7 +61,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 - **Auto-Analysis Endpoint**: `POST /api/feedback/trades/{trade_id}/auto-analyze`
 - **OpenAI GPT-4o-mini**: Structured JSON output with psychological bias detection
 - **Semantic Learning Matching**: 20+ learnings mapped, result-based priorities
-- **MISSED Trade Handling**: L068 auto-assigned, discipline recognized as non-bias
+- **MISSED Trade Handling**: L066 auto-assigned, discipline recognized as non-bias
 - **VPS Deployment**: 7/7 E2E tests passing on 37.27.217.82
 
 **🚀 PREVIOUS (Session 275 Test Fixes)**: All Unit Tests Passing ✅
@@ -75,15 +75,15 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 - **L032-L037**: ATH reversal, overextension tiers, index deviation, entry checklist, spot-short DCA
 - **Conviction Adjustments**: +3.0 EXTREME (≥5x), +2.0 HIGH (≥3x), +1.0 MODERATE (≥2x)
 
-**🚀 PREVIOUS (Session 271)**: December 2025 PnL Analysis & L074 ✅
-- **L074**: December 2025 PnL Analysis - Portfolio Growth Patterns
+**🚀 PREVIOUS (Session 271)**: December 2025 PnL Analysis & L072 ✅
+- **L072**: December 2025 PnL Analysis - Portfolio Growth Patterns
 - **December Performance**: +$78.23 USDT (+3.86%), Win days 17/31 (54.8%)
 
 **🚀 PREVIOUS (Session 270)**: Health Check Daemon VPS Deployment ✅
 - **Deployed**: `health-check-daemon.service` running on VPS 37.27.217.82
 
-**🚀 PREVIOUS (Session 269)**: L071 David's Position Management Framework ✅
-- **L071**: Reference learning for David's personal risk rules (3-position limit, BE gate)
+**🚀 PREVIOUS (Session 269)**: L069 David's Position Management Framework ✅
+- **L069**: Reference learning for David's personal risk rules (3-position limit, BE gate)
 - **Philosophy**: "DACLE informs, David decides" - no code integration
 
 **🚀 PREVIOUS (Session 267)**: ML Dead Zone + Platt Calibration + Sherlock Data Fix ✅
@@ -968,7 +968,7 @@ See [LICENSE](LICENSE)
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
-- **Learnings Documented**: 83 (L001-L083), **100% integrated** (25 Sherlock learnings operational) with governance framework
+- **Learnings Documented**: 83 (L001-L081), **100% integrated** (25 Sherlock learnings operational) with governance framework
 - **Safety Mechanisms**: 5 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage, BTC CRITICAL VETO)
 - **Telegram Notifications**: ML-validated with STRONG_SHORT/MONITOR/SKIP grouping (Session 246)
 
@@ -977,5 +977,5 @@ See [LICENSE](LICENSE)
 **Last Updated**: January 6, 2026
 **Version**: v5.8
 **Status**: Session 291 LONG System Production Deployment Complete ✅ (All P0-P4 Features Operational) 🚀
-**Total Learnings**: 83 (L001-L083), **100% integrated** (25 Sherlock learnings operational)
+**Total Learnings**: 83 (L001-L081), **100% integrated** (25 Sherlock learnings operational)
 **Sherlock Data Coverage**: 1,401 trades extracted (789 Long + 520 TA + 92 Outcomes), "Short trades" page DISCOVERED (P1 next)

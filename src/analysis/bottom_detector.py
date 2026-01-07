@@ -90,7 +90,7 @@ RSI_NEUTRAL_LOW = 40  # Lower neutral
 MIN_SUPPORT_TOUCHES = 3  # Minimum touches for "holding"
 SUPPORT_TOLERANCE_PCT = 2.0  # Within 2% = same level
 
-# Dead cat bounce thresholds (L078)
+# Dead cat bounce thresholds (L076)
 DEAD_CAT_RECOVERY_PCT = 38.2  # 0.382 Fib = typical dead cat
 DEAD_CAT_MIN_DAYS = 3  # Recoveries < 3 days = suspicious
 DEAD_CAT_VOLUME_THRESHOLD = 1.0  # Volume declining on bounce = dead cat
@@ -123,7 +123,7 @@ class BottomDetector:
     - 0.4-0.6 (2/5 signals): MODERATE - Wait for confirmation
     - <0.4: LOW - Not at bottom
 
-    Dead Cat Detection (L078):
+    Dead Cat Detection (L076):
     - Volume declining on bounce
     - Recovery < 0.382 Fib
     - Duration < 3 days
@@ -204,7 +204,7 @@ class BottomDetector:
         else:
             recommendation = "SKIP"
 
-        # Check for dead cat bounce (L078)
+        # Check for dead cat bounce (L076)
         dead_cat = self._check_dead_cat_bounce(
             price_history, volume_history, ta_data, signals
         )
@@ -420,7 +420,7 @@ class BottomDetector:
         active_signals: List[str],
     ) -> Dict:
         """
-        Detect dead cat bounce pattern (L078).
+        Detect dead cat bounce pattern (L076).
 
         Dead Cat Indicators (AVOID LONG):
         - Volume declining on bounce (no accumulation)
@@ -572,7 +572,7 @@ def is_dead_cat(
     ta_data: Optional[Dict] = None,
 ) -> Tuple[bool, int, List[str]]:
     """
-    Quick check for dead cat bounce (L078).
+    Quick check for dead cat bounce (L076).
 
     Returns:
         (is_dead_cat, score, reasons)
