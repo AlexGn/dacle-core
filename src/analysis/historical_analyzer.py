@@ -32,7 +32,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.analysis.exhaustion_calculator import fetch_ohlcv_ccxt, get_trading_symbol, fetch_funding_rate
-from src.analysis.market_structure_analyzer import MarketStructureAnalyzer
+from src.analysis.market_structure import MarketStructureAnalyzer
 
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
 CONFIG_PATH = PROJECT_ROOT / "config" / "historical_patterns.json"

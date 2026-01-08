@@ -199,12 +199,19 @@ class PriceActionAnalyzer:
             results['structure'] = structure
             logger.info(f"   🏗️  Market structure: {structure}")
 
-            # 6. Calculate Fibonacci levels
-            fib_levels = self._calculate_fibonacci(ohlcv_1h)
+            # 6. Calculate Fibonacci levels (L054: includes proximity detection)
+            fib_levels = self._calculate_fibonacci(ohlcv_1h, current_price=current_price)
             results['fib_levels'] = fib_levels
             price_vs_fib = self._price_vs_fib(current_price, fib_levels)
             results['price_vs_fib'] = price_vs_fib
-            logger.info(f"   🎯 Fib position: {price_vs_fib}")
+
+            # L054: Log if near key Fib levels
+            if fib_levels.get('near_65'):
+                logger.info(f"   🎯 Fib position: {price_vs_fib} [NEAR 0.65 - L054 rejection zone]")
+            elif fib_levels.get('near_618'):
+                logger.info(f"   🎯 Fib position: {price_vs_fib} [NEAR 0.618 - golden ratio]")
+            else:
+                logger.info(f"   🎯 Fib position: {price_vs_fib}")
 
             # 7. Calculate entry readiness score (macro already analyzed above)
             score, reasoning = self._calculate_entry_score(
@@ -358,11 +365,12 @@ class PriceActionAnalyzer:
 
         return "ranging"
 
-    def _calculate_fibonacci(self, ohlcv: List, lookback: int = 50) -> Dict:
+    def _calculate_fibonacci(self, ohlcv: List, lookback: int = 50, current_price: float = None) -> Dict:
         """
         Calculate Fibonacci retracement levels.
 
         Based on recent swing high and swing low.
+        L054: Includes 0.65 (Sherlock's hidden rejection level) and proximity detection.
         """
         if not ohlcv or len(ohlcv) < lookback:
             return {}
@@ -375,7 +383,7 @@ class PriceActionAnalyzer:
         swing_low = min(lows)
         diff = swing_high - swing_low
 
-        return {
+        fib_levels = {
             'swing_high': round(swing_high, 6),
             'swing_low': round(swing_low, 6),
             '0.236': round(swing_high - (diff * 0.236), 6),
@@ -385,6 +393,60 @@ class PriceActionAnalyzer:
             '0.65': round(swing_high - (diff * 0.65), 6),    # L054: Sherlock's rejection level
             '0.786': round(swing_high - (diff * 0.786), 6),
         }
+
+        # L054: Add proximity detection if current_price provided
+        if current_price and current_price > 0:
+            proximity = self._detect_fib_proximity(current_price, fib_levels)
+            fib_levels.update(proximity)
+
+        return fib_levels
+
+    def _detect_fib_proximity(self, current_price: float, fib_levels: Dict, tolerance_pct: float = 1.0) -> Dict:
+        """
+        L054: Detect if price is near key Fibonacci levels.
+
+        Sherlock uses ±1% tolerance for "at Fib level" detection.
+        Key levels: 0.618 (golden ratio), 0.65 (hidden rejection), 0.786 (deep retracement)
+
+        Returns dict with near_XXX boolean flags for each key level.
+        """
+        result = {
+            'near_618': False,
+            'near_65': False,  # L054: Hidden rejection level
+            'near_786': False,
+            'nearest_fib': None,
+            'distance_to_nearest_pct': None,
+        }
+
+        key_levels = ['0.618', '0.65', '0.786']
+        min_distance = float('inf')
+        nearest_level = None
+
+        for level_name in key_levels:
+            level_price = fib_levels.get(level_name)
+            if level_price and level_price > 0:
+                # Calculate percentage distance
+                distance_pct = abs(current_price - level_price) / level_price * 100
+
+                if distance_pct <= tolerance_pct:
+                    # Price is within tolerance of this level
+                    if level_name == '0.618':
+                        result['near_618'] = True
+                    elif level_name == '0.65':
+                        result['near_65'] = True
+                    elif level_name == '0.786':
+                        result['near_786'] = True
+
+                # Track nearest level
+                if distance_pct < min_distance:
+                    min_distance = distance_pct
+                    nearest_level = level_name
+
+        if nearest_level:
+            result['nearest_fib'] = nearest_level
+            result['distance_to_nearest_pct'] = round(min_distance, 2)
+
+        return result
 
     def _price_vs_fib(self, current_price: float, fib_levels: Dict) -> str:
         """
@@ -399,6 +461,167 @@ class PriceActionAnalyzer:
             return "above_0.618"  # For SHORT: need to break below
         else:
             return "below_0.618"  # For SHORT: good entry zone
+
+    def detect_trendline_break(
+        self,
+        ohlcv: List,
+        direction: str = "LONG",
+        lookback: int = 20,
+    ) -> Dict:
+        """
+        L059: Detect trendline and check for breakout.
+
+        For LONG entries:
+        - Find descending trendline connecting recent swing highs
+        - Check if current price breaks above
+
+        For SHORT entries:
+        - Find ascending trendline connecting recent swing lows
+        - Check if current price breaks below
+
+        Args:
+            ohlcv: List of [timestamp, open, high, low, close, volume]
+            direction: "LONG" or "SHORT"
+            lookback: Number of candles to analyze for pivot detection
+
+        Returns:
+            Dict with:
+                trendline_detected: bool
+                trendline_slope: float (price change per candle)
+                trendline_level: float (current projected trendline price)
+                breakout_confirmed: bool
+                breakout_strength: str ("WEAK", "MODERATE", "STRONG")
+                pivot_points: List[Tuple[int, float]] (index, price)
+        """
+        if not ohlcv or len(ohlcv) < lookback:
+            return {
+                "trendline_detected": False,
+                "breakout_confirmed": False,
+            }
+
+        # Extract price data
+        highs = [candle[2] for candle in ohlcv[-lookback:]]
+        lows = [candle[3] for candle in ohlcv[-lookback:]]
+        closes = [candle[4] for candle in ohlcv[-lookback:]]
+        current_close = closes[-1]
+
+        if direction == "LONG":
+            # For LONG: find descending resistance trendline from swing highs
+            pivots = self._find_pivot_points(highs, pivot_type="high")
+            if len(pivots) >= 2:
+                # Calculate trendline from recent pivot highs
+                x1, y1 = pivots[-2]
+                x2, y2 = pivots[-1]
+                slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
+
+                # For descending trendline, slope should be negative
+                if slope < 0:
+                    # Project trendline to current bar
+                    current_idx = len(highs) - 1
+                    trendline_level = y2 + slope * (current_idx - x2)
+
+                    # Check breakout (price above trendline)
+                    breakout = current_close > trendline_level
+
+                    return {
+                        "trendline_detected": True,
+                        "trendline_slope": round(slope, 6),
+                        "trendline_level": round(trendline_level, 6),
+                        "breakout_confirmed": breakout,
+                        "breakout_strength": self._assess_breakout_strength(
+                            current_close, trendline_level, direction
+                        ),
+                        "pivot_points": pivots[-2:],
+                    }
+        else:
+            # For SHORT: find ascending support trendline from swing lows
+            pivots = self._find_pivot_points(lows, pivot_type="low")
+            if len(pivots) >= 2:
+                x1, y1 = pivots[-2]
+                x2, y2 = pivots[-1]
+                slope = (y2 - y1) / (x2 - x1) if x2 != x1 else 0
+
+                # For ascending trendline, slope should be positive
+                if slope > 0:
+                    current_idx = len(lows) - 1
+                    trendline_level = y2 + slope * (current_idx - x2)
+
+                    # Check breakout (price below trendline)
+                    breakout = current_close < trendline_level
+
+                    return {
+                        "trendline_detected": True,
+                        "trendline_slope": round(slope, 6),
+                        "trendline_level": round(trendline_level, 6),
+                        "breakout_confirmed": breakout,
+                        "breakout_strength": self._assess_breakout_strength(
+                            current_close, trendline_level, direction
+                        ),
+                        "pivot_points": pivots[-2:],
+                    }
+
+        return {
+            "trendline_detected": False,
+            "breakout_confirmed": False,
+        }
+
+    def _find_pivot_points(self, prices: List[float], pivot_type: str = "high") -> List[tuple]:
+        """
+        Find pivot highs or lows in price data.
+
+        Args:
+            prices: List of high or low prices
+            pivot_type: "high" or "low"
+
+        Returns:
+            List of (index, price) tuples for detected pivots
+        """
+        pivots = []
+        if len(prices) < 5:
+            return pivots
+
+        for i in range(2, len(prices) - 2):
+            if pivot_type == "high":
+                # Pivot high: higher than 2 neighbors on each side
+                if (prices[i] > prices[i-1] and prices[i] > prices[i+1] and
+                    prices[i] > prices[i-2] and prices[i] > prices[i+2]):
+                    pivots.append((i, prices[i]))
+            else:
+                # Pivot low: lower than 2 neighbors on each side
+                if (prices[i] < prices[i-1] and prices[i] < prices[i+1] and
+                    prices[i] < prices[i-2] and prices[i] < prices[i+2]):
+                    pivots.append((i, prices[i]))
+
+        return pivots
+
+    def _assess_breakout_strength(
+        self,
+        current_price: float,
+        trendline_level: float,
+        direction: str,
+    ) -> str:
+        """
+        L059: Assess breakout strength based on distance from trendline.
+
+        Args:
+            current_price: Current close price
+            trendline_level: Projected trendline price
+            direction: "LONG" or "SHORT"
+
+        Returns:
+            "WEAK" (<1%), "MODERATE" (1-3%), "STRONG" (>3%)
+        """
+        if trendline_level == 0:
+            return "WEAK"
+
+        distance_pct = abs(current_price - trendline_level) / trendline_level * 100
+
+        if distance_pct < 1:
+            return "WEAK"
+        elif distance_pct < 3:
+            return "MODERATE"
+        else:
+            return "STRONG"
 
     def _calculate_entry_score(
         self,

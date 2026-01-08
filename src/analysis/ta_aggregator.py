@@ -1985,6 +1985,56 @@ class TADataAggregator:
             except Exception as e:
                 logger.debug(f"   TVEM Band calculation failed: {e}")
 
+            # Session 302: MP-VWAP Analysis (Learning 085)
+            # Combines Market Profile (POC/VAH/VAL) with VWAP for institutional S/R levels
+            mp_vwap_data = {}
+            try:
+                from src.analysis.volume_profile import calculate_mp_vwap
+                # Use 4H OHLCV for volume profile (same as other TA)
+                ohlcv_4h_vp = ohlcv_4h if 'ohlcv_4h' in dir() and ohlcv_4h else self.price_analyzer._fetch_ohlcv(token_symbol, '4h', limit=100)
+                if ohlcv_4h_vp and len(ohlcv_4h_vp) >= 20 and current_close:
+                    # Convert raw OHLCV to dict format
+                    ohlcv_dicts = [{'open': c[1], 'high': c[2], 'low': c[3], 'close': c[4], 'volume': c[5]} for c in ohlcv_4h_vp]
+                    mp_vwap_data = calculate_mp_vwap(ohlcv_dicts, current_close, vwap_anchor='quarterly')
+                    if mp_vwap_data.get('poc'):
+                        logger.info(f"   [MP-VWAP] POC: ${mp_vwap_data['poc']:.6f} | "
+                                   f"Zone: {mp_vwap_data['zone']} | "
+                                   f"Confluence: {mp_vwap_data['confluence_strength']} | "
+                                   f"Signal: {mp_vwap_data['signal']}")
+            except ImportError:
+                logger.debug("   Volume profile module not available")
+            except Exception as e:
+                logger.debug(f"   MP-VWAP calculation failed: {e}")
+
+            # Session 302: MTF EMA Average Analysis (Learning 086)
+            # Smoothed average of EMAs across 1H/4H/Daily timeframes for trend confirmation
+            mtf_ema_avg_data = {}
+            try:
+                from src.analysis.mtf_ema_average import calculate_mtf_ema_average
+                # Fetch OHLCV for each timeframe
+                ohlcv_by_tf = {}
+                ohlcv_by_tf['1h'] = self.price_analyzer._fetch_ohlcv(token_symbol, '1h', limit=250) or []
+                ohlcv_by_tf['4h'] = ohlcv_4h if 'ohlcv_4h' in dir() and ohlcv_4h else self.price_analyzer._fetch_ohlcv(token_symbol, '4h', limit=250) or []
+                ohlcv_by_tf['1d'] = self.price_analyzer._fetch_ohlcv(token_symbol, '1d', limit=250) or []
+
+                if current_close and any(len(tf_data) >= 200 for tf_data in ohlcv_by_tf.values()):
+                    # Convert raw OHLCV to dict format
+                    ohlcv_dicts_by_tf = {}
+                    for tf, ohlcv_raw in ohlcv_by_tf.items():
+                        if ohlcv_raw:
+                            ohlcv_dicts_by_tf[tf] = [{'open': c[1], 'high': c[2], 'low': c[3], 'close': c[4], 'volume': c[5]} for c in ohlcv_raw]
+
+                    mtf_ema_avg_data = calculate_mtf_ema_average(ohlcv_dicts_by_tf, current_close, weighting='htf_weighted')
+                    if mtf_ema_avg_data.get('mtf_ema_avg'):
+                        logger.info(f"   [MTF-EMA-AVG] Avg: ${mtf_ema_avg_data['mtf_ema_avg']:.6f} | "
+                                   f"Trend: {mtf_ema_avg_data['trend_bias']} | "
+                                   f"Alignment: {mtf_ema_avg_data['ema_alignment']} | "
+                                   f"Signal: {mtf_ema_avg_data['signal']}")
+            except ImportError:
+                logger.debug("   MTF EMA Average module not available")
+            except Exception as e:
+                logger.debug(f"   MTF EMA Average calculation failed: {e}")
+
             return {
                 # Order Book
                 "order_book_imbalance": round(imbalance, 3),
@@ -2061,7 +2111,13 @@ class TADataAggregator:
                 "tvl_score_adjustment": tvl_score_adj,
 
                 # Session 265: TVEM Band (Learning 058)
-                "tvem_data": tvem_data if tvem_data.get('tvem_mid') else None
+                "tvem_data": tvem_data if tvem_data.get('tvem_mid') else None,
+
+                # Session 302: MP-VWAP (Learning 085)
+                "mp_vwap_data": mp_vwap_data if mp_vwap_data.get('poc') else None,
+
+                # Session 302: MTF EMA Average (Learning 086)
+                "mtf_ema_avg_data": mtf_ema_avg_data if mtf_ema_avg_data.get('mtf_ema_avg') else None
             }
 
         except Exception as e:

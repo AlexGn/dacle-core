@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
-Automated Confluence Counter - Phase 1 Session 268 / Phase C Session 280 / Session 278 LONG
+Automated Confluence Counter - Phase 1 Session 268 / Phase C Session 280 / Session 278 LONG / Session 302
 
 Counts technical confluence factors from multiple indicators to classify
 setup quality as SINGLE/DOUBLE/TRIPLE/QUAD.
 
 Purpose:
     Replace hardcoded confluence_count=4 default with automated scoring
-    based on actual technical alignment across 11 confluence types.
+    based on actual technical alignment across 13 confluence types.
 
 Integration:
     - Pipeline: integrated_pipeline.py (replaces hardcoded count)
@@ -27,8 +27,14 @@ Session 278 LONG: Added direction-aware confluence counting
     - For LONG: SUPPORT_RETEST is positive confluence (vs RESISTANCE_RETEST for SHORT)
     - For LONG: Funding rate uses inverted thresholds (L077)
 
-Author: Claude Code (Session 268 Phase 1, Session 280 Phase C, Session 278 LONG)
-Date: 2026-01-01, Updated: 2026-01-04
+Session 302: David's MP-VWAP and MTF EMA Average indicators
+    - Added MP_VWAP_ZONE (L085): Market Profile + VWAP confluence zones
+    - Added MTF_EMA_AVG (L086): Multi-Timeframe EMA Average alignment
+    - For SHORT: STRONG_BEARISH zone, ALL_BEARISH EMA = confluence
+    - For LONG: STRONG_BULLISH zone, ALL_BULLISH EMA = confluence
+
+Author: Claude Code (Session 268, 280, 278, 302)
+Date: 2026-01-01, Updated: 2026-01-08
 """
 
 import logging
@@ -68,6 +74,9 @@ class ConfluenceType(Enum):
     CHART_PATTERN_STRONG = "chart_pattern_strong"  # L032: 3-candle patterns (Evening/Morning Star)
     CHART_PATTERN_MODERATE = "chart_pattern_moderate"  # 2-candle patterns (Engulfing)
     CHART_PATTERN_WEAK = "chart_pattern_weak"  # 1-candle patterns (Doji, Shooting Star)
+    # Session 302: David's indicators (L085, L086)
+    MP_VWAP_ZONE = "mp_vwap_zone"  # L085: Price at POC/VAH/VAL confluence zone
+    MTF_EMA_AVG = "mtf_ema_avg"  # L086: MTF EMA Average alignment
 
 
 @dataclass
@@ -94,7 +103,7 @@ class ConfluenceCounter:
     """
     Automated confluence scoring from TA features.
 
-    Counts active confluence factors across 9 technical categories:
+    Counts active confluence factors across 13 technical categories:
     1. EMA Alignment (12+24 EMA bearish/bullish)
     2. EMA 200 Position (above/below 200 EMA)
     3. QVWAP Retest (price within 1% of QVWAP)
@@ -104,6 +113,8 @@ class ConfluenceCounter:
     7. Volume Spike (>1.5x average volume)
     8. Funding Rate (extreme negative for SHORT)
     9. TVEM Band (bearish signal from TVEM indicator)
+    10. MP-VWAP Zone (L085 - Market Profile + VWAP confluence)
+    11. MTF EMA Average (L086 - Multi-Timeframe smoothed EMA)
 
     Example:
         counter = ConfluenceCounter()
@@ -138,6 +149,8 @@ class ConfluenceCounter:
         ohlcv_data: Optional[List[List]] = None,
         timeframe: str = "4h",
         direction: str = "SHORT",
+        mp_vwap_data: Optional[Dict] = None,  # Session 302: L085 MP-VWAP
+        mtf_ema_avg_data: Optional[Dict] = None,  # Session 302: L086 MTF EMA Average
     ) -> ConfluenceResult:
         """
         Count active confluence factors.
@@ -289,7 +302,59 @@ class ConfluenceCounter:
                     factors.append(ConfluenceType.TVEM_BAND)
                     descriptions.append("TVEM band bearish signal")
 
-        # 10. Session 280 F5: Sherlock Chart Pattern Detection
+        # 10. Session 302: MP-VWAP Zone (L085)
+        # For SHORT: STRONG_BEARISH or SHORT_ZONE = good (price at VAH resistance)
+        # For LONG: STRONG_BULLISH or LONG_ZONE = good (price at VAL support)
+        if mp_vwap_data:
+            mp_zone = mp_vwap_data.get("zone", "UNKNOWN")
+            mp_signal = mp_vwap_data.get("signal", "NEUTRAL")
+            mp_confluence = mp_vwap_data.get("confluence", False)
+            mp_confluence_strength = mp_vwap_data.get("confluence_strength", "NONE")
+
+            if is_long:
+                # LONG: Price at VAL support or STRONG_BULLISH zone
+                if mp_signal == "LONG_ZONE" or mp_zone == "STRONG_BULLISH":
+                    factors.append(ConfluenceType.MP_VWAP_ZONE)
+                    if mp_confluence and mp_confluence_strength == "STRONG":
+                        descriptions.append(f"📊 MP-VWAP: {mp_zone} zone + VWAP/POC confluence")
+                    else:
+                        descriptions.append(f"📊 MP-VWAP: {mp_zone} zone (VAL support)")
+            else:
+                # SHORT: Price at VAH resistance or STRONG_BEARISH zone
+                if mp_signal == "SHORT_ZONE" or mp_zone == "STRONG_BEARISH":
+                    factors.append(ConfluenceType.MP_VWAP_ZONE)
+                    if mp_confluence and mp_confluence_strength == "STRONG":
+                        descriptions.append(f"📊 MP-VWAP: {mp_zone} zone + VWAP/POC confluence")
+                    else:
+                        descriptions.append(f"📊 MP-VWAP: {mp_zone} zone (VAH resistance)")
+
+        # 11. Session 302: MTF EMA Average (L086)
+        # For SHORT: ALL_BEARISH alignment = strong bearish trend confirmation
+        # For LONG: ALL_BULLISH alignment = strong recovery confirmation
+        if mtf_ema_avg_data:
+            ema_alignment = mtf_ema_avg_data.get("ema_alignment", "UNKNOWN")
+            ema_signal = mtf_ema_avg_data.get("signal", "NO_BIAS")
+            trend_bias = mtf_ema_avg_data.get("trend_bias", "NEUTRAL")
+            distance_pct = mtf_ema_avg_data.get("distance_pct", 0)
+
+            if is_long:
+                # LONG: ALL_BULLISH alignment or LONG_BIAS signal
+                if ema_alignment == "ALL_BULLISH" or ema_signal == "LONG_BIAS":
+                    factors.append(ConfluenceType.MTF_EMA_AVG)
+                    if trend_bias == "STRONG_BULLISH":
+                        descriptions.append(f"📈 MTF EMA Avg: {trend_bias} ({distance_pct:+.1f}% above)")
+                    else:
+                        descriptions.append(f"📈 MTF EMA Avg: {ema_alignment} (recovery trend)")
+            else:
+                # SHORT: ALL_BEARISH alignment or SHORT_BIAS signal
+                if ema_alignment == "ALL_BEARISH" or ema_signal == "SHORT_BIAS":
+                    factors.append(ConfluenceType.MTF_EMA_AVG)
+                    if trend_bias == "STRONG_BEARISH":
+                        descriptions.append(f"📉 MTF EMA Avg: {trend_bias} ({distance_pct:+.1f}% below)")
+                    else:
+                        descriptions.append(f"📉 MTF EMA Avg: {ema_alignment} (downtrend)")
+
+        # 12. Session 280 F5: Sherlock Chart Pattern Detection
         # Uses CandlestickDetector for automatic pattern recognition
         # Session 278: Now direction-aware (bullish patterns for LONG)
         if ohlcv_data and CANDLESTICK_DETECTOR_AVAILABLE:
@@ -481,6 +546,110 @@ class ConfluenceCounter:
             logger.warning(f"[PATTERN] Error detecting Sherlock patterns: {e}")
 
         return detected
+
+
+# =============================================================================
+# L059: Breakout Confluence Convenience Function
+# =============================================================================
+
+
+def calculate_breakout_confluence(
+    trendline_break: bool,
+    resistance_break: bool,
+    above_12_ema: bool,
+    above_qvwap: bool,
+    above_24_ema: bool = False,
+    fib_confluence: bool = False,
+) -> Dict:
+    """
+    L059: Calculate overall breakout confluence score.
+
+    Per Sherlock's methodology, breakout signals are rated by confluence:
+    - SINGLE: 1 component (max rating 6/10)
+    - DOUBLE: 2 components (max rating 7/10)
+    - TRIPLE: 3 components (max rating 8/10)
+    - QUAD: 4+ components (max rating 9-10/10)
+
+    Args:
+        trendline_break: Price broke above descending trendline (LONG) or below ascending (SHORT)
+        resistance_break: Price broke above resistance (LONG) or below support (SHORT)
+        above_12_ema: Price above 12 EMA (LONG) or below (SHORT)
+        above_qvwap: Price above Quarterly VWAP
+        above_24_ema: Optional - Price above 24 EMA (additional confluence)
+        fib_confluence: Optional - Price at key Fib level (0.618, 0.65, 0.786)
+
+    Returns:
+        Dict with:
+            confluence_count: int (1-6)
+            confluence_level: str ("SINGLE", "DOUBLE", "TRIPLE", "QUAD")
+            rating_max: int (max Sherlock rating this confluence supports)
+            components: List[str] (active components)
+            conviction_modifier: float (±0.5 to ±1.0)
+
+    Example:
+        result = calculate_breakout_confluence(
+            trendline_break=True,
+            resistance_break=True,
+            above_12_ema=True,
+            above_qvwap=True
+        )
+        # result = {
+        #     "confluence_count": 4,
+        #     "confluence_level": "QUAD",
+        #     "rating_max": 10,
+        #     "components": ["TRENDLINE", "RESISTANCE", "12_EMA", "QVWAP"],
+        #     "conviction_modifier": +1.0
+        # }
+    """
+    components = []
+
+    # Core 4 components per L059
+    if trendline_break:
+        components.append("TRENDLINE")
+    if resistance_break:
+        components.append("RESISTANCE")
+    if above_12_ema:
+        components.append("12_EMA")
+    if above_qvwap:
+        components.append("QVWAP")
+
+    # Optional additional confluence
+    if above_24_ema:
+        components.append("24_EMA")
+    if fib_confluence:
+        components.append("FIB_LEVEL")
+
+    count = len(components)
+
+    # Level mapping (capped at QUAD even if 5-6 components)
+    if count >= 4:
+        level = "QUAD"
+        max_rating = 10
+        modifier = +1.0
+    elif count == 3:
+        level = "TRIPLE"
+        max_rating = 8
+        modifier = +0.5
+    elif count == 2:
+        level = "DOUBLE"
+        max_rating = 7
+        modifier = 0.0
+    elif count == 1:
+        level = "SINGLE"
+        max_rating = 6
+        modifier = -0.5
+    else:
+        level = "NONE"
+        max_rating = 5
+        modifier = -1.0
+
+    return {
+        "confluence_count": count,
+        "confluence_level": level,
+        "rating_max": max_rating,
+        "components": components,
+        "conviction_modifier": modifier,
+    }
 
 
 # Example usage

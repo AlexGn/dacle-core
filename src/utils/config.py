@@ -7,11 +7,159 @@ This avoids import-time side effects and makes the config loading predictable.
 """
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from dotenv import load_dotenv
+
+
+# =============================================================================
+# Timeout Configuration (Session 302)
+# =============================================================================
+# Centralized timeout values to avoid hardcoding throughout the codebase.
+# Grouped by category for easier management and consistent behavior.
+# =============================================================================
+
+@dataclass
+class TimeoutConfig:
+    """
+    Centralized timeout configuration for all external calls.
+
+    Session 302: Created to eliminate ~150+ hardcoded timeout values.
+
+    Categories:
+    - API calls (external services like CoinGecko, CryptoRank, Binance)
+    - LLM calls (OpenAI, Perplexity - longer due to inference time)
+    - Subprocess calls (playbook generation, analysis pipelines)
+    - Redis/cache calls (fast, local operations)
+    - Telegram/webhook calls (notification delivery)
+    """
+
+    # === API Timeouts (External Services) ===
+    # Standard API calls - most common, used for price/market data
+    api_standard: float = 10.0  # CoinGecko, Binance, most REST APIs
+    api_fast: float = 5.0       # Quick lookups, health checks
+    api_extended: float = 15.0  # Slower APIs, search endpoints
+    api_slow: float = 30.0      # Heavy operations (backfill, bulk fetch)
+
+    # === LLM/AI Timeouts ===
+    llm_standard: float = 60.0  # OpenAI, Perplexity inference
+    llm_fast: float = 30.0      # Simple completions
+    llm_extended: float = 120.0 # Complex analysis, long prompts
+
+    # === Subprocess/Pipeline Timeouts ===
+    subprocess_fast: float = 30.0    # Quick scripts (validation)
+    subprocess_standard: float = 60.0  # Analysis scripts
+    subprocess_extended: float = 120.0 # Watchtower, batch operations
+    subprocess_playbook: float = 180.0 # Playbook generation (can take ~80s)
+    subprocess_pipeline: float = 300.0 # Full pipeline (5 min max)
+
+    # === Cache/Redis Timeouts ===
+    redis_connect: float = 2.0  # Connection timeout
+    redis_socket: float = 5.0   # Socket operations
+    cache_fast: float = 1.0     # In-memory cache checks
+
+    # === Notification/Webhook Timeouts ===
+    telegram: float = 10.0      # Telegram API calls
+    webhook: float = 30.0       # Webhook delivery (keepalive 30s)
+    sentry: float = 2.0         # Error reporting (non-blocking)
+
+    # === Health Check Timeouts ===
+    health_check: float = 5.0   # Service health checks
+    health_redis: float = 2.0   # Redis health check
+
+    @classmethod
+    def from_env(cls) -> "TimeoutConfig":
+        """
+        Load timeout config with optional environment variable overrides.
+
+        Environment variables follow pattern: TIMEOUT_{CATEGORY}_{TYPE}
+        Example: TIMEOUT_API_STANDARD=15 (overrides api_standard to 15s)
+        """
+        def get_timeout(name: str, default: float) -> float:
+            env_key = f"TIMEOUT_{name.upper()}"
+            env_val = os.getenv(env_key)
+            if env_val:
+                try:
+                    return float(env_val)
+                except ValueError:
+                    pass
+            return default
+
+        return cls(
+            api_standard=get_timeout("API_STANDARD", 10.0),
+            api_fast=get_timeout("API_FAST", 5.0),
+            api_extended=get_timeout("API_EXTENDED", 15.0),
+            api_slow=get_timeout("API_SLOW", 30.0),
+            llm_standard=get_timeout("LLM_STANDARD", 60.0),
+            llm_fast=get_timeout("LLM_FAST", 30.0),
+            llm_extended=get_timeout("LLM_EXTENDED", 120.0),
+            subprocess_fast=get_timeout("SUBPROCESS_FAST", 30.0),
+            subprocess_standard=get_timeout("SUBPROCESS_STANDARD", 60.0),
+            subprocess_extended=get_timeout("SUBPROCESS_EXTENDED", 120.0),
+            subprocess_playbook=get_timeout("SUBPROCESS_PLAYBOOK", 180.0),
+            subprocess_pipeline=get_timeout("SUBPROCESS_PIPELINE", 300.0),
+            redis_connect=get_timeout("REDIS_CONNECT", 2.0),
+            redis_socket=get_timeout("REDIS_SOCKET", 5.0),
+            cache_fast=get_timeout("CACHE_FAST", 1.0),
+            telegram=get_timeout("TELEGRAM", 10.0),
+            webhook=get_timeout("WEBHOOK", 30.0),
+            sentry=get_timeout("SENTRY", 2.0),
+            health_check=get_timeout("HEALTH_CHECK", 5.0),
+            health_redis=get_timeout("HEALTH_REDIS", 2.0),
+        )
+
+
+# Singleton timeout config (available without full app config load)
+_timeout_config: Optional[TimeoutConfig] = None
+
+
+def get_timeout_config() -> TimeoutConfig:
+    """
+    Get timeout configuration singleton.
+
+    Unlike other configs, TimeoutConfig can be used without calling load_config()
+    first - it will use defaults if not explicitly loaded.
+    """
+    global _timeout_config
+    if _timeout_config is None:
+        _timeout_config = TimeoutConfig.from_env()
+    return _timeout_config
+
+
+# Convenience aliases for common timeout values
+def timeout_api(variant: str = "standard") -> float:
+    """Get API timeout by variant: 'fast', 'standard', 'extended', 'slow'"""
+    cfg = get_timeout_config()
+    return {
+        "fast": cfg.api_fast,
+        "standard": cfg.api_standard,
+        "extended": cfg.api_extended,
+        "slow": cfg.api_slow,
+    }.get(variant, cfg.api_standard)
+
+
+def timeout_llm(variant: str = "standard") -> float:
+    """Get LLM timeout by variant: 'fast', 'standard', 'extended'"""
+    cfg = get_timeout_config()
+    return {
+        "fast": cfg.llm_fast,
+        "standard": cfg.llm_standard,
+        "extended": cfg.llm_extended,
+    }.get(variant, cfg.llm_standard)
+
+
+def timeout_subprocess(variant: str = "standard") -> float:
+    """Get subprocess timeout by variant: 'fast', 'standard', 'extended', 'playbook', 'pipeline'"""
+    cfg = get_timeout_config()
+    return {
+        "fast": cfg.subprocess_fast,
+        "standard": cfg.subprocess_standard,
+        "extended": cfg.subprocess_extended,
+        "playbook": cfg.subprocess_playbook,
+        "pipeline": cfg.subprocess_pipeline,
+    }.get(variant, cfg.subprocess_standard)
 
 
 @dataclass
