@@ -598,30 +598,48 @@ class IndicesTracker:
 
     def fetch_realtime_macro_indices(self) -> Dict:
         """
-        Fetch USDT.D and TOTAL3 real-time data from TradingView global scanner.
+        Fetch USDT.D and all TOTAL indices real-time data from TradingView global scanner.
+
+        Session 302: Updated to fetch TOTAL1, TOTAL2, TOTAL3 independently per David's feedback.
+        Each TOTAL is displayed separately so David can see which market cap tier is moving.
+        Combined signal is shown as bonus indicator when all 3 align.
 
         These are critical macro indices for TGE short timing:
         - USDT.D rising = risk-off = GOOD for shorts
-        - TOTAL3 falling = alt selling pressure = GOOD for shorts
+        - TOTALs falling = alt selling pressure = GOOD for shorts
+
+        TOTAL definitions (Sherlock methodology):
+        - TOTAL1 = All coins (Sherlock's top 1-100 focus)
+        - TOTAL2 = Excl BTC (Sherlock's top 200 focus)
+        - TOTAL3 = Excl BTC+ETH (smaller caps)
 
         Uses TradingView global scanner (not crypto scanner) for CRYPTOCAP tickers.
 
         Returns:
-            Dict with usdt_d and total3 real-time data including 4H indicators
+            Dict with usdt_d and total1/total2/total3 real-time data including 4H indicators
         """
         result = {
             'usdt_d': None,
+            'total1': None,  # Session 302: Added TOTAL1
+            'total2': None,  # Session 302: Added TOTAL2
             'total3': None,
+            'totals_combined': None,  # Session 302: Combined signal when all align
             'source': None,
             'error': None
         }
 
         try:
+            # Session 302: Fetch all 4 indices (USDT.D + 3 TOTALs)
             response = requests.post(
                 'https://scanner.tradingview.com/global/scan',
                 headers={'Content-Type': 'application/json'},
                 json={
-                    'symbols': {'tickers': ['CRYPTOCAP:USDT.D', 'CRYPTOCAP:TOTAL3']},
+                    'symbols': {'tickers': [
+                        'CRYPTOCAP:USDT.D',
+                        'CRYPTOCAP:TOTAL',   # TOTAL1 - all coins
+                        'CRYPTOCAP:TOTAL2',  # TOTAL2 - excl BTC
+                        'CRYPTOCAP:TOTAL3'   # TOTAL3 - excl BTC+ETH
+                    ]},
                     'columns': [
                         'close', 'change',  # Daily
                         'change|240', 'RSI|240', 'Recommend.All|240',  # 4H
@@ -633,9 +651,11 @@ class IndicesTracker:
             response.raise_for_status()
             data = response.json()
 
-            if 'data' in data and len(data['data']) >= 2:
+            if 'data' in data and len(data['data']) >= 4:
                 usdt_raw = data['data'][0].get('d', [])
-                total3_raw = data['data'][1].get('d', [])
+                total1_raw = data['data'][1].get('d', [])
+                total2_raw = data['data'][2].get('d', [])
+                total3_raw = data['data'][3].get('d', [])
 
                 # Parse USDT.D data
                 if len(usdt_raw) >= 7:
@@ -662,37 +682,89 @@ class IndicesTracker:
                         'signal_for_short': signal
                     }
 
-                # Parse TOTAL3 data
-                if len(total3_raw) >= 7:
-                    total3_value = total3_raw[0]
-                    total3_change = total3_raw[1]
-                    total3_4h_change = total3_raw[2]
-                    total3_4h_rsi = total3_raw[3]
-                    total3_4h_rec = total3_raw[4]
+                # Helper function to parse TOTAL data
+                def parse_total_data(raw_data, name: str, is_trillions: bool = False) -> dict:
+                    """Parse TOTAL index data. For shorts: falling is GOOD."""
+                    if len(raw_data) < 7:
+                        return None
 
-                    # For shorts: TOTAL3 falling is GOOD (alt selling pressure)
-                    if total3_4h_change and total3_4h_change < -0.5:
+                    value = raw_data[0]
+                    change = raw_data[1]
+                    change_4h = raw_data[2]
+                    rsi_4h = raw_data[3]
+                    rec_4h = raw_data[4]
+
+                    # For shorts: TOTAL falling is GOOD (alt selling pressure)
+                    if change_4h and change_4h < -0.5:
                         signal = 'FAVORABLE'  # Falling = alt sell pressure = good for shorts
-                    elif total3_4h_change and total3_4h_change > 0.5:
+                    elif change_4h and change_4h > 0.5:
                         signal = 'HEADWIND'  # Rising = alt buying = bad for shorts
                     else:
                         signal = 'NEUTRAL'
 
-                    result['total3'] = {
-                        'value': total3_value,  # Raw value in billions
-                        'value_formatted': f"${total3_value/1e9:.0f}B" if total3_value else None,
-                        'change_24h': round(total3_change, 2) if total3_change else None,
-                        'change_4h': round(total3_4h_change, 2) if total3_4h_change else None,
-                        'rsi_4h': round(total3_4h_rsi, 1) if total3_4h_rsi else None,
-                        'recommendation_4h': self._interpret_recommendation(total3_4h_rec),
+                    # Format value (TOTAL1 is in trillions, others in billions)
+                    if is_trillions and value:
+                        value_formatted = f"${value/1e12:.2f}T"
+                    elif value:
+                        value_formatted = f"${value/1e9:.0f}B"
+                    else:
+                        value_formatted = None
+
+                    return {
+                        'value': value,
+                        'value_formatted': value_formatted,
+                        'change_24h': round(change, 2) if change else None,
+                        'change_4h': round(change_4h, 2) if change_4h else None,
+                        'rsi_4h': round(rsi_4h, 1) if rsi_4h else None,
+                        'recommendation_4h': self._interpret_recommendation(rec_4h),
                         'signal_for_short': signal
+                    }
+
+                # Parse all TOTALs
+                result['total1'] = parse_total_data(total1_raw, 'TOTAL1', is_trillions=True)
+                result['total2'] = parse_total_data(total2_raw, 'TOTAL2', is_trillions=True)
+                result['total3'] = parse_total_data(total3_raw, 'TOTAL3', is_trillions=False)
+
+                # Session 302: Calculate combined TOTALs signal (bonus indicator)
+                total_signals = []
+                if result['total1']:
+                    total_signals.append(result['total1']['signal_for_short'])
+                if result['total2']:
+                    total_signals.append(result['total2']['signal_for_short'])
+                if result['total3']:
+                    total_signals.append(result['total3']['signal_for_short'])
+
+                if total_signals:
+                    favorable_count = total_signals.count('FAVORABLE')
+                    headwind_count = total_signals.count('HEADWIND')
+
+                    if favorable_count == 3:
+                        combined_signal = 'ALL_FAVORABLE'  # Strong confluence!
+                    elif headwind_count == 3:
+                        combined_signal = 'ALL_HEADWIND'  # Strong risk
+                    elif favorable_count >= 2:
+                        combined_signal = 'MOSTLY_FAVORABLE'
+                    elif headwind_count >= 2:
+                        combined_signal = 'MOSTLY_HEADWIND'
+                    else:
+                        combined_signal = 'MIXED'
+
+                    result['totals_combined'] = {
+                        'signal': combined_signal,
+                        'favorable_count': favorable_count,
+                        'headwind_count': headwind_count,
+                        'total_count': len(total_signals)
                     }
 
                 result['source'] = 'TradingView (live)'
 
+                # Log all indices
                 usdt_val = result['usdt_d']['value'] if result['usdt_d'] else 'N/A'
-                total3_val = result['total3']['value_formatted'] if result['total3'] else 'N/A'
-                logger.info(f"   ✅ Macro indices: USDT.D={usdt_val}%, TOTAL3={total3_val}")
+                t1_val = result['total1']['value_formatted'] if result['total1'] else 'N/A'
+                t2_val = result['total2']['value_formatted'] if result['total2'] else 'N/A'
+                t3_val = result['total3']['value_formatted'] if result['total3'] else 'N/A'
+                combined = result['totals_combined']['signal'] if result['totals_combined'] else 'N/A'
+                logger.info(f"   ✅ Macro indices: USDT.D={usdt_val}%, TOTAL1={t1_val}, TOTAL2={t2_val}, TOTAL3={t3_val} (Combined: {combined})")
 
         except Exception as e:
             result['error'] = str(e)
