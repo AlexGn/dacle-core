@@ -544,8 +544,12 @@ class EntryChecklistValidator:
         """
         Check if macro indices support the trade direction.
 
-        For SHORT: USDT.D rising (risk-off) + TOTAL3 falling
-        For LONG: USDT.D falling (risk-on) + TOTAL3 rising
+        Session 302: Added TOTAL1 and TOTAL2 per Sherlock methodology
+        - Sherlock focuses on top 1-100 (TOTAL1) and top 200 (TOTAL2) coins
+        - More weight given to TOTAL1/TOTAL2 than TOTAL3 for larger cap tokens
+
+        For SHORT: USDT.D rising (risk-off) + TOTAL indices falling
+        For LONG: USDT.D falling (risk-on) + TOTAL indices rising
         """
         if indices_data is None:
             # Try to fetch from IndicesTracker if available
@@ -559,17 +563,28 @@ class EntryChecklistValidator:
 
         try:
             usdt_d_trend = indices_data.get("usdt_d_trend", "neutral")
-            total3_trend = indices_data.get("total3_trend", "neutral")
+            # Session 302: Check all TOTAL indices
+            total1_trend = indices_data.get("total1_trend", "neutral")  # All coins
+            total2_trend = indices_data.get("total2_trend", "neutral")  # Excl BTC
+            total3_trend = indices_data.get("total3_trend", "neutral")  # Excl BTC+ETH
 
             if direction == "SHORT":
-                # USDT.D rising + TOTAL3 falling = good for shorts
+                # USDT.D rising + TOTAL indices falling = good for shorts
                 usdt_aligned = usdt_d_trend in ["up", "rising", "bullish"]
+                # Session 302: Check all three TOTAL indices - need majority alignment
+                total1_aligned = total1_trend in ["down", "falling", "bearish"]
+                total2_aligned = total2_trend in ["down", "falling", "bearish"]
                 total3_aligned = total3_trend in ["down", "falling", "bearish"]
-                return usdt_aligned or total3_aligned
+                totals_aligned = sum([total1_aligned, total2_aligned, total3_aligned])
+                return usdt_aligned or totals_aligned >= 2  # At least 2/3 TOTAL indices aligned
             else:  # LONG
                 usdt_aligned = usdt_d_trend in ["down", "falling", "bearish"]
+                # Session 302: Check all three TOTAL indices
+                total1_aligned = total1_trend in ["up", "rising", "bullish"]
+                total2_aligned = total2_trend in ["up", "rising", "bullish"]
                 total3_aligned = total3_trend in ["up", "rising", "bullish"]
-                return usdt_aligned or total3_aligned
+                totals_aligned = sum([total1_aligned, total2_aligned, total3_aligned])
+                return usdt_aligned or totals_aligned >= 2
 
         except Exception as e:
             logger.warning(f"Index confluence check error: {e}")

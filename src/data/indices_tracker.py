@@ -702,25 +702,33 @@ class IndicesTracker:
 
     def fetch_usdt_d_total3_key_levels(self) -> Dict:
         """
-        Fetch USDT.D and TOTAL3 key S/R levels from TradingView.
+        Fetch USDT.D, TOTAL1, TOTAL2, and TOTAL3 key S/R levels from TradingView.
 
         SESSION 93+: David's Feedback (POWER 8 Dec 2025)
         "Il faudrait plutôt se baser sur des key levels. Comment se préparer pour les prochains coins?"
 
-        Key insight: David needs S/R levels for USDT.D and TOTAL3 to time entries,
+        SESSION 302: Added TOTAL1 and TOTAL2 per Sherlock methodology
+        - Sherlock focuses on top 1-100 (TOTAL1) and top 200 (TOTAL2) coins
+        - TOTAL1 = Total Crypto Market Cap (all coins)
+        - TOTAL2 = Total Crypto Market Cap (excl BTC)
+        - TOTAL3 = Total Crypto Market Cap (excl BTC+ETH)
+
+        Key insight: David needs S/R levels for USDT.D and TOTAL indices to time entries,
         not just current values. These indices dictate altcoin direction.
 
         For TGE Shorts:
         - USDT.D near support = likely to bounce up = FAVORABLE for shorts (risk-off)
         - USDT.D near resistance = likely to reject down = HEADWIND for shorts (risk-on)
-        - TOTAL3 near resistance = likely to reject = FAVORABLE for shorts
-        - TOTAL3 near support = likely to bounce = HEADWIND for shorts
+        - TOTAL indices near resistance = likely to reject = FAVORABLE for shorts
+        - TOTAL indices near support = likely to bounce = HEADWIND for shorts
 
         Returns:
-            Dict with USDT.D and TOTAL3 S/R levels for David's manual checks
+            Dict with USDT.D, TOTAL1, TOTAL2, TOTAL3 S/R levels for David's manual checks
         """
         result = {
             'usdt_d': None,
+            'total1': None,  # Session 302: Added TOTAL1 (all coins)
+            'total2': None,  # Session 302: Added TOTAL2 (excl BTC)
             'total3': None,
             'timing_guidance': None,
             'source': None,
@@ -728,14 +736,20 @@ class IndicesTracker:
         }
 
         try:
+            # Session 302: Fetch USDT.D, TOTAL1, TOTAL2, TOTAL3 (4 indices)
             response = requests.post(
                 'https://scanner.tradingview.com/global/scan',
                 headers={'Content-Type': 'application/json'},
                 json={
-                    'symbols': {'tickers': ['CRYPTOCAP:USDT.D', 'CRYPTOCAP:TOTAL3']},
+                    'symbols': {'tickers': [
+                        'CRYPTOCAP:USDT.D',
+                        'CRYPTOCAP:TOTAL',    # TOTAL1 - all coins
+                        'CRYPTOCAP:TOTAL2',   # TOTAL2 - excl BTC
+                        'CRYPTOCAP:TOTAL3'    # TOTAL3 - excl BTC+ETH
+                    ]},
                     'columns': [
                         'close',
-                        # Daily pivots for USDT.D and TOTAL3
+                        # Daily pivots for all indices
                         'Pivot.M.Classic.S3', 'Pivot.M.Classic.S2', 'Pivot.M.Classic.S1',
                         'Pivot.M.Classic.Middle',
                         'Pivot.M.Classic.R1', 'Pivot.M.Classic.R2', 'Pivot.M.Classic.R3',
@@ -752,9 +766,11 @@ class IndicesTracker:
             response.raise_for_status()
             data = response.json()
 
-            if 'data' in data and len(data['data']) >= 2:
+            if 'data' in data and len(data['data']) >= 4:
                 usdt_raw = data['data'][0].get('d', [])
-                total3_raw = data['data'][1].get('d', [])
+                total1_raw = data['data'][1].get('d', [])  # Session 302: TOTAL1
+                total2_raw = data['data'][2].get('d', [])  # Session 302: TOTAL2
+                total3_raw = data['data'][3].get('d', [])
 
                 # Parse USDT.D S/R levels
                 if len(usdt_raw) >= 15:
@@ -911,22 +927,184 @@ class IndicesTracker:
                         'guidance': guidance
                     }
 
-                # Overall timing guidance
+                # Session 302: Parse TOTAL1 S/R levels (all coins)
+                if len(total1_raw) >= 15:
+                    close = total1_raw[0]
+                    s3, s2, s1 = total1_raw[1], total1_raw[2], total1_raw[3]
+                    pivot = total1_raw[4]
+                    r1, r2, r3 = total1_raw[5], total1_raw[6], total1_raw[7]
+                    ema20, ema50, ema100 = total1_raw[8], total1_raw[9], total1_raw[10]
+                    change = total1_raw[11]
+                    rsi = total1_raw[12]
+                    high, low = total1_raw[13], total1_raw[14]
+
+                    # Find nearest level for TOTAL1
+                    levels = {'R3': r3, 'R2': r2, 'R1': r1, 'Pivot': pivot, 'S1': s1, 'S2': s2, 'S3': s3}
+                    nearest_level = None
+                    nearest_dist_pct = float('inf')
+                    for level_name, level_value in levels.items():
+                        if level_value and close:
+                            dist_pct = abs((close - level_value) / close) * 100
+                            if dist_pct < nearest_dist_pct:
+                                nearest_dist_pct = dist_pct
+                                nearest_level = level_name
+
+                    # TOTAL1 interpretation for shorts (same logic as TOTAL3)
+                    near_support = any(
+                        abs((close - s) / close) * 100 < 2.0
+                        for s in [s1, s2, s3] if s and close
+                    )
+                    near_resistance = any(
+                        abs((close - r) / close) * 100 < 2.0
+                        for r in [r1, r2, r3] if r and close
+                    )
+
+                    if near_resistance:
+                        signal = 'FAVORABLE'
+                        guidance = 'TOTAL1 at resistance - likely to reject DOWN - GOOD for shorts'
+                    elif near_support:
+                        signal = 'HEADWIND'
+                        guidance = 'TOTAL1 at support - likely to bounce UP - BAD for shorts'
+                    elif change and change < 0:
+                        signal = 'FAVORABLE'
+                        guidance = 'TOTAL1 trending DOWN (market selling) - shorts have tailwind'
+                    elif change and change > 0:
+                        signal = 'HEADWIND'
+                        guidance = 'TOTAL1 trending UP (market buying) - shorts face headwind'
+                    else:
+                        signal = 'NEUTRAL'
+                        guidance = 'TOTAL1 at pivot - could go either way'
+
+                    result['total1'] = {
+                        'current': close,
+                        'current_formatted': f"${close/1e12:.2f}T" if close else None,
+                        'daily_high': high,
+                        'daily_low': low,
+                        'daily_high_formatted': f"${high/1e12:.2f}T" if high else None,
+                        'daily_low_formatted': f"${low/1e12:.2f}T" if low else None,
+                        'daily_change_pct': round(change, 2) if change else None,
+                        'rsi': round(rsi, 1) if rsi else None,
+                        'pivots': {
+                            'S3': round(s3/1e12, 2) if s3 else None,
+                            'S2': round(s2/1e12, 2) if s2 else None,
+                            'S1': round(s1/1e12, 2) if s1 else None,
+                            'Pivot': round(pivot/1e12, 2) if pivot else None,
+                            'R1': round(r1/1e12, 2) if r1 else None,
+                            'R2': round(r2/1e12, 2) if r2 else None,
+                            'R3': round(r3/1e12, 2) if r3 else None,
+                        },
+                        'emas': {
+                            'EMA20': round(ema20/1e12, 2) if ema20 else None,
+                            'EMA50': round(ema50/1e12, 2) if ema50 else None,
+                            'EMA100': round(ema100/1e12, 2) if ema100 else None,
+                        },
+                        'nearest_level': nearest_level,
+                        'nearest_dist_pct': round(nearest_dist_pct, 2) if nearest_dist_pct != float('inf') else None,
+                        'signal_for_short': signal,
+                        'guidance': guidance
+                    }
+
+                # Session 302: Parse TOTAL2 S/R levels (excl BTC)
+                if len(total2_raw) >= 15:
+                    close = total2_raw[0]
+                    s3, s2, s1 = total2_raw[1], total2_raw[2], total2_raw[3]
+                    pivot = total2_raw[4]
+                    r1, r2, r3 = total2_raw[5], total2_raw[6], total2_raw[7]
+                    ema20, ema50, ema100 = total2_raw[8], total2_raw[9], total2_raw[10]
+                    change = total2_raw[11]
+                    rsi = total2_raw[12]
+                    high, low = total2_raw[13], total2_raw[14]
+
+                    # Find nearest level for TOTAL2
+                    levels = {'R3': r3, 'R2': r2, 'R1': r1, 'Pivot': pivot, 'S1': s1, 'S2': s2, 'S3': s3}
+                    nearest_level = None
+                    nearest_dist_pct = float('inf')
+                    for level_name, level_value in levels.items():
+                        if level_value and close:
+                            dist_pct = abs((close - level_value) / close) * 100
+                            if dist_pct < nearest_dist_pct:
+                                nearest_dist_pct = dist_pct
+                                nearest_level = level_name
+
+                    # TOTAL2 interpretation for shorts (same logic as TOTAL3)
+                    near_support = any(
+                        abs((close - s) / close) * 100 < 2.0
+                        for s in [s1, s2, s3] if s and close
+                    )
+                    near_resistance = any(
+                        abs((close - r) / close) * 100 < 2.0
+                        for r in [r1, r2, r3] if r and close
+                    )
+
+                    if near_resistance:
+                        signal = 'FAVORABLE'
+                        guidance = 'TOTAL2 at resistance - likely to reject DOWN - GOOD for shorts'
+                    elif near_support:
+                        signal = 'HEADWIND'
+                        guidance = 'TOTAL2 at support - likely to bounce UP - BAD for shorts'
+                    elif change and change < 0:
+                        signal = 'FAVORABLE'
+                        guidance = 'TOTAL2 trending DOWN (alt selling) - shorts have tailwind'
+                    elif change and change > 0:
+                        signal = 'HEADWIND'
+                        guidance = 'TOTAL2 trending UP (alt buying) - shorts face headwind'
+                    else:
+                        signal = 'NEUTRAL'
+                        guidance = 'TOTAL2 at pivot - could go either way'
+
+                    result['total2'] = {
+                        'current': close,
+                        'current_formatted': f"${close/1e12:.2f}T" if close else None,
+                        'daily_high': high,
+                        'daily_low': low,
+                        'daily_high_formatted': f"${high/1e12:.2f}T" if high else None,
+                        'daily_low_formatted': f"${low/1e12:.2f}T" if low else None,
+                        'daily_change_pct': round(change, 2) if change else None,
+                        'rsi': round(rsi, 1) if rsi else None,
+                        'pivots': {
+                            'S3': round(s3/1e12, 2) if s3 else None,
+                            'S2': round(s2/1e12, 2) if s2 else None,
+                            'S1': round(s1/1e12, 2) if s1 else None,
+                            'Pivot': round(pivot/1e12, 2) if pivot else None,
+                            'R1': round(r1/1e12, 2) if r1 else None,
+                            'R2': round(r2/1e12, 2) if r2 else None,
+                            'R3': round(r3/1e12, 2) if r3 else None,
+                        },
+                        'emas': {
+                            'EMA20': round(ema20/1e12, 2) if ema20 else None,
+                            'EMA50': round(ema50/1e12, 2) if ema50 else None,
+                            'EMA100': round(ema100/1e12, 2) if ema100 else None,
+                        },
+                        'nearest_level': nearest_level,
+                        'nearest_dist_pct': round(nearest_dist_pct, 2) if nearest_dist_pct != float('inf') else None,
+                        'signal_for_short': signal,
+                        'guidance': guidance
+                    }
+
+                # Session 302: Overall timing guidance with all TOTAL indices
                 usdt_signal = result['usdt_d']['signal_for_short'] if result['usdt_d'] else 'UNKNOWN'
+                total1_signal = result['total1']['signal_for_short'] if result['total1'] else 'UNKNOWN'
+                total2_signal = result['total2']['signal_for_short'] if result['total2'] else 'UNKNOWN'
                 total3_signal = result['total3']['signal_for_short'] if result['total3'] else 'UNKNOWN'
 
-                if usdt_signal == 'FAVORABLE' and total3_signal == 'FAVORABLE':
-                    result['timing_guidance'] = 'OPTIMAL - Both indices favor shorts'
-                elif usdt_signal == 'HEADWIND' and total3_signal == 'HEADWIND':
-                    result['timing_guidance'] = 'WAIT - Both indices unfavorable for shorts'
-                elif usdt_signal == 'FAVORABLE' or total3_signal == 'FAVORABLE':
-                    result['timing_guidance'] = 'MIXED - One index favors shorts, monitor closely'
+                # Count favorable signals
+                favorable_count = sum(1 for s in [usdt_signal, total1_signal, total2_signal, total3_signal] if s == 'FAVORABLE')
+                headwind_count = sum(1 for s in [usdt_signal, total1_signal, total2_signal, total3_signal] if s == 'HEADWIND')
+
+                if favorable_count >= 3:
+                    result['timing_guidance'] = f'OPTIMAL - {favorable_count}/4 indices favor shorts'
+                elif headwind_count >= 3:
+                    result['timing_guidance'] = f'WAIT - {headwind_count}/4 indices unfavorable for shorts'
+                elif favorable_count >= 2:
+                    result['timing_guidance'] = f'FAVORABLE - {favorable_count}/4 indices favor shorts'
+                elif headwind_count >= 2:
+                    result['timing_guidance'] = f'CAUTION - {headwind_count}/4 indices unfavorable'
                 else:
-                    result['timing_guidance'] = 'NEUTRAL - No clear directional signal'
+                    result['timing_guidance'] = 'MIXED - No clear directional consensus'
 
                 result['source'] = 'TradingView (live)'
 
-                logger.info(f"   ✅ USDT.D/TOTAL3 S/R: {result['timing_guidance']}")
+                logger.info(f"   ✅ USDT.D/TOTAL1/TOTAL2/TOTAL3 S/R: {result['timing_guidance']}")
 
         except Exception as e:
             result['error'] = str(e)

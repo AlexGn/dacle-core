@@ -1522,12 +1522,14 @@ class TADataAggregator:
             usdt_d = indices.get('usdt_d', {})
             btc_d = indices.get('btc_d', {})
             total = indices.get('total', {})
-            total3 = indices.get('total3', {})  # Altcoin MC (excl BTC+ETH)
+            total2 = indices.get('total2', {})  # Session 302: TOTAL2 = excl BTC
+            total3 = indices.get('total3', {})  # TOTAL3 = excl BTC+ETH
 
             # Get real-time sentiment data (Learning 012)
             realtime_sentiment = indices.get('realtime_sentiment', {})
             btc_24h_change = indices.get('btc_24h_change', 0)
             eth_24h_change = indices.get('eth_24h_change', 0)
+            total2_24h_change = indices.get('total2_24h_change', 0)  # Session 302
             total3_24h_change = indices.get('total3_24h_change', 0)
 
             # Learning 021: BTCDOM trend for alt timing (Sherlock's insight)
@@ -1549,17 +1551,19 @@ class TADataAggregator:
                 "btc_dominance": btc_d.get('value'),
                 "btc_dominance_signal": btc_d.get('signal', 'NEUTRAL'),
 
-                # Market caps
-                "total_market_cap": total.get('value'),
-                "altcoin_market_cap": total3.get('value'),  # TOTAL3 = excl BTC+ETH
+                # Market caps - Session 302: Added TOTAL2 (Sherlock uses for top 200 coins)
+                "total_market_cap": total.get('value'),      # TOTAL1 = all coins
+                "total2_market_cap": total2.get('value'),    # TOTAL2 = excl BTC
+                "altcoin_market_cap": total3.get('value'),   # TOTAL3 = excl BTC+ETH
 
                 # Macro signal (aggregated)
                 "macro_signal": indices_data.get('macro_signal', 'UNKNOWN'),
 
-                # Real-time data (Learning 012)
+                # Real-time data (Learning 012) - Session 302: Added TOTAL2
                 "realtime_sentiment": realtime_sentiment,
                 "btc_24h_change": btc_24h_change,
                 "eth_24h_change": eth_24h_change,
+                "total2_24h_change": total2_24h_change,
                 "total3_24h_change": total3_24h_change,
                 "data_freshness": indices_data.get('data_freshness', {}),
 
