@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 # Session 92: File-based cache for macro indicators
 # Macro data changes slowly (BTC/ETH structure, Fear & Greed)
 # 15-minute TTL reduces API calls without losing actionability
-MACRO_CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
+# Session 304 FIX: Path goes from src/data/ up 2 levels to project root, then down to data/cache
+PROJECT_ROOT = Path(__file__).parent.parent.parent  # src/data -> src -> project root
+MACRO_CACHE_DIR = PROJECT_ROOT / "data" / "cache"
 MACRO_CACHE_FILE = MACRO_CACHE_DIR / "macro_indices_cache.json"
 MACRO_CACHE_TTL_MINUTES = 30  # Session 238: Extended from 15→30min (BTC/ETH changes slowly)
 
