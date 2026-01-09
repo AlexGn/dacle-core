@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.9 - Session 300 L043 MTF Fractal + LONG ML Fundamentals, January 7, 2026)
+## 📊 Current Status (v5.10 - Session 309 Direction-Aware Macro Signals + BTC Context, January 9, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -35,16 +35,27 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 84 learnings (L001-L084) |
+| **Learning System** | ✅ 100% | 88 learnings (L001-L088) |
 | **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
 | **Paper Trade Validation** | ⏳ 30% | 6/20 STRONG_SHORT signals collected |
 
-**Next Phase**: LONG system (Sherlock-based, Option A)
+**Next Phase**: LONG system refinement (macro awareness, direction-specific signals)
 
 ---
 
-**🚀 LATEST (Session 291)**: LONG System Production Deployment + Session 283 Closure ✅ **COMPLETE**
+**🚀 LATEST (Session 309)**: Direction-Aware Macro Signals + BTC Context Integration ✅ **COMPLETE**
+- **Direction-Aware Macro Signals**: 5 functions updated with `position_type` parameter
+  - RSI/Stoch/USDT.D/TOTALs interpretation now inverts for LONG vs SHORT
+  - S/R levels: Near support = FAVORABLE for LONG (was bounce risk for SHORT)
+  - EMA stack: Bullish = FAVORABLE for LONG (was headwind for SHORT)
+- **BTC Macro Context Integration**: Real-time BTC context in TA upload
+  - `fetch_btc_macro_context()` - Async Binance API for BTC price/trend/RSI
+  - `calculate_position_modifier()` - L081-based position sizing (0.5x-1.25x)
+  - Position modifier rules: LONG in BTC downtrend = 0.75x, aligned = 1.1x
+- **Learning Count**: 88 learnings (L001-L088)
+
+**🚀 PREVIOUS (Session 291)**: LONG System Production Deployment + Session 283 Closure ✅ **COMPLETE**
 - **P0-P4 Features Deployed**: All LONG system features operational on VPS (37.27.217.82)
   - P0: Liquidity validator, vesting parser, VC quality validator, real-time price cache
   - P1: TA enrichment infrastructure (v1.3 fundamentals + v1.4 with TA)
