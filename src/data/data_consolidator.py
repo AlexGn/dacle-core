@@ -2171,6 +2171,11 @@ class DataConsolidator:
             output_file.rename(backup_path)
             logger.info(f"📦 Created backup: {backup_path}")
 
+        # Session 306: Set last_updated timestamp for data freshness tracking
+        # This is THE canonical timestamp for when source data was fetched/consolidated
+        from datetime import datetime, timezone
+        consolidated_data["last_updated"] = datetime.now(timezone.utc).isoformat()
+
         # Session 79K: Reorder fields for human scanning
         # Critical trading data first, sources/metadata at bottom
         ordered_data = _reorder_consolidated_fields(consolidated_data)
