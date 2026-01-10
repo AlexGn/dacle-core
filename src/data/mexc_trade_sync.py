@@ -410,8 +410,16 @@ class MEXCTradeSync:
             profit_str = info.get('profit', '0')
             pnl_usd = float(profit_str) if profit_str else 0
 
-            # Calculate P&L percentage based on position margin
-            order_margin = float(info.get('orderMargin', 0) or info.get('usedMargin', 0) or cost)
+            # Get leverage for P&L % calculation
+            leverage = float(info.get('leverage', 1) or 1)
+
+            # Calculate P&L percentage
+            # For close orders: orderMargin is 0, so we calculate from cost/leverage
+            order_margin = float(info.get('orderMargin', 0) or info.get('usedMargin', 0))
+            if order_margin <= 0 and cost > 0:
+                # For close orders, estimate margin from cost and leverage
+                order_margin = cost / leverage if leverage > 0 else cost
+
             if order_margin > 0:
                 pnl_percent = (pnl_usd / order_margin * 100)
             else:
@@ -421,10 +429,11 @@ class MEXCTradeSync:
             is_close_order = info.get('reduceOnly', False) or pnl_usd != 0
 
             # Determine result based on P&L
+            # Use $1 USD threshold for BREAKEVEN to avoid tiny profit/loss noise
             if not is_close_order:
                 # Entry orders don't have P&L yet - mark as PENDING
                 result = "PENDING"
-            elif abs(pnl_percent) < 1.0:  # Less than 1% = BREAKEVEN
+            elif abs(pnl_usd) < 1.0:  # Less than $1 USD = BREAKEVEN
                 result = "BREAKEVEN"
             elif pnl_usd > 0:
                 result = "WIN"
