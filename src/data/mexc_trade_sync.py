@@ -334,6 +334,15 @@ class MEXCTradeSync:
                 dacle_trade = self._convert_to_dacle_format(mexc_trade, trade_id, token)
 
                 if dacle_trade:
+                    # Skip PENDING orders (entry orders without P&L)
+                    if dacle_trade.get("result") == "PENDING":
+                        results["skipped_existing"].append({
+                            "token": token,
+                            "order_id": mexc_order_id,
+                            "reason": "entry_order_no_pnl"
+                        })
+                        continue
+
                     # Add to trade log
                     trade_log["trades"].append(dacle_trade)
                     synced_ids.add(mexc_order_id)
@@ -341,10 +350,11 @@ class MEXCTradeSync:
                         "trade_id": trade_id,
                         "token": token,
                         "result": dacle_trade.get("result"),
-                        "pnl_percent": dacle_trade.get("metrics", {}).get("pnl_percent")
+                        "pnl_percent": dacle_trade.get("metrics", {}).get("pnl_percent"),
+                        "pnl_usd": dacle_trade.get("metrics", {}).get("pnl_usd")
                     })
 
-                    logger.info(f"Synced trade: {trade_id} ({token}) - {dacle_trade.get('result')}")
+                    logger.info(f"Synced trade: {trade_id} ({token}) - {dacle_trade.get('result')} ({dacle_trade.get('metrics', {}).get('pnl_percent', 0):+.2f}%)")
 
             except Exception as e:
                 results["errors"].append({
@@ -394,13 +404,27 @@ class MEXCTradeSync:
             amount = float(mexc_trade.get('amount', 0))
             cost = float(mexc_trade.get('cost', 0))
 
-            # Calculate P&L (if available in MEXC data)
-            pnl = mexc_trade.get('info', {}).get('realizedPnl', 0)
-            pnl_usd = float(pnl) if pnl else 0
-            pnl_percent = (pnl_usd / cost * 100) if cost > 0 else 0
+            # Calculate P&L from MEXC data
+            # MEXC returns 'profit' field for close orders (reduceOnly=true)
+            info = mexc_trade.get('info', {})
+            profit_str = info.get('profit', '0')
+            pnl_usd = float(profit_str) if profit_str else 0
 
-            # Determine result
-            if abs(pnl_percent) < 1.0:  # Less than 1% = BREAKEVEN
+            # Calculate P&L percentage based on position margin
+            order_margin = float(info.get('orderMargin', 0) or info.get('usedMargin', 0) or cost)
+            if order_margin > 0:
+                pnl_percent = (pnl_usd / order_margin * 100)
+            else:
+                pnl_percent = 0
+
+            # Check if this is a close order (has actual P&L)
+            is_close_order = info.get('reduceOnly', False) or pnl_usd != 0
+
+            # Determine result based on P&L
+            if not is_close_order:
+                # Entry orders don't have P&L yet - mark as PENDING
+                result = "PENDING"
+            elif abs(pnl_percent) < 1.0:  # Less than 1% = BREAKEVEN
                 result = "BREAKEVEN"
             elif pnl_usd > 0:
                 result = "WIN"
