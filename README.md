@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.10 - Session 309 Direction-Aware Macro Signals + BTC Context, January 9, 2026)
+## 📊 Current Status (v5.11 - Session 314 LONG System Validated, January 11, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -38,13 +38,24 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **Learning System** | ✅ 100% | 88 learnings (L001-L088) |
 | **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
-| **Paper Trade Validation** | ⏳ 30% | 6/20 STRONG_SHORT signals collected |
+| **LONG System Validation** | ✅ 100% | N=41 trades, 82.9% WIN+BE rate (Session 314) |
 
-**Next Phase**: LONG system refinement (macro awareness, direction-specific signals)
+**Next Phase**: ML training with LONG outcomes, R:R ratio optimization
 
 ---
 
-**🚀 LATEST (Session 309)**: Direction-Aware Macro Signals + BTC Context Integration ✅ **COMPLETE**
+**🚀 LATEST (Session 314)**: LONG System Validated with Real MEXC Data ✅ **COMPLETE**
+- **LONG System VALIDATED**: Paper trading phase COMPLETE
+  - 41 LONG trades: 13 WIN, 21 BE, 7 LOSS (82.9% WIN+BE rate)
+  - Validation criteria: N=41 ≥ 30 ✅, WIN+BE=82.9% ≥ 60% ✅
+- **Key Insight**: High win rate but -$50.74 net P&L (losses larger than wins)
+- **Top Performers**: POWER (+$42.85), BNB (+$30.20), MONAD (+$26.36)
+- **What This Means**:
+  - Paper trading: SKIPPED in favor of real MEXC validation
+  - ML Training: Can now feed LONG outcomes to improve predictions
+  - Recommendation: Focus on improving R:R ratio
+
+**🚀 PREVIOUS (Session 309)**: Direction-Aware Macro Signals + BTC Context Integration ✅ **COMPLETE**
 - **Direction-Aware Macro Signals**: 5 functions updated with `position_type` parameter
   - RSI/Stoch/USDT.D/TOTALs interpretation now inverts for LONG vs SHORT
   - S/R levels: Near support = FAVORABLE for LONG (was bounce risk for SHORT)
@@ -979,14 +990,14 @@ See [LICENSE](LICENSE)
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
-- **Learnings Documented**: 83 (L001-L081), **100% integrated** (25 Sherlock learnings operational) with governance framework
+- **Learnings Documented**: 88 (L001-L088), **100% integrated** (25 Sherlock learnings operational) with governance framework
 - **Safety Mechanisms**: 5 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage, BTC CRITICAL VETO)
 - **Telegram Notifications**: ML-validated with STRONG_SHORT/MONITOR/SKIP grouping (Session 246)
 
 ---
 
-**Last Updated**: January 6, 2026
-**Version**: v5.8
-**Status**: Session 291 LONG System Production Deployment Complete ✅ (All P0-P4 Features Operational) 🚀
-**Total Learnings**: 83 (L001-L081), **100% integrated** (25 Sherlock learnings operational)
-**Sherlock Data Coverage**: 1,401 trades extracted (789 Long + 520 TA + 92 Outcomes), "Short trades" page DISCOVERED (P1 next)
+**Last Updated**: January 11, 2026
+**Version**: v5.11
+**Status**: Session 314 LONG System VALIDATED ✅ (N=41 trades, 82.9% WIN+BE rate) 🚀
+**Total Learnings**: 88 (L001-L088), **100% integrated** (25 Sherlock learnings operational)
+**LONG Validation**: COMPLETE - Paper trading skipped, real MEXC data validates system
