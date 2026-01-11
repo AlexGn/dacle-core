@@ -266,7 +266,8 @@ class MEXCTradeSync:
     def sync_recent_trades(
         self,
         days: int = 7,
-        token_filter: Optional[str] = None
+        token_filter: Optional[str] = None,
+        include_untracked: bool = True
     ) -> Dict[str, Any]:
         """
         Sync recent trades from MEXC to trade_log.json.
@@ -274,6 +275,8 @@ class MEXCTradeSync:
         Args:
             days: Number of days to look back
             token_filter: Optional specific token to sync
+            include_untracked: If True, sync ALL trades including non-DACLE tokens (default: True)
+                              If False, only sync tokens with data/tokens/<TOKEN> directories
 
         Returns:
             Dict with sync results
@@ -310,8 +313,11 @@ class MEXCTradeSync:
                 if token_filter and token != token_filter.upper():
                     continue
 
-                # Skip if not tracked by DACLE
-                if token not in tracked_tokens:
+                # Track if token is in DACLE's tracked list
+                is_tracked = token in tracked_tokens
+
+                # Skip if not tracked and include_untracked is False
+                if not is_tracked and not include_untracked:
                     results["skipped_untracked"].append({
                         "token": token,
                         "symbol": symbol
@@ -343,6 +349,9 @@ class MEXCTradeSync:
                         })
                         continue
 
+                    # Mark if token is tracked by DACLE (has conviction analysis)
+                    dacle_trade["is_dacle_tracked"] = is_tracked
+
                     # Add to trade log
                     trade_log["trades"].append(dacle_trade)
                     synced_ids.add(mexc_order_id)
@@ -351,10 +360,12 @@ class MEXCTradeSync:
                         "token": token,
                         "result": dacle_trade.get("result"),
                         "pnl_percent": dacle_trade.get("metrics", {}).get("pnl_percent"),
-                        "pnl_usd": dacle_trade.get("metrics", {}).get("pnl_usd")
+                        "pnl_usd": dacle_trade.get("metrics", {}).get("pnl_usd"),
+                        "is_dacle_tracked": is_tracked
                     })
 
-                    logger.info(f"Synced trade: {trade_id} ({token}) - {dacle_trade.get('result')} ({dacle_trade.get('metrics', {}).get('pnl_percent', 0):+.2f}%)")
+                    tracked_label = "DACLE" if is_tracked else "non-DACLE"
+                    logger.info(f"Synced trade: {trade_id} ({token}, {tracked_label}) - {dacle_trade.get('result')} ({dacle_trade.get('metrics', {}).get('pnl_percent', 0):+.2f}%)")
 
             except Exception as e:
                 results["errors"].append({
@@ -530,10 +541,18 @@ class MEXCTradeSync:
             logger.warning(f"Forward validation sync failed: {e}")
 
 
-def sync_mexc_trades(days: int = 7, token: Optional[str] = None) -> Dict[str, Any]:
+def sync_mexc_trades(
+    days: int = 7,
+    token: Optional[str] = None,
+    include_untracked: bool = True
+) -> Dict[str, Any]:
     """Convenience function for syncing trades."""
     sync = MEXCTradeSync()
-    return sync.sync_recent_trades(days=days, token_filter=token)
+    return sync.sync_recent_trades(
+        days=days,
+        token_filter=token,
+        include_untracked=include_untracked
+    )
 
 
 if __name__ == "__main__":
@@ -548,6 +567,11 @@ if __name__ == "__main__":
     parser.add_argument("--days", type=int, default=7, help="Days to look back")
     parser.add_argument("--token", type=str, help="Specific token to sync")
     parser.add_argument("--check", action="store_true", help="Check connection only")
+    parser.add_argument(
+        "--tracked-only",
+        action="store_true",
+        help="Only sync DACLE-tracked tokens (default: sync ALL trades)"
+    )
     args = parser.parse_args()
 
     # Load environment
@@ -563,9 +587,15 @@ if __name__ == "__main__":
         else:
             print("❌ MEXC not configured - add MEXC_API_KEY and MEXC_API_SECRET to .env")
     else:
-        print(f"\n=== Syncing MEXC Trades (last {args.days} days) ===\n")
+        include_untracked = not args.tracked_only
+        mode = "DACLE-tracked tokens only" if args.tracked_only else "ALL trades"
+        print(f"\n=== Syncing MEXC Trades (last {args.days} days, {mode}) ===\n")
 
-        results = sync.sync_recent_trades(days=args.days, token_filter=args.token)
+        results = sync.sync_recent_trades(
+            days=args.days,
+            token_filter=args.token,
+            include_untracked=include_untracked
+        )
 
         print(f"New trades synced: {len(results['new_trades'])}")
         for trade in results['new_trades']:
