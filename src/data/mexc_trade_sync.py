@@ -352,16 +352,29 @@ class MEXCTradeSync:
                     # Mark if token is tracked by DACLE (has conviction analysis)
                     dacle_trade["is_dacle_tracked"] = is_tracked
 
+                    # Session 315 L089: Detect partial exits for TP scaling tracking
+                    partial_exits = self._detect_partial_exits(mexc_trades, token)
+                    if partial_exits:
+                        dacle_trade["exit"]["partial_exits"] = partial_exits
+                        # Calculate remaining position after partial exits
+                        total_exited = sum(pe.get("percentage", 0) for pe in partial_exits)
+                        dacle_trade["exit"]["remaining_position_pct"] = round(100.0 - total_exited, 1)
+                        logger.info(f"  → {len(partial_exits)} partial exits detected ({total_exited:.1f}% scaled out)")
+
                     # Add to trade log
                     trade_log["trades"].append(dacle_trade)
                     synced_ids.add(mexc_order_id)
+                    metrics = dacle_trade.get("metrics", {})
                     results["new_trades"].append({
                         "trade_id": trade_id,
                         "token": token,
                         "result": dacle_trade.get("result"),
-                        "pnl_percent": dacle_trade.get("metrics", {}).get("pnl_percent"),
-                        "pnl_usd": dacle_trade.get("metrics", {}).get("pnl_usd"),
-                        "is_dacle_tracked": is_tracked
+                        "pnl_percent": metrics.get("pnl_percent"),
+                        "pnl_usd": metrics.get("pnl_usd"),
+                        "is_dacle_tracked": is_tracked,
+                        # Session 315 L089: Include R:R data
+                        "estimated_rr_ratio": metrics.get("estimated_rr_ratio"),
+                        "actual_rr_ratio": metrics.get("actual_rr_ratio"),
                     })
 
                     tracked_label = "DACLE" if is_tracked else "non-DACLE"
@@ -454,7 +467,10 @@ class MEXCTradeSync:
             # Load conviction score if available
             conviction_score = self._get_conviction_for_token(token, entry_date)
 
-            return {
+            # Session 315 L089: Get playbook R:R data
+            rr_data = self._get_playbook_rr_data(token)
+
+            trade_dict = {
                 "trade_id": trade_id,
                 "token": token,
                 "trade_type": trade_type,
@@ -469,7 +485,10 @@ class MEXCTradeSync:
                     "price": None,  # Need to fetch separately for position close
                     "date": None,
                     "stop_loss_hit": None,
-                    "take_profit_hit": None
+                    "take_profit_hit": None,
+                    # Session 315 L089: Partial exit tracking for TP scaling
+                    "partial_exits": [],  # List of {price, date, percentage, pnl_pct}
+                    "remaining_position_pct": 100.0,  # Tracks how much position is left
                 },
                 "position": {
                     "size_usd": cost,
@@ -479,7 +498,12 @@ class MEXCTradeSync:
                     "pnl_percent": round(pnl_percent, 2),
                     "pnl_usd": round(pnl_usd, 2),
                     "mae_percent": None,
-                    "mfe_percent": None
+                    "mfe_percent": None,
+                    # Session 315 L089: Track actual R:R for profitability analysis
+                    "estimated_sl_pct": rr_data.get("estimated_sl_pct"),
+                    "estimated_tp_pct": rr_data.get("estimated_tp_pct"),
+                    "estimated_rr_ratio": rr_data.get("estimated_rr_ratio"),
+                    "actual_rr_ratio": None,  # Calculated after trade closes
                 },
                 "feedback": {
                     # Auto-sync trades have no manual feedback
@@ -501,6 +525,13 @@ class MEXCTradeSync:
                     "raw": mexc_trade.get('info', {})
                 }
             }
+
+            # Session 315 L089: Calculate actual R:R after building trade dict
+            actual_rr = self._calculate_actual_rr(trade_dict)
+            if actual_rr:
+                trade_dict["metrics"]["actual_rr_ratio"] = actual_rr
+
+            return trade_dict
 
         except Exception as e:
             logger.error(f"Failed to convert MEXC trade: {e}")
@@ -527,6 +558,165 @@ class MEXCTradeSync:
         except Exception as e:
             logger.debug(f"Could not get conviction for {token}: {e}")
             return None
+
+    def _get_playbook_rr_data(
+        self,
+        token: str
+    ) -> Dict[str, Optional[float]]:
+        """
+        Session 315 L089: Get R:R data from playbook if available.
+
+        Returns:
+            Dict with estimated_sl_pct, estimated_tp_pct, and estimated_rr_ratio
+        """
+        result = {
+            "estimated_sl_pct": None,
+            "estimated_tp_pct": None,
+            "estimated_rr_ratio": None
+        }
+
+        try:
+            playbook_path = DATA_TOKENS_DIR / token / "execution_playbook.json"
+            if not playbook_path.exists():
+                return result
+
+            with open(playbook_path) as f:
+                playbook = json.load(f)
+
+            # Get SL data
+            sl_data = playbook.get("stoploss", {})
+            recommended_sl = sl_data.get("recommended", {})
+            sl_pct = recommended_sl.get("percentage")
+
+            # Get TP data - use first target (TP1 at 50%)
+            tp_data = playbook.get("take_profit", {})
+            tp_targets = tp_data.get("targets", [])
+            tp_pct = None
+            if tp_targets:
+                # Get the first (most conservative) target
+                tp_pct = tp_targets[0].get("percentage")
+
+            if sl_pct:
+                result["estimated_sl_pct"] = abs(sl_pct)
+            if tp_pct:
+                result["estimated_tp_pct"] = abs(tp_pct)
+
+            # Calculate R:R if both available
+            if result["estimated_sl_pct"] and result["estimated_tp_pct"]:
+                result["estimated_rr_ratio"] = round(
+                    result["estimated_tp_pct"] / result["estimated_sl_pct"], 2
+                )
+
+            return result
+
+        except Exception as e:
+            logger.debug(f"Could not get playbook R:R for {token}: {e}")
+            return result
+
+    def _calculate_actual_rr(
+        self,
+        trade: Dict[str, Any]
+    ) -> Optional[float]:
+        """
+        Session 315 L089: Calculate actual R:R ratio from closed trade.
+
+        Actual R:R = |profit%| / |loss%| for the trade
+        - WIN: profit / estimated_sl (what we risked)
+        - LOSS: estimated_tp / |actual_loss| (what we would have gained vs what we lost)
+
+        For accurate comparison, we need the SL that was set when entering.
+        If not available, we estimate from the result.
+        """
+        result = trade.get("result")
+        pnl_pct = trade.get("metrics", {}).get("pnl_percent", 0)
+        estimated_sl = trade.get("metrics", {}).get("estimated_sl_pct")
+        estimated_tp = trade.get("metrics", {}).get("estimated_tp_pct")
+
+        if not pnl_pct or abs(pnl_pct) < 0.1:
+            # BREAKEVEN - R:R not meaningful
+            return None
+
+        if result == "WIN":
+            # Actual R:R = what we gained / what we risked
+            if estimated_sl and estimated_sl > 0:
+                return round(abs(pnl_pct) / estimated_sl, 2)
+            else:
+                # Estimate SL was ~10% (typical)
+                return round(abs(pnl_pct) / 10.0, 2)
+
+        elif result == "LOSS":
+            # Actual R:R = what we would have gained / what we lost
+            if estimated_tp and abs(pnl_pct) > 0:
+                return round(estimated_tp / abs(pnl_pct), 2)
+            else:
+                # Estimate TP was ~30% (typical)
+                return round(30.0 / abs(pnl_pct), 2)
+
+        return None
+
+    def _detect_partial_exits(
+        self,
+        trades: List[Dict[str, Any]],
+        token: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Session 315 L089: Detect partial exits from multiple close orders.
+
+        Partial exit = reduceOnly orders for same symbol with smaller quantity.
+        Groups orders by symbol and timestamp proximity to find scaling out.
+
+        Returns:
+            List of partial exit dicts {price, date, percentage, pnl_pct}
+        """
+        partial_exits = []
+
+        # Filter for same token's reduce-only orders
+        token_closes = [
+            t for t in trades
+            if token in t.get('symbol', '')
+            and t.get('info', {}).get('reduceOnly', False)
+        ]
+
+        if len(token_closes) <= 1:
+            return partial_exits
+
+        # Sort by timestamp
+        token_closes.sort(key=lambda x: x.get('timestamp', 0))
+
+        # Calculate total closed amount
+        total_amount = sum(float(t.get('amount', 0)) for t in token_closes)
+
+        if total_amount <= 0:
+            return partial_exits
+
+        # Track each close as a partial exit (except last one which is "full" close)
+        cumulative_pct = 0.0
+        for i, close in enumerate(token_closes[:-1]):
+            amount = float(close.get('amount', 0))
+            close_pct = (amount / total_amount) * 100
+            cumulative_pct += close_pct
+
+            close_ts = close.get('timestamp', 0)
+            close_date = datetime.fromtimestamp(close_ts / 1000, tz=timezone.utc) if close_ts else None
+
+            info = close.get('info', {})
+            pnl = float(info.get('profit', 0))
+            margin = float(info.get('orderMargin', 0) or info.get('usedMargin', 0))
+            pnl_pct = (pnl / margin * 100) if margin > 0 else 0
+
+            partial_exits.append({
+                "price": float(close.get('price', 0)),
+                "date": close_date.isoformat() if close_date else None,
+                "percentage": round(close_pct, 1),
+                "cumulative_pct": round(cumulative_pct, 1),
+                "pnl_usd": round(pnl, 2),
+                "pnl_pct": round(pnl_pct, 2),
+                "order_id": close.get('id'),
+            })
+
+            logger.debug(f"Partial exit detected: {token} {close_pct:.1f}% @ ${close.get('price', 0)}")
+
+        return partial_exits
 
     def _trigger_forward_validation_sync(self) -> None:
         """Trigger forward validation sync after new trades added."""
@@ -599,7 +789,13 @@ if __name__ == "__main__":
 
         print(f"New trades synced: {len(results['new_trades'])}")
         for trade in results['new_trades']:
-            print(f"  • {trade['token']}: {trade['result']} ({trade['pnl_percent']:+.2f}%)")
+            rr_str = ""
+            if trade.get('estimated_rr_ratio'):
+                rr_str = f" [Est R:R: {trade['estimated_rr_ratio']:.1f}]"
+            if trade.get('actual_rr_ratio'):
+                rr_str = f" [Actual R:R: {trade['actual_rr_ratio']:.2f}]"
+            tracked = "✓ DACLE" if trade.get('is_dacle_tracked') else "○ Manual"
+            print(f"  • {trade['token']}: {trade['result']} ({trade['pnl_percent']:+.2f}%){rr_str} [{tracked}]")
 
         print(f"\nSkipped (already synced): {len(results['skipped_existing'])}")
         print(f"Skipped (untracked): {len(results['skipped_untracked'])}")
