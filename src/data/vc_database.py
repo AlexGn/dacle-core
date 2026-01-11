@@ -660,6 +660,8 @@ class VCDatabase:
 
             for name, vc_data in data.get('vcs', {}).items():
                 tier = VCTierLevel(vc_data.pop('tier'))
+                # Session 316: Pop 'name' from vc_data to avoid duplicate kwarg error
+                vc_data.pop('name', None)
                 vc = VCFund(name=name, tier=tier, **vc_data)
                 self.vcs[name] = vc
                 for alias in vc.aliases:
