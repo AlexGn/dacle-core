@@ -97,6 +97,14 @@ except ImportError:
     VESTING_PARSER_AVAILABLE = False
     logging.warning("Vesting parser not available - using basic regex fallback")
 
+# Session 316: Import FDV Estimator for pre-TGE projects without official FDV
+try:
+    from src.data.fdv_estimator import estimate_fdv, EstimationMethod, ConfidenceLevel
+    FDV_ESTIMATOR_AVAILABLE = True
+except ImportError:
+    FDV_ESTIMATOR_AVAILABLE = False
+    logging.warning("FDV Estimator not available - skipping FDV estimation fallback")
+
 # Session 86A: Import live status check for TGE date validation
 try:
     from src.data.primary_source_fetcher import (
@@ -504,6 +512,48 @@ class DataConsolidator:
 
         # Session 79H: Derive calculated fields from existing data
         self._derive_calculated_fields(consolidated)
+
+        # Session 316: FDV Estimation Fallback for pre-TGE projects without official FDV
+        # This enables conviction scoring for projects where FDV is unknown
+        if FDV_ESTIMATOR_AVAILABLE:
+            fdv_low = consolidated.get("fdv_at_tge_low") or consolidated.get("fdv_low")
+            fdv_high = consolidated.get("fdv_at_tge_high") or consolidated.get("fdv_high")
+
+            if not fdv_low and not fdv_high:
+                logger.info(f"🔮 No FDV data found for {token} - attempting estimation...")
+                try:
+                    # Get category and hype level for estimation
+                    category = consolidated.get("category") or consolidated.get("token_type") or "Unknown"
+                    # Determine hype level from investors, exchange tier, etc.
+                    hype_level = "moderate"  # Default
+                    investors = consolidated.get("investors") or []
+                    if isinstance(investors, list) and len(investors) >= 3:
+                        hype_level = "high"
+                    if consolidated.get("tier_1_exchange") or consolidated.get("exchange_tier") == 1:
+                        hype_level = "high"
+
+                    fdv_result = estimate_fdv(
+                        project_name=token,
+                        category=category,
+                        hype_level=hype_level
+                    )
+
+                    if fdv_result and fdv_result.estimated_fdv:
+                        # Store estimated FDV with metadata
+                        consolidated["fdv_at_tge_low"] = fdv_result.range_low
+                        consolidated["fdv_at_tge_high"] = fdv_result.range_high
+                        consolidated["fdv_estimated"] = fdv_result.estimated_fdv
+                        consolidated["_fdv_estimation"] = {
+                            "method": fdv_result.method.value,
+                            "confidence": fdv_result.confidence.value,
+                            "reasoning": fdv_result.reasoning,
+                            "data_sources": fdv_result.data_sources,
+                            "is_estimated": True
+                        }
+                        logger.info(f"✅ FDV estimated for {token}: ${fdv_result.estimated_fdv/1e9:.2f}B "
+                                  f"(method: {fdv_result.method.value}, confidence: {fdv_result.confidence.value})")
+                except Exception as e:
+                    logger.warning(f"⚠️ FDV estimation failed for {token}: {e}")
 
         # Session 84: Merge ALL remaining fields from automated_data (not just hardcoded list)
         # This fixes the MONAD data loss issue where investors, vesting_schedule, blockchain
