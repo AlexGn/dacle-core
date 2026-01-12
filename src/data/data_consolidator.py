@@ -510,6 +510,12 @@ class DataConsolidator:
         self._auto_classify_vc_tier(consolidated, token)
         self._validate_citations(consolidated)
 
+        # Session 318 P0 Fix 3: Classify exchange tier (BEFORE derived fields)
+        self._classify_exchange_tier(consolidated)
+
+        # Session 318 P0 Fix 4: Auto-detect VC presence (BEFORE derived fields)
+        self._detect_vc_presence(consolidated)
+
         # Session 79H: Derive calculated fields from existing data
         self._derive_calculated_fields(consolidated)
 
@@ -1179,6 +1185,93 @@ class DataConsolidator:
             }
             logger.info(f"✅ All {len(valid_citations)} CRITICAL fields have citations")
 
+    def _classify_exchange_tier(self, consolidated: Dict) -> None:
+        """
+        Session 318 P0 Fix 3: Classify exchange tier from listing_exchanges array.
+        This fixes 97% missing exchange_tier issue.
+
+        Classification:
+        - Tier_1: Binance, Coinbase, Bybit, OKX, Kraken, Bitfinex
+        - Tier_2: Gate.io, KuCoin, MEXC, Huobi, HTX, Crypto.com
+        - Tier_3: All others
+        """
+        # Skip if already set
+        if consolidated.get("exchange_tier"):
+            return
+
+        # Define tier classifications
+        TIER_1_EXCHANGES = {
+            "binance", "coinbase", "bybit", "okx", "kraken", "bitfinex"
+        }
+        TIER_2_EXCHANGES = {
+            "gate.io", "gateio", "kucoin", "mexc", "huobi", "htx", "crypto.com", "cryptocom"
+        }
+
+        # Get listing exchanges
+        exchanges = consolidated.get("listing_exchanges", [])
+        if not exchanges:
+            return
+
+        # Normalize exchange names (lowercase)
+        exchanges_lower = [str(ex).lower().strip() for ex in exchanges]
+
+        # Check Tier 1
+        tier_1_found = [ex for ex in exchanges_lower if ex in TIER_1_EXCHANGES]
+        if tier_1_found:
+            consolidated["exchange_tier"] = "Tier_1"
+            logger.info(f"   🏆 Exchange Tier: Tier_1 (found: {tier_1_found})")
+            return
+
+        # Check Tier 2
+        tier_2_found = [ex for ex in exchanges_lower if ex in TIER_2_EXCHANGES]
+        if tier_2_found:
+            consolidated["exchange_tier"] = "Tier_2"
+            logger.info(f"   🥈 Exchange Tier: Tier_2 (found: {tier_2_found})")
+            return
+
+        # Default: Tier 3
+        consolidated["exchange_tier"] = "Tier_3"
+        logger.info(f"   🥉 Exchange Tier: Tier_3 (no Tier 1/2 exchanges found)")
+
+    def _detect_vc_presence(self, consolidated: Dict) -> None:
+        """
+        Session 318 P0 Fix 4: Auto-detect VC presence from funding data.
+        This fixes 97% missing VC data issue.
+
+        VC present if:
+        1. funding_rounds has any round with valuation > $1M, OR
+        2. investors array not empty, OR
+        3. vc_investors array not empty
+        """
+        # Skip if already set
+        if consolidated.get("vc_present") is not None:
+            return
+
+        # Check funding rounds
+        funding_rounds = consolidated.get("funding_rounds", [])
+        has_significant_funding = any(
+            r.get("valuation", 0) > 1000000 for r in funding_rounds
+        )
+
+        # Check investor arrays
+        investors = consolidated.get("investors", [])
+        vc_investors = consolidated.get("vc_investors", [])
+        has_investors = len(investors) > 0 or len(vc_investors) > 0
+
+        # Set VC presence
+        vc_present = has_significant_funding or has_investors
+        consolidated["vc_present"] = vc_present
+
+        if vc_present:
+            reason = []
+            if has_significant_funding:
+                reason.append(f"{len(funding_rounds)} funding round(s)")
+            if has_investors:
+                reason.append(f"{len(investors) + len(vc_investors)} investor(s)")
+            logger.info(f"   💼 VC Present: TRUE ({', '.join(reason)})")
+        else:
+            logger.info(f"   💼 VC Present: FALSE (no funding/investors data)")
+
     def _derive_calculated_fields(self, consolidated: Dict) -> None:
         """
         Session 79H: Derive calculated fields from existing data.
@@ -1341,8 +1434,20 @@ class DataConsolidator:
             derived_fields.append(f"float_percent={float_pct}")
             logger.info(f"   📐 Derived float_percent: {float_pct}% (from circulating_supply / total_supply)")
 
+        # Session 318 P0 Fix 2: Calculate float_percent from CoinGecko supplies if not already set
+        # This fixes 97% missing locked_percent issue
+        if not consolidated.get("float_percent"):
+            circ = consolidated.get("circulating_supply")
+            total = consolidated.get("total_supply")
+            if circ and total and total > 0:
+                float_pct = round((circ / total) * 100, 2)
+                consolidated["float_percent"] = float_pct
+                derived_fields.append(f"float_percent={float_pct} (from CoinGecko)")
+                logger.info(f"   📐 Derived float_percent: {float_pct}% (CoinGecko supplies)")
+
         # Session 179: Calculate locked_percent from float_percent (dashboard display field)
-        float_pct = consolidated.get("float_percent")
+        # Session 318 P0 Fix 2: Also check float_pct field (alternative name)
+        float_pct = consolidated.get("float_percent") or consolidated.get("float_pct")
         if float_pct is not None and not consolidated.get("locked_percent"):
             locked_pct = round(100 - float_pct, 2)
             consolidated["locked_percent"] = locked_pct
@@ -1361,6 +1466,19 @@ class DataConsolidator:
         fdv_high = consolidated.get("fdv_high")
         mc_low = consolidated.get("initial_market_cap_low")
         mc_high = consolidated.get("initial_market_cap_high")
+
+        # Session 318 P0 Fix 1: If TGE values missing, use CURRENT values as proxy
+        # CoinGecko returns current fdv/market_cap, not TGE values
+        # This fixes 47% missing FDV/MC ratio issue
+        if not fdv_low and consolidated.get("fdv"):
+            fdv_low = fdv_high = consolidated["fdv"]
+            derived_fields.append(f"fdv_low={fdv_low} (from current fdv)")
+            logger.info(f"   🔄 Using current FDV as TGE proxy: {fdv_low:,.0f}")
+
+        if not mc_low and consolidated.get("market_cap"):
+            mc_low = mc_high = consolidated["market_cap"]
+            derived_fields.append(f"initial_market_cap_low={mc_low} (from current market_cap)")
+            logger.info(f"   🔄 Using current MC as TGE proxy: {mc_low:,.0f}")
 
         # Derive fdv_mc_ratio_low
         if fdv_low and mc_low and mc_low > 0:
