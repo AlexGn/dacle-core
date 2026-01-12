@@ -730,6 +730,202 @@ class MEXCTradeSync:
         except Exception as e:
             logger.warning(f"Forward validation sync failed: {e}")
 
+    # =========================================================================
+    # Phase 5A + 5E: Real-Time Position & Balance Monitoring (Session 320)
+    # =========================================================================
+
+    def get_open_positions(self) -> List[Dict[str, Any]]:
+        """
+        Fetch current open positions from MEXC Futures API.
+
+        Session 320 - Phase 5A: Real-time position awareness for:
+        - Dashboard display
+        - L066 position limit enforcement
+        - Duplicate entry prevention
+
+        Returns:
+            List of open position dicts with:
+            - symbol: Trading pair (e.g., 'POWER/USDT:USDT')
+            - side: 'LONG' or 'SHORT'
+            - size_usd: Position notional value in USD
+            - entry_price: Average entry price
+            - current_price: Mark price (current)
+            - unrealized_pnl: Unrealized P&L in USD
+            - unrealized_pnl_pct: Unrealized P&L as percentage
+            - liquidation_price: Liquidation price
+            - leverage: Position leverage
+            - margin_used: Initial margin used
+        """
+        if not self.exchange:
+            logger.warning("MEXC not initialized - cannot fetch positions")
+            return []
+
+        try:
+            # Fetch all positions (including zero-size for available markets)
+            positions = self.exchange.fetch_positions()
+
+            # Filter for active positions only (contracts > 0)
+            open_positions = []
+            for p in positions:
+                contracts = float(p.get('contracts', 0) or 0)
+                if contracts <= 0:
+                    continue
+
+                # Extract position data with safe defaults
+                position_data = {
+                    'symbol': p.get('symbol', ''),
+                    'side': 'LONG' if p.get('side') == 'long' else 'SHORT',
+                    'size_usd': abs(float(p.get('notional') or 0)),
+                    'entry_price': float(p.get('entryPrice') or 0),
+                    'current_price': float(p.get('markPrice') or 0),
+                    'unrealized_pnl': float(p.get('unrealizedPnl') or 0),
+                    'unrealized_pnl_pct': float(p.get('percentage') or 0),
+                    'liquidation_price': float(p.get('liquidationPrice') or 0),
+                    'leverage': int(p.get('leverage') or 1),
+                    'margin_used': float(p.get('initialMargin') or 0),
+                    # Extract token symbol for easier matching
+                    'token': p.get('symbol', '').replace('/USDT:USDT', '').replace('/USDT', ''),
+                }
+                open_positions.append(position_data)
+
+            logger.info(f"Fetched {len(open_positions)} open positions from MEXC")
+            return open_positions
+
+        except Exception as e:
+            logger.error(f"Failed to fetch open positions: {e}")
+            return []
+
+    def get_account_balance(self) -> Dict[str, Any]:
+        """
+        Fetch account balance and margin info from MEXC Futures.
+
+        Session 320 - Phase 5E: Account monitoring for:
+        - Dashboard balance display
+        - Margin health indicator
+        - Available margin for new positions
+
+        Returns:
+            Dict with:
+            - total_equity: Total account value (balance + unrealized P&L)
+            - available_margin: Free margin for new positions
+            - used_margin: Margin locked in positions
+            - unrealized_pnl: Total unrealized P&L across all positions
+            - margin_ratio: Percentage of margin used (0-100)
+        """
+        if not self.exchange:
+            logger.warning("MEXC not initialized - cannot fetch balance")
+            return {
+                'total_equity': 0,
+                'available_margin': 0,
+                'used_margin': 0,
+                'unrealized_pnl': 0,
+                'margin_ratio': 0,
+            }
+
+        try:
+            # Fetch balance - MEXC returns different structure for futures
+            balance = self.exchange.fetch_balance()
+
+            # MEXC Futures: Look for USDT balance
+            usdt = balance.get('USDT', {})
+
+            # Also check 'info' for additional data
+            info = balance.get('info', {})
+
+            # Extract values with safe defaults
+            total_equity = float(usdt.get('total', 0) or 0)
+            available_margin = float(usdt.get('free', 0) or 0)
+            used_margin = float(usdt.get('used', 0) or 0)
+
+            # Unrealized PnL might be in info or calculated
+            unrealized_pnl = float(info.get('unrealizedProfit', 0) or 0)
+
+            # Calculate margin ratio
+            margin_ratio = 0.0
+            if total_equity > 0:
+                margin_ratio = round((used_margin / total_equity) * 100, 2)
+
+            balance_data = {
+                'total_equity': round(total_equity, 2),
+                'available_margin': round(available_margin, 2),
+                'used_margin': round(used_margin, 2),
+                'unrealized_pnl': round(unrealized_pnl, 2),
+                'margin_ratio': margin_ratio,
+            }
+
+            logger.info(f"Fetched account balance: ${total_equity:.2f} equity, {margin_ratio:.1f}% margin used")
+            return balance_data
+
+        except Exception as e:
+            logger.error(f"Failed to fetch account balance: {e}")
+            return {
+                'total_equity': 0,
+                'available_margin': 0,
+                'used_margin': 0,
+                'unrealized_pnl': 0,
+                'margin_ratio': 0,
+            }
+
+    def get_full_status(self) -> Dict[str, Any]:
+        """
+        Get complete MEXC account status (positions + balance + metrics).
+
+        Session 320 - Combined endpoint for dashboard and L066 enforcement.
+
+        Returns:
+            Dict with:
+            - positions: List of open positions
+            - position_count: Number of open positions
+            - total_exposure_usd: Sum of all position notional values
+            - total_unrealized_pnl: Sum of unrealized P&L
+            - balance: Account balance info
+            - l066_status: 'OK' if <3 positions, 'AT_LIMIT' if =3, 'EXCEEDED' if >3
+            - margin_health: 'SAFE' (<50%), 'WARNING' (50-80%), 'DANGER' (>80%)
+            - can_open_position: Boolean - True if can open new position
+        """
+        positions = self.get_open_positions()
+        balance = self.get_account_balance()
+
+        # Calculate aggregates
+        total_exposure = sum(p['size_usd'] for p in positions)
+        total_unrealized = sum(p['unrealized_pnl'] for p in positions)
+        position_count = len(positions)
+
+        # L066 status
+        if position_count < 3:
+            l066_status = 'OK'
+        elif position_count == 3:
+            l066_status = 'AT_LIMIT'
+        else:
+            l066_status = 'EXCEEDED'
+
+        # Margin health
+        margin_ratio = balance.get('margin_ratio', 0)
+        if margin_ratio < 50:
+            margin_health = 'SAFE'
+        elif margin_ratio < 80:
+            margin_health = 'WARNING'
+        else:
+            margin_health = 'DANGER'
+
+        # Can open new position?
+        can_open = (
+            position_count < 3 and
+            margin_ratio < 80 and
+            balance.get('available_margin', 0) > 50  # At least $50 available
+        )
+
+        return {
+            'positions': positions,
+            'position_count': position_count,
+            'total_exposure_usd': round(total_exposure, 2),
+            'total_unrealized_pnl': round(total_unrealized, 2),
+            'balance': balance,
+            'l066_status': l066_status,
+            'margin_health': margin_health,
+            'can_open_position': can_open,
+        }
+
 
 def sync_mexc_trades(
     days: int = 7,
