@@ -1998,3 +1998,135 @@ def consolidate_tge_data_if_available(token: str, automated_data: Dict[str, Any]
     except Exception as e:
         print_error(f"   ⚠️  Error during consolidation: {str(e)}")
         return automated_data
+
+
+# =============================================================================
+# SESSION 318: COINGECKO FETCHER (CryptoRank Replacement)
+# =============================================================================
+
+def fetch_token_data_from_coingecko(token: str) -> Optional[Dict[str, Any]]:
+    """
+    Fetch token data from CoinGecko API for LISTED tokens.
+
+    Session 318: Replacement for broken CryptoRank API as automated_data source.
+
+    Provides complete tokenomics for listed tokens:
+    - FDV (Fully Diluted Valuation)
+    - Market Cap
+    - Circulating/Total/Max Supply
+    - Float % (calculated)
+    - Price, Volume
+    - Listing exchanges
+
+    Args:
+        token: Token symbol (e.g., "BTC", "ETH", "MONAD")
+
+    Returns:
+        Dict in automated_data format compatible with data_consolidator.py
+
+    Note:
+        Only works for LISTED tokens (post-TGE). For pre-TGE tokens,
+        use manual research or wait for listing.
+    """
+    # Import CoinGecko fetcher
+    try:
+        from src.data.fetchers.coingecko_fetcher import CoinGeckoFetcher
+    except ImportError:
+        print_error("CoinGecko fetcher not available - check imports")
+        return None
+
+    # Session 290: Redis caching (24h TTL - listed tokens change slowly)
+    if REDIS_AVAILABLE:
+        redis_cache = get_redis_cache()
+        cache_key = f"coingecko:{token.upper()}"
+
+        # Try to get from cache
+        cached = redis_cache.get(cache_key, namespace="tge_data")
+        if cached is not None:
+            logger.debug(f"✅ Cache HIT: fetch_token_data_from_coingecko({token})")
+            print_info(f"✅ Using cached CoinGecko data for {token}")
+            return cached
+
+        logger.debug(f"❌ Cache MISS: fetch_token_data_from_coingecko({token}) - fetching from API")
+
+    print_info(f"🔍 Fetching token data from CoinGecko for: {token}")
+
+    try:
+        fetcher = CoinGeckoFetcher()
+        data = fetcher.fetch_token(token)
+
+        if not data:
+            print_warning(f"Token {token} not found on CoinGecko")
+            print_info("Possible reasons:")
+            print_info("  1. Token not yet listed on CoinGecko (wait for listing)")
+            print_info("  2. Incorrect token symbol (check spelling)")
+            print_info("  3. Token delisted (check CoinMarketCap)")
+            return None
+
+        # Session 290: Cache result for 24h
+        if REDIS_AVAILABLE:
+            redis_cache = get_redis_cache()
+            cache_key = f"coingecko:{token.upper()}"
+            redis_cache.set(cache_key, data, ttl_seconds=86400, namespace="tge_data")
+            logger.debug(f"💾 Cached coingecko({token}) for 24h")
+
+        print_success(f"✅ Found {data['symbol']} ({data['name']}) on CoinGecko")
+        print_info(f"  Price: ${data.get('price_usd', 'N/A')}")
+        print_info(f"  Market Cap: ${data.get('market_cap', 0):,.0f}")
+        print_info(f"  FDV: ${data.get('fdv', 0):,.0f}")
+        if data.get('float_pct'):
+            print_info(f"  Float: {data['float_pct']:.1f}%")
+        print_info(f"  Exchanges: {len(data.get('listing_exchanges', []))} listed")
+
+        return data
+
+    except Exception as e:
+        print_error(f"Error fetching CoinGecko data: {str(e)}")
+        logger.exception("CoinGecko fetch failed")
+        return None
+
+
+def fetch_automated_token_data(token: str, prefer_source: str = "coingecko") -> Optional[Dict[str, Any]]:
+    """
+    Smart fetch function that tries multiple sources.
+
+    Session 318: Intelligent fallback between CoinGecko and CryptoRank.
+
+    Strategy:
+    1. Try CoinGecko first (FREE, works for listed tokens)
+    2. If not found, try CryptoRank (DEPRECATED, may fail)
+
+    Args:
+        token: Token symbol
+        prefer_source: "coingecko" or "cryptorank" (default: coingecko)
+
+    Returns:
+        Token data dict or None
+
+    Example:
+        # Auto-select best source
+        data = fetch_automated_token_data("BTC")
+
+        # Force CryptoRank (for pre-TGE tokens)
+        data = fetch_automated_token_data("UPCOMING_TOKEN", prefer_source="cryptorank")
+    """
+    sources = ["coingecko", "cryptorank"] if prefer_source == "coingecko" else ["cryptorank", "coingecko"]
+
+    for source in sources:
+        try:
+            if source == "coingecko":
+                print_info(f"📊 Trying CoinGecko for {token}...")
+                data = fetch_token_data_from_coingecko(token)
+                if data:
+                    return data
+            elif source == "cryptorank":
+                print_info(f"📊 Trying CryptoRank for {token}...")
+                data = fetch_tge_data_from_cryptorank(token)
+                if data:
+                    return data
+        except Exception as e:
+            print_warning(f"⚠️  {source} fetch failed: {e}")
+            continue
+
+    print_error(f"❌ Could not fetch {token} from any source")
+    return None
