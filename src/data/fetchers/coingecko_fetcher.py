@@ -186,7 +186,14 @@ class CoinGeckoFetcher:
             return None
 
     def _parse_token_data(self, data: Dict) -> Dict[str, Any]:
-        """Parse CoinGecko response into automated_data format."""
+        """
+        Parse CoinGecko response into automated_data format.
+
+        Session 318 P1.4: Enhanced to extract TGE-specific fields:
+        - listing_exchanges: Extracted from tickers with tier classification
+        - tge_date: ATH date as proxy (±2-7 days accuracy)
+        - listing_price_low: ATL as proxy (can be 30%+ off for dumped tokens)
+        """
         market_data = data.get('market_data', {})
 
         # Extract supplies
@@ -199,13 +206,18 @@ class CoinGeckoFetcher:
         if circulating and max_supply and max_supply > 0:
             float_pct = round((circulating / max_supply) * 100, 2)
 
-        # Extract exchanges
+        # Session 318 P1.4: Extract exchanges with tier classification
         tickers = data.get('tickers', [])
-        exchanges = list(set([
-            ticker['market']['name'].lower()
-            for ticker in tickers
-            if ticker.get('market', {}).get('name')
-        ]))[:20]  # Top 20 exchanges
+        exchange_data = self._extract_exchanges_with_tiers(tickers)
+
+        # Session 318 P1.4: TGE-specific fields
+        # Use ATH date as TGE date proxy (typical accuracy: ±2-7 days)
+        ath_date_dict = market_data.get('ath_date', {})
+        tge_date = ath_date_dict.get('usd') if isinstance(ath_date_dict, dict) else ath_date_dict
+
+        # Use ATL as listing price proxy (can be 30%+ off if token dumped)
+        atl_dict = market_data.get('atl', {})
+        listing_price_low = atl_dict.get('usd') if isinstance(atl_dict, dict) else atl_dict
 
         # FDV
         fdv_dict = market_data.get('fully_diluted_valuation', {})
@@ -228,7 +240,11 @@ class CoinGeckoFetcher:
             "price_change_24h": market_data.get('price_change_percentage_24h'),
             "ath": market_data.get('ath', {}).get('usd'),
             "ath_date": market_data.get('ath_date', {}).get('usd'),
-            "listing_exchanges": exchanges,
+            # Session 318 P1.4: TGE-specific fields
+            "tge_date": tge_date,  # ATH date as proxy
+            "listing_price_low": listing_price_low,  # ATL as proxy
+            "listing_exchanges": exchange_data['exchange_names'],  # Human-readable names
+            "exchange_tier": exchange_data['highest_tier'],  # Tier 1/2/3
             "contract_address": data.get('contract_address'),  # If available
             "data_source": "coingecko",
             "coingecko_id": data.get('id'),
@@ -238,6 +254,66 @@ class CoinGeckoFetcher:
                 "categories": data.get('categories', []),
                 "platforms": data.get('platforms', {}),
             }
+        }
+
+    def _extract_exchanges_with_tiers(self, tickers: List[Dict]) -> Dict[str, Any]:
+        """
+        Extract exchange names and classify into tiers.
+
+        Session 318 P1.4: Added tier classification based on data/exchange_tiers.json
+
+        Args:
+            tickers: List of ticker dicts from CoinGecko API
+
+        Returns:
+            Dict with exchange_names (list of str) and highest_tier (str)
+        """
+        # Exchange tier classification (from data/exchange_tiers.json)
+        TIER_1 = {'binance', 'coinbase', 'bybit', 'okx', 'kraken'}
+        TIER_2 = {'gate.io', 'gate', 'kucoin', 'bitget', 'upbit', 'bithumb'}
+        TIER_3 = {'mexc', 'htx', 'bitmart', 'poloniex', 'bingx'}
+
+        # Extract unique exchange names (case-insensitive)
+        exchange_names_set = set()
+        tier_found = None
+
+        for ticker in tickers:
+            market_name = ticker.get('market', {}).get('name', '')
+            if not market_name:
+                continue
+
+            # Normalize name for tier classification
+            name_lower = market_name.lower()
+
+            # Check tier (prioritize higher tiers)
+            if any(t1 in name_lower for t1 in TIER_1):
+                exchange_names_set.add(market_name)
+                if tier_found is None or tier_found > 1:
+                    tier_found = 1
+            elif any(t2 in name_lower for t2 in TIER_2):
+                exchange_names_set.add(market_name)
+                if tier_found is None or tier_found > 2:
+                    tier_found = 2
+            elif any(t3 in name_lower for t3 in TIER_3):
+                exchange_names_set.add(market_name)
+                if tier_found is None or tier_found > 3:
+                    tier_found = 3
+            else:
+                # Unknown exchange - add but don't classify tier
+                exchange_names_set.add(market_name)
+
+        # Convert tier number to string label
+        tier_label = None
+        if tier_found == 1:
+            tier_label = "Tier 1"
+        elif tier_found == 2:
+            tier_label = "Tier 2"
+        elif tier_found == 3:
+            tier_label = "Tier 3"
+
+        return {
+            'exchange_names': sorted(list(exchange_names_set))[:20],  # Top 20 exchanges
+            'highest_tier': tier_label
         }
 
 

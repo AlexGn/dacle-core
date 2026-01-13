@@ -665,8 +665,9 @@ class DataConsolidator:
             return
         elif a_date and not m_date:
             # Only automated has tge_date - use it
+            # Session 318 P1.4: CoinGecko now provides ATH date as TGE proxy
             consolidated["tge_date"] = a_date
-            logger.info(f"   📅 TGE Date: {self._format_date(a_date)} (from CryptoRank only)")
+            logger.info(f"   📅 TGE Date: {self._format_date(a_date)} (from CoinGecko ATH date proxy)")
             return
 
         # Check if automated date is vesting estimate
