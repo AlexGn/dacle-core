@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.12 - Session 320 MEXC Sync Fixed, January 13, 2026)
+## 📊 Current Status (v5.13 - Session 321 Liquidity Validator + UI Fix, January 13, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -45,7 +45,17 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🚀 LATEST (Session 320)**: MEXC Trade Sync Bug Fix + L090 API Learning ✅ **COMPLETE**
+**🚀 LATEST (Session 321)**: Liquidity Validator Bug Fix + UI Dark Theme Fix ✅ **COMPLETE**
+- **Problem 1**: 18 tokens showing "Liquidity Risk: UNKNOWN" despite having liquidity_usd data
+- **Root Cause**: DEX enhancement running AFTER liquidity validation (wrong order)
+- **Solution**: Created `_classify_dex_liquidity()` method, moved DEX enhancement BEFORE validation
+- **Result**: All 18 tokens now classified (12 LOW, 4 MODERATE, 2 HIGH risk)
+- **Problem 2**: Liquidity warning using light backgrounds on dark theme dashboard
+- **Solution**: CSS updated to use semi-transparent dark backgrounds matching existing design
+- **Files Modified**: `dashboard/tokens_dashboard.html`, 18 token consolidated.json files
+- **Status**: ✅ DEPLOYED TO PRODUCTION (VPS 37.27.217.82)
+
+**🚀 PREVIOUS (Session 320)**: MEXC Trade Sync Bug Fix + L090 API Learning ✅ **COMPLETE**
 - **Problem**: MANA trade (LOSS, -$141.28) not syncing for 33+ hours
 - **Root Cause**: MEXC API requires symbol parameter + closed positions not in `fetch_positions()`
 - **Solution**: Dual-phase sync - (1) Query active positions, (2) Query DACLE-tracked tokens directly
@@ -1008,7 +1018,7 @@ See [LICENSE](LICENSE)
 ---
 
 **Last Updated**: January 13, 2026
-**Version**: v5.12
-**Status**: Session 320 MEXC Trade Sync FIXED ✅ (MANA trade synced, 33h gap resolved) 🚀
+**Version**: v5.13
+**Status**: Session 321 Liquidity Validator + UI Fix COMPLETE ✅ (18 tokens classified, dark theme restored) 🚀
 **Total Learnings**: 90 (L001-L090), **100% integrated** (25 Sherlock learnings operational)
-**MEXC Sync**: Dual-phase sync (active + closed positions), Exchange API Quirks documented
+**Liquidity Validation**: DEX-aware classification, dark theme UI consistency
