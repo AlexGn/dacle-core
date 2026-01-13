@@ -647,14 +647,26 @@ class DataConsolidator:
         Pattern from IRYS case study:
         - CryptoRank vesting date (Jan 1) vs Exchange listing date (Nov 25)
         - TYPE_2_MANUAL_WINS: Always prefer exchange listing for perpetual futures execution
+
+        Session 318: Fixed to use manual_data when automated_data missing (CoinGecko has no TGE date)
         """
         a_date = automated.get("tge_date")
         m_date = manual.get("tge_date")
         a_date_type = automated.get("tge_date_type")
 
-        if not a_date or not m_date:
-            if m_date:
-                self.missing_fields.append("tge_date")
+        # Session 318: If only one source has tge_date, use it (don't require both)
+        if not a_date and not m_date:
+            # Neither source has tge_date - skip
+            return
+        elif not a_date and m_date:
+            # Only manual has tge_date - use it (common case: CoinGecko has no TGE date)
+            consolidated["tge_date"] = m_date
+            logger.info(f"   📅 TGE Date: {self._format_date(m_date)} (from Perplexity only)")
+            return
+        elif a_date and not m_date:
+            # Only automated has tge_date - use it
+            consolidated["tge_date"] = a_date
+            logger.info(f"   📅 TGE Date: {self._format_date(a_date)} (from CryptoRank only)")
             return
 
         # Check if automated date is vesting estimate
@@ -1247,10 +1259,10 @@ class DataConsolidator:
         if consolidated.get("vc_present") is not None:
             return
 
-        # Check funding rounds
+        # Check funding rounds (Session 318: Handle None valuation)
         funding_rounds = consolidated.get("funding_rounds", [])
         has_significant_funding = any(
-            r.get("valuation", 0) > 1000000 for r in funding_rounds
+            (r.get("valuation") or 0) > 1000000 for r in funding_rounds
         )
 
         # Check investor arrays
@@ -1510,6 +1522,7 @@ class DataConsolidator:
         # Session 79H: Field aliasing - map alternative field names to expected names
         # These fields exist but under different names
         # Session 79I: Added whitepaper_url, project_description aliases
+        # Session 318: Added listing_price_low alias for Perplexity data
         field_aliases = {
             "listing_exchanges": ["exchanges", "exchange_list", "listed_exchanges"],
             "funding_raised_usd": ["total_funding", "funding_total", "total_raised"],
@@ -1521,6 +1534,8 @@ class DataConsolidator:
             # Session 79I: New field aliases
             "whitepaper_url": ["whitepaper", "whitepaperUrl", "whitepaper_link"],
             "project_description": ["description", "about", "overview"],
+            # Session 318: TGE-specific field aliases (Perplexity → consolidated field names)
+            "listing_price_low": ["expected_listing_price", "listing_price", "initial_price"],
         }
 
         for target_field, source_fields in field_aliases.items():

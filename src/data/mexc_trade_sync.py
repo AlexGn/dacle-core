@@ -40,6 +40,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import hashlib
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -236,27 +240,76 @@ class MEXCTradeSync:
             since = datetime.now(timezone.utc) - timedelta(days=days)
             since_ts = int(since.timestamp() * 1000)
 
-            # MEXC Futures: Fetch closed positions
-            # This endpoint returns positions that have been closed
+            # MEXC Futures: Fetch all positions (open + recently closed)
+            # This returns a list of positions without requiring a symbol
             positions = self.exchange.fetch_positions()
 
-            # Also fetch recent orders to get completed trades
-            orders = self.exchange.fetch_closed_orders(
-                since=since_ts,
-                limit=500
-            )
+            logger.info(f"Fetched {len(positions)} positions from MEXC")
 
-            # Combine and deduplicate
+            # For each position with trades, fetch the trade history
             all_trades = []
-            seen_ids = set()
+            seen_symbols = set()
 
-            for order in orders:
-                order_id = order.get('id')
-                if order_id and order_id not in seen_ids:
-                    seen_ids.add(order_id)
-                    all_trades.append(order)
+            # First, collect unique symbols from positions
+            for pos in positions:
+                symbol = pos.get('symbol')
+                if symbol and symbol not in seen_symbols:
+                    seen_symbols.add(symbol)
 
-            logger.info(f"Fetched {len(all_trades)} closed orders from MEXC (last {days} days)")
+                    try:
+                        # Fetch trades for this specific symbol
+                        symbol_trades = self.exchange.fetch_my_trades(
+                            symbol=symbol,
+                            since=since_ts,
+                            limit=500
+                        )
+
+                        if symbol_trades:
+                            all_trades.extend(symbol_trades)
+                            logger.info(f"  {symbol}: {len(symbol_trades)} trades")
+
+                    except Exception as e:
+                        # Some symbols might not have trades in the time window
+                        logger.debug(f"  {symbol}: {e}")
+                        continue
+
+            # ALSO check DACLE-tracked tokens (to catch fully closed positions)
+            # These won't appear in fetch_positions() if contracts = 0
+            import os
+            import glob
+            tokens_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'tokens')
+            if os.path.exists(tokens_dir):
+                dacle_tokens = [
+                    os.path.basename(d)
+                    for d in glob.glob(os.path.join(tokens_dir, '*'))
+                    if os.path.isdir(d)
+                ]
+
+                logger.info(f"Checking {len(dacle_tokens)} DACLE-tracked tokens for closed positions")
+
+                for token in dacle_tokens:
+                    # Convert token to MEXC symbol format (e.g., MANA -> MANA/USDT:USDT)
+                    symbol = f"{token}/USDT:USDT"
+
+                    if symbol not in seen_symbols:
+                        try:
+                            symbol_trades = self.exchange.fetch_my_trades(
+                                symbol=symbol,
+                                since=since_ts,
+                                limit=500
+                            )
+
+                            if symbol_trades:
+                                all_trades.extend(symbol_trades)
+                                seen_symbols.add(symbol)
+                                logger.info(f"  {symbol}: {len(symbol_trades)} trades (DACLE token)")
+
+                        except Exception as e:
+                            # Expected for tokens not traded on MEXC or without trades
+                            logger.debug(f"  {symbol}: {e}")
+                            continue
+
+            logger.info(f"Fetched {len(all_trades)} total trades from {len(seen_symbols)} symbols (last {days} days)")
             return all_trades
 
         except Exception as e:

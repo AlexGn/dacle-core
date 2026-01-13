@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.11 - Session 314 LONG System Validated, January 11, 2026)
+## 📊 Current Status (v5.12 - Session 320 MEXC Sync Fixed, January 13, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -35,7 +35,8 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 88 learnings (L001-L088) |
+| **Learning System** | ✅ 100% | 90 learnings (L001-L090) |
+| **MEXC Trade Sync** | ✅ 100% | Dual-phase sync (active + closed positions) |
 | **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
 | **LONG System Validation** | ✅ 100% | N=41 trades, 82.9% WIN+BE rate (Session 314) |
@@ -44,7 +45,17 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🚀 LATEST (Session 314)**: LONG System Validated with Real MEXC Data ✅ **COMPLETE**
+**🚀 LATEST (Session 320)**: MEXC Trade Sync Bug Fix + L090 API Learning ✅ **COMPLETE**
+- **Problem**: MANA trade (LOSS, -$141.28) not syncing for 33+ hours
+- **Root Cause**: MEXC API requires symbol parameter + closed positions not in `fetch_positions()`
+- **Solution**: Dual-phase sync - (1) Query active positions, (2) Query DACLE-tracked tokens directly
+- **Result**: ✅ MANA synced (3 trades: 2 BUY, 1 SELL, -6.45% loss)
+- **L090 Created**: MEXC API Symbol Parameter Requirement
+- **Documentation**: `docs/integrations/EXCHANGE_API_QUIRKS.md` (NEW - centralized API quirks database)
+- **Prevention**: Test with closed positions, monitor staleness (24h threshold), extensive logging
+- **Learning Count**: 90 learnings (L001-L090)
+
+**🚀 PREVIOUS (Session 314)**: LONG System Validated with Real MEXC Data ✅ **COMPLETE**
 - **LONG System VALIDATED**: Paper trading phase COMPLETE
   - 41 LONG trades: 13 WIN, 21 BE, 7 LOSS (82.9% WIN+BE rate)
   - Validation criteria: N=41 ≥ 30 ✅, WIN+BE=82.9% ≥ 60% ✅
@@ -990,14 +1001,14 @@ See [LICENSE](LICENSE)
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
-- **Learnings Documented**: 88 (L001-L088), **100% integrated** (25 Sherlock learnings operational) with governance framework
+- **Learnings Documented**: 90 (L001-L090), **100% integrated** (25 Sherlock learnings operational) with governance framework
 - **Safety Mechanisms**: 5 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage, BTC CRITICAL VETO)
 - **Telegram Notifications**: ML-validated with STRONG_SHORT/MONITOR/SKIP grouping (Session 246)
 
 ---
 
-**Last Updated**: January 11, 2026
-**Version**: v5.11
-**Status**: Session 314 LONG System VALIDATED ✅ (N=41 trades, 82.9% WIN+BE rate) 🚀
-**Total Learnings**: 88 (L001-L088), **100% integrated** (25 Sherlock learnings operational)
-**LONG Validation**: COMPLETE - Paper trading skipped, real MEXC data validates system
+**Last Updated**: January 13, 2026
+**Version**: v5.12
+**Status**: Session 320 MEXC Trade Sync FIXED ✅ (MANA trade synced, 33h gap resolved) 🚀
+**Total Learnings**: 90 (L001-L090), **100% integrated** (25 Sherlock learnings operational)
+**MEXC Sync**: Dual-phase sync (active + closed positions), Exchange API Quirks documented
