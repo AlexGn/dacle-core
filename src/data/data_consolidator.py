@@ -659,9 +659,9 @@ class DataConsolidator:
             # Neither source has tge_date - skip
             return
         elif not a_date and m_date:
-            # Only manual has tge_date - use it (common case: CoinGecko has no TGE date)
+            # Only manual has tge_date - use it (legacy case - should rarely happen after Session 318 P1.4)
             consolidated["tge_date"] = m_date
-            logger.info(f"   📅 TGE Date: {self._format_date(m_date)} (from Perplexity only)")
+            logger.info(f"   📅 TGE Date: {self._format_date(m_date)} (from manual data)")
             return
         elif a_date and not m_date:
             # Only automated has tge_date - use it
@@ -692,14 +692,15 @@ class DataConsolidator:
             self.agreements.append("tge_date")
         else:
             # Dates differ but both are listings - use manual (usually more precise with time)
+            # Session 318 P1.4: This case should rarely occur now (both sources have TGE date)
             resolution = ConflictResolution(
                 field="tge_date",
                 resolution_type=ConflictResolution.TYPE_2_MANUAL_WINS,
                 chosen_value=m_date,
                 automated_value=a_date,
                 manual_value=m_date,
-                reasoning=f"Using Perplexity date {self._format_date(m_date)} (more precise timing information). "
-                          f"CryptoRank date: {self._format_date(a_date)}."
+                reasoning=f"Using manual date {self._format_date(m_date)} (more precise timing information). "
+                          f"Automated date: {self._format_date(a_date)}."
             )
             self.resolutions.append(resolution)
             consolidated["tge_date"] = m_date
