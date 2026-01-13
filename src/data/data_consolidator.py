@@ -580,16 +580,37 @@ class DataConsolidator:
             for warning in sanity_check_results["warnings"]:
                 logger.warning(f"⚠️  SANITY CHECK WARNING: {warning}")
 
+        # Session 297: DEX Data Enhancement for missing fields (MUST run BEFORE liquidity validation)
+        # Fills market_cap, float_pct, RSI, ATH, drawdown, EMA support, volume ratio for DEX-only tokens
+        # Session 321: Moved BEFORE liquidity validation so DEX liquidity_usd is available
+        if DEX_FETCHER_AVAILABLE:
+            dex_enhanced_fields = self._enhance_with_dex_data(consolidated, token)
+            if dex_enhanced_fields:
+                logger.info(f"🔗 DEX enhancement: Added {len(dex_enhanced_fields)} fields: {dex_enhanced_fields}")
+
         # Session 291: P0 Liquidity Validation (Critical Safety)
         # Prevents honeypot tokens with $5K liquidity from getting 8/10 conviction scores
+        # Session 321: Now runs AFTER DEX enhancement to use liquidity_usd from DexScreener
         if LIQUIDITY_VALIDATOR_AVAILABLE:
             logger.info(f"🔍 Validating liquidity for {token}...")
-            liquidity_result = validate_token_liquidity(
-                coingecko_id=consolidated.get("coingecko_id"),
-                symbol=token,
-                fdv=consolidated.get("fdv_at_tge_low") or consolidated.get("fdv_low"),
-                current_price=consolidated.get("listing_price_low") or consolidated.get("listing_price")
-            )
+
+            # Session 321: Check if DEX already provided liquidity data
+            dex_liquidity = consolidated.get("liquidity_usd")
+            if dex_liquidity and dex_liquidity > 0:
+                # Use DEX liquidity data directly - more reliable for DEX-only tokens
+                logger.info(f"📊 Using DEX liquidity data: ${dex_liquidity:,.0f}")
+                liquidity_result = self._classify_dex_liquidity(
+                    liquidity_usd=dex_liquidity,
+                    fdv=consolidated.get("fdv") or consolidated.get("fdv_at_tge_low")
+                )
+            else:
+                # Fallback to CoinGecko/Binance API
+                liquidity_result = validate_token_liquidity(
+                    coingecko_id=consolidated.get("coingecko_id"),
+                    symbol=token,
+                    fdv=consolidated.get("fdv_at_tge_low") or consolidated.get("fdv_low"),
+                    current_price=consolidated.get("listing_price_low") or consolidated.get("listing_price")
+                )
 
             # Store in _validation metadata
             if "_validation" not in consolidated:
@@ -601,13 +622,6 @@ class DataConsolidator:
             if liquidity_result["warning_message"]:
                 logger.warning(f"⚠️  LIQUIDITY WARNING: {liquidity_result['warning_message']}")
                 logger.warning(f"   Conviction penalty: {liquidity_result['conviction_penalty']}")
-
-        # Session 297: DEX Data Enhancement for missing fields
-        # Fills market_cap, float_pct, RSI, ATH, drawdown, EMA support, volume ratio for DEX-only tokens
-        if DEX_FETCHER_AVAILABLE:
-            dex_enhanced_fields = self._enhance_with_dex_data(consolidated, token)
-            if dex_enhanced_fields:
-                logger.info(f"🔗 DEX enhancement: Added {len(dex_enhanced_fields)} fields: {dex_enhanced_fields}")
 
         # Add metadata
         consolidated["_consolidation_metadata"] = {
@@ -2080,6 +2094,67 @@ class DataConsolidator:
         except Exception as e:
             logger.warning(f"DEX enhancement failed for {token}: {e}")
             return []
+
+    def _classify_dex_liquidity(
+        self,
+        liquidity_usd: float,
+        fdv: Optional[float] = None
+    ) -> Dict[str, Any]:
+        """
+        Session 321: Classify liquidity risk from DEX liquidity_usd data.
+
+        Uses same thresholds as LiquidityValidator but with DEX data source.
+        Called when DEX enhancement has already populated liquidity_usd.
+
+        Args:
+            liquidity_usd: Total liquidity in USD from DexScreener
+            fdv: Fully diluted valuation for ratio calculation
+
+        Returns:
+            Dict matching LiquidityValidationResult format
+        """
+        # Same thresholds as LiquidityValidator
+        CRITICAL_THRESHOLD = 5_000
+        HIGH_THRESHOLD = 10_000
+        MODERATE_THRESHOLD = 50_000
+
+        CRITICAL_PENALTY = -3.0
+        HIGH_PENALTY = -2.0
+        MODERATE_PENALTY = -1.0
+        LOW_PENALTY = 0.0
+
+        # Calculate liquidity/FDV ratio
+        liquidity_fdv_ratio = None
+        if fdv and fdv > 0:
+            liquidity_fdv_ratio = (liquidity_usd / fdv) * 100
+
+        # Classify risk level
+        if liquidity_usd < CRITICAL_THRESHOLD:
+            risk_level = "CRITICAL"
+            penalty = CRITICAL_PENALTY
+            warning = f"HONEYPOT RISK: Only ${liquidity_usd:,.0f} liquidity (<${CRITICAL_THRESHOLD:,})"
+        elif liquidity_usd < HIGH_THRESHOLD:
+            risk_level = "HIGH"
+            penalty = HIGH_PENALTY
+            warning = f"LOW LIQUIDITY: ${liquidity_usd:,.0f} (<${HIGH_THRESHOLD:,}) - High slippage risk"
+        elif liquidity_usd < MODERATE_THRESHOLD:
+            risk_level = "MODERATE"
+            penalty = MODERATE_PENALTY
+            warning = f"MODERATE LIQUIDITY: ${liquidity_usd:,.0f} (<${MODERATE_THRESHOLD:,}) - Slippage >1%"
+        else:
+            risk_level = "LOW"
+            penalty = LOW_PENALTY
+            warning = None
+
+        return {
+            "risk_level": risk_level,
+            "liquidity_depth_usd": liquidity_usd,
+            "liquidity_fdv_ratio": liquidity_fdv_ratio,
+            "conviction_penalty": penalty,
+            "warning_message": warning,
+            "data_source": "DEXSCREENER",
+            "confidence": "HIGH"  # DEX data is real-time and reliable
+        }
 
     def _run_sanity_checks(self, data: Dict[str, Any], token: str) -> Dict[str, List[str]]:
         """
