@@ -328,7 +328,17 @@ class VCQualityValidator:
         investors = []
         tier_counts = {"TIER_1": 0, "TIER_2": 0, "TIER_3": 0, "TIER_4": 0, "UNKNOWN": 0}
 
-        for vc_name in vc_investors:
+        for vc_item in vc_investors:
+            # Handle both string and dict formats
+            # String format: "Framework Ventures"
+            # Dict format: {"name": "Framework Ventures", "tier": "Tier 1"}
+            if isinstance(vc_item, dict):
+                vc_name = vc_item.get("name", "") or vc_item.get("vc_name", "") or str(vc_item)
+            elif isinstance(vc_item, str):
+                vc_name = vc_item
+            else:
+                vc_name = str(vc_item)
+
             tier = self._classify_vc_tier(vc_name)
             investors.append(VCInvestor(
                 name=vc_name,
