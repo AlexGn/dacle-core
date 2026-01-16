@@ -588,6 +588,25 @@ class DataConsolidator:
             if dex_enhanced_fields:
                 logger.info(f"🔗 DEX enhancement: Added {len(dex_enhanced_fields)} fields: {dex_enhanced_fields}")
 
+        # Session 331: Calculate market_cap from FDV + float_percent if missing or zero
+        # This ensures market_cap is always populated when we have the components to calculate it
+        mc = consolidated.get("market_cap")
+        fdv = consolidated.get("fdv") or consolidated.get("fdv_at_tge_low")
+        float_pct = consolidated.get("float_percent") or consolidated.get("float_pct") or consolidated.get("tge_unlock_pct")
+
+        if (mc is None or mc == 0) and fdv and float_pct:
+            calculated_mc = fdv * (float_pct / 100)
+            consolidated["market_cap"] = calculated_mc
+            consolidated["_market_cap_source"] = "calculated_from_fdv_float"
+            logger.info(f"📐 Calculated market_cap from FDV × Float%: ${calculated_mc:,.2f} (FDV=${fdv:,.2f} × {float_pct:.1f}%)")
+
+            # Also calculate fdv_mc_ratio if missing
+            fdv_mc = consolidated.get("fdv_mc_ratio")
+            if (fdv_mc is None or fdv_mc == 0) and calculated_mc > 0:
+                calculated_ratio = fdv / calculated_mc
+                consolidated["fdv_mc_ratio"] = calculated_ratio
+                logger.info(f"📐 Calculated fdv_mc_ratio: {calculated_ratio:.2f}x")
+
         # Session 291: P0 Liquidity Validation (Critical Safety)
         # Prevents honeypot tokens with $5K liquidity from getting 8/10 conviction scores
         # Session 321: Now runs AFTER DEX enhancement to use liquidity_usd from DexScreener
