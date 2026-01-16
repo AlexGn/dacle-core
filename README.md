@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.14 - Session 322 Codebase Audit, January 13, 2026)
+## 📊 Current Status (v5.15 - Session 330 TA Screenshot Fix, January 16, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -35,7 +35,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 90 learnings (L001-L090) |
+| **Learning System** | ✅ 100% | 91 learnings (L001-L091) |
 | **MEXC Trade Sync** | ✅ 100% | Dual-phase sync (active + closed positions) |
 | **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
@@ -45,7 +45,17 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🔒 LATEST (Session 322)**: Comprehensive Codebase Audit ✅ **COMPLETE**
+**🔒 LATEST (Session 330)**: TA Screenshot DCA Extraction Fix ✅ **COMPLETE**
+- **Problem**: DCA level not displaying on dashboard after TA screenshot upload
+- **Root Cause 1**: `ta_summary` dict missing `dca_level` field when saving to `latest.json`
+- **Root Cause 2**: Dashboard using `tokens` variable instead of `TOKENS_DATA` global
+- **Solution 1**: Added `"dca_level": ta_result.dca_level` to saved summary in ta_upload.py
+- **Solution 2**: Fixed variable name mismatch at lines 11419-11421 in dashboard
+- **L091 Updated**: DCA vs indicator distinction rule (YELLOW + "DCA" text vs long indicator names)
+- **Files Modified**: `api/routers/ta_upload.py`, `dashboard/tokens_dashboard.html`, `docs/reference/learnings/LEARNING_091_*.md`
+- **Learning Count**: 91 learnings (L001-L091)
+
+**🚀 PREVIOUS (Session 322)**: Comprehensive Codebase Audit ✅ **COMPLETE**
 - **Overall Health Score**: 7.8/10 (GOOD - critical issues addressed)
 - **Security Fixes**: Input validation (ta_upload.py), CORS restriction (webhook_app.py), Admin auth (/stats)
 - **VPS Standardization**: 4 systemd services updated to `/root/dacle` path
