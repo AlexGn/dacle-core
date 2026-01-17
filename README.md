@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.15 - Session 330 TA Screenshot Fix, January 16, 2026)
+## 📊 Current Status (v5.16 - Session 332 R:R Sanity Check, January 17, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -40,12 +40,23 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
 | **LONG System Validation** | ✅ 100% | N=41 trades, 82.9% WIN+BE rate (Session 314) |
+| **TA Extraction Validation** | ✅ 100% | R:R ratio sanity checks, 30-day screenshot retention |
 
 **Next Phase**: ML training with LONG outcomes, R:R ratio optimization
 
 ---
 
-**🔒 LATEST (Session 330)**: TA Screenshot DCA Extraction Fix ✅ **COMPLETE**
+**🔒 LATEST (Session 332)**: R:R Ratio Sanity Check Validation ✅ **COMPLETE**
+- **Feature**: R:R ratio validation added to TA screenshot extraction
+- **R:R > 50:1**: Warning + confidence -30% (likely extraction error)
+- **R:R < 0.1:1**: Warning (SL too wide or Target too close)
+- **R:R < 0.5:1**: Info warning (below recommended minimum)
+- **Screenshot Retention**: Verified working - 30-day archival with 12+ screenshots per token
+- **L091 Updated**: Added sanity check validation documentation
+- **Files Modified**: `api/routers/ta_upload.py` (lines 1507-1530), L091 learning
+- **Learning Count**: 91 learnings (L001-L091)
+
+**🔒 PREVIOUS (Session 330)**: TA Screenshot DCA Extraction Fix ✅ **COMPLETE**
 - **Problem**: DCA level not displaying on dashboard after TA screenshot upload
 - **Root Cause 1**: `ta_summary` dict missing `dca_level` field when saving to `latest.json`
 - **Root Cause 2**: Dashboard using `tokens` variable instead of `TOKENS_DATA` global
