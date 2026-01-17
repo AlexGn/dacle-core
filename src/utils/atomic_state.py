@@ -61,7 +61,7 @@ class StateCorruptionError(AtomicStateError):
     pass
 
 
-def _acquire_lock(file_handle, exclusive: bool = False, timeout: float = 5.0) -> bool:
+def _acquire_lock(file_handle, exclusive: bool = False, timeout: float = 30.0) -> bool:
     """
     Acquire a file lock with timeout.
 
