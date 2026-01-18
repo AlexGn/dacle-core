@@ -47,10 +47,14 @@ class CoinGeckoFetcher:
     Fetches tokenomics data from CoinGecko API for listed tokens.
 
     Replaces CryptoRank as the automated_data source in data consolidation.
+
+    Session 336: Added coin list caching to reduce API calls (free tier: 10-30 req/min)
     """
 
     BASE_URL = "https://api.coingecko.com/api/v3"
     TIMEOUT = 30
+    COINS_LIST_CACHE_FILE = "/tmp/coingecko_coins_list.json"
+    COINS_LIST_CACHE_TTL = 3600 * 24  # 24 hours
 
     def __init__(self):
         """Initialize fetcher."""
@@ -59,6 +63,8 @@ class CoinGeckoFetcher:
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
             'Accept': 'application/json'
         })
+        self._coins_list_cache = None
+        self._coins_list_cache_time = 0
 
     def fetch_token(self, symbol_or_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -110,6 +116,9 @@ class CoinGeckoFetcher:
 
         except Exception as e:
             logger.error(f"Failed to fetch {symbol_or_id} from CoinGecko: {e}")
+            # Session 336: Re-raise rate limit errors so callers can implement backoff
+            if "429" in str(e) or "Too Many Requests" in str(e):
+                raise
             return None
 
     def fetch_tokens_batch(self, symbols: List[str]) -> Dict[str, Optional[Dict]]:
@@ -127,9 +136,196 @@ class CoinGeckoFetcher:
             results[symbol] = self.fetch_token(symbol)
         return results
 
+    def get_top_gainers(self, limit: int = 50, min_market_cap: float = 1_000_000) -> List[Dict]:
+        """
+        Get top gaining tokens by 24h price change.
+
+        Session 336: Added for TradableOpportunityScanner integration.
+
+        Args:
+            limit: Number of top gainers to return
+            min_market_cap: Minimum market cap filter (default $1M)
+
+        Returns:
+            List of token dicts sorted by 24h gain descending
+        """
+        try:
+            # CoinGecko /coins/markets endpoint with sorting
+            url = f"{self.BASE_URL}/coins/markets"
+            params = {
+                'vs_currency': 'usd',
+                'order': 'volume_desc',  # Get high-volume coins first
+                'per_page': 250,  # Fetch more to filter
+                'page': 1,
+                'sparkline': 'false',
+                'price_change_percentage': '24h'
+            }
+
+            response = self.session.get(url, params=params, timeout=self.TIMEOUT)
+            response.raise_for_status()
+            coins = response.json()
+
+            # Filter by market cap and positive gain, then sort
+            gainers = []
+            for coin in coins:
+                mc = coin.get('market_cap') or 0
+                pct_24h = coin.get('price_change_percentage_24h') or 0
+
+                if mc >= min_market_cap and pct_24h > 0:
+                    gainers.append({
+                        "symbol": coin.get('symbol', '').upper(),
+                        "name": coin.get('name'),
+                        "coingecko_id": coin.get('id'),
+                        "price_usd": coin.get('current_price'),
+                        "market_cap": mc,
+                        "volume_24h": coin.get('total_volume'),
+                        "percent_change_24h": pct_24h,
+                        "percent_change_7d": coin.get('price_change_percentage_7d_in_currency'),
+                        "ath": coin.get('ath'),
+                        "ath_change_percentage": coin.get('ath_change_percentage'),
+                        "circulating_supply": coin.get('circulating_supply'),
+                        "total_supply": coin.get('total_supply'),
+                        "max_supply": coin.get('max_supply'),
+                        "data_source": "coingecko_gainers",
+                        "fetched_at": datetime.now(timezone.utc).isoformat()
+                    })
+
+            # Sort by 24h gain descending
+            gainers.sort(key=lambda x: x.get('percent_change_24h', 0), reverse=True)
+
+            logger.info(f"CoinGecko: Found {len(gainers[:limit])} gainers with MC>=${min_market_cap/1e6:.1f}M")
+            return gainers[:limit]
+
+        except Exception as e:
+            logger.error(f"CoinGecko get_top_gainers failed: {e}")
+            return []
+
+    def get_top_losers(self, limit: int = 50, min_market_cap: float = 1_000_000) -> List[Dict]:
+        """
+        Get top losing tokens by 24h price change (for LONG opportunities).
+
+        Session 336: Added for TradableOpportunityScanner integration.
+
+        Args:
+            limit: Number of top losers to return
+            min_market_cap: Minimum market cap filter
+
+        Returns:
+            List of token dicts sorted by 24h loss (most negative first)
+        """
+        try:
+            # CoinGecko /coins/markets endpoint
+            url = f"{self.BASE_URL}/coins/markets"
+            params = {
+                'vs_currency': 'usd',
+                'order': 'volume_desc',  # Get high-volume coins first
+                'per_page': 250,  # Fetch more to filter
+                'page': 1,
+                'sparkline': 'false',
+                'price_change_percentage': '24h'
+            }
+
+            response = self.session.get(url, params=params, timeout=self.TIMEOUT)
+            response.raise_for_status()
+            coins = response.json()
+
+            # Filter by market cap and negative change, then sort
+            losers = []
+            for coin in coins:
+                mc = coin.get('market_cap') or 0
+                pct_24h = coin.get('price_change_percentage_24h') or 0
+
+                if mc >= min_market_cap and pct_24h < 0:
+                    losers.append({
+                        "symbol": coin.get('symbol', '').upper(),
+                        "name": coin.get('name'),
+                        "coingecko_id": coin.get('id'),
+                        "price_usd": coin.get('current_price'),
+                        "market_cap": mc,
+                        "volume_24h": coin.get('total_volume'),
+                        "percent_change_24h": pct_24h,
+                        "percent_change_7d": coin.get('price_change_percentage_7d_in_currency'),
+                        "ath": coin.get('ath'),
+                        "ath_change_percentage": coin.get('ath_change_percentage'),
+                        "circulating_supply": coin.get('circulating_supply'),
+                        "total_supply": coin.get('total_supply'),
+                        "max_supply": coin.get('max_supply'),
+                        "data_source": "coingecko_losers",
+                        "fetched_at": datetime.now(timezone.utc).isoformat()
+                    })
+
+            # Sort by 24h change ascending (most negative first)
+            losers.sort(key=lambda x: x.get('percent_change_24h', 0))
+
+            logger.info(f"CoinGecko: Found {len(losers[:limit])} losers with MC>=${min_market_cap/1e6:.1f}M")
+            return losers[:limit]
+
+        except Exception as e:
+            logger.error(f"CoinGecko get_top_losers failed: {e}")
+            return []
+
+    def _get_coins_list(self) -> List[Dict]:
+        """
+        Get cached CoinGecko coins list. Caches for 24h to reduce API calls.
+
+        Session 336: Added caching to avoid 429 rate limit errors.
+        CoinGecko free tier: 10-30 requests/minute.
+
+        Returns:
+            List of coin dicts with 'id', 'symbol', 'name' keys
+        """
+        import time
+        import json
+        import os
+
+        current_time = time.time()
+
+        # Check in-memory cache first
+        if self._coins_list_cache and (current_time - self._coins_list_cache_time) < self.COINS_LIST_CACHE_TTL:
+            return self._coins_list_cache
+
+        # Check file cache
+        if os.path.exists(self.COINS_LIST_CACHE_FILE):
+            try:
+                file_mtime = os.path.getmtime(self.COINS_LIST_CACHE_FILE)
+                if (current_time - file_mtime) < self.COINS_LIST_CACHE_TTL:
+                    with open(self.COINS_LIST_CACHE_FILE, 'r') as f:
+                        self._coins_list_cache = json.load(f)
+                        self._coins_list_cache_time = current_time
+                        logger.info(f"Loaded {len(self._coins_list_cache)} coins from cache file")
+                        return self._coins_list_cache
+            except Exception as e:
+                logger.warning(f"Failed to load coins cache: {e}")
+
+        # Fetch from API
+        try:
+            url = f"{self.BASE_URL}/coins/list"
+            response = self.session.get(url, timeout=self.TIMEOUT)
+            response.raise_for_status()
+            coins = response.json()
+
+            # Save to memory and file cache
+            self._coins_list_cache = coins
+            self._coins_list_cache_time = current_time
+
+            try:
+                with open(self.COINS_LIST_CACHE_FILE, 'w') as f:
+                    json.dump(coins, f)
+                logger.info(f"Cached {len(coins)} coins to file")
+            except Exception as e:
+                logger.warning(f"Failed to save coins cache: {e}")
+
+            return coins
+
+        except Exception as e:
+            logger.error(f"Failed to fetch coins list: {e}")
+            return self._coins_list_cache or []
+
     def _find_coin_id(self, symbol_or_id: str) -> Optional[str]:
         """
         Find CoinGecko coin ID from symbol or ID.
+
+        Session 336: Now uses cached coins list to avoid rate limits.
 
         Args:
             symbol_or_id: Token symbol (BTC) or CoinGecko ID (bitcoin)
@@ -141,13 +337,13 @@ class CoinGeckoFetcher:
         if symbol_or_id.islower() and symbol_or_id.isalnum():
             return symbol_or_id
 
-        # Otherwise, search by symbol
+        # Otherwise, search by symbol using cached list
         try:
-            # Use /coins/list to get all coins (cached by CoinGecko)
-            url = f"{self.BASE_URL}/coins/list"
-            response = self.session.get(url, timeout=self.TIMEOUT)
-            response.raise_for_status()
-            coins = response.json()
+            # Session 336: Use cached coins list instead of API call
+            coins = self._get_coins_list()
+            if not coins:
+                logger.warning(f"  No coins list available for {symbol_or_id}")
+                return None
 
             # Find coin matching symbol (case-insensitive)
             # Prefer exact match with highest market cap
@@ -155,7 +351,7 @@ class CoinGeckoFetcher:
             matches = [coin for coin in coins if coin['symbol'].upper() == symbol_upper]
 
             if not matches:
-                logger.warning(f"  Symbol {symbol_or_id} not found in CoinGecko list")
+                # Don't log for every miss - too noisy
                 return None
 
             # If multiple matches, prefer the one with most well-known ID
