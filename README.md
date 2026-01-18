@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.16 - Session 332 R:R Sanity Check, January 17, 2026)
+## 📊 Current Status (v5.17 - Session 333 Token Data Preservation, January 17, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -35,7 +35,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 91 learnings (L001-L091) |
+| **Learning System** | ✅ 100% | 92 learnings (L001-L092) |
 | **MEXC Trade Sync** | ✅ 100% | Dual-phase sync (active + closed positions) |
 | **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
 | **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
@@ -46,7 +46,16 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🔒 LATEST (Session 332)**: R:R Ratio Sanity Check Validation ✅ **COMPLETE**
+**🔒 LATEST (Session 333)**: Token Data Preservation + L092 ✅ **COMPLETE**
+- **Problem**: Ghost tokens ACT/VIRTUAL appearing in API from paper trade tracker but missing data folders
+- **Solution**: Created `consolidated.json` files + L092 guardrails to prevent token deletion
+- **L092 Created**: Token Data Preservation - "Never delete, always create missing data"
+- **API Guardrail**: Auto-create `consolidated.json` from tracker data if missing
+- **Result**: 50 unique tokens visible (was 48 after incorrect skip logic)
+- **Files Modified**: `api/routers/tokens.py` - Added helper function + guardrail
+- **Learning Count**: 92 learnings (L001-L092)
+
+**🔒 PREVIOUS (Session 332)**: R:R Ratio Sanity Check Validation ✅ **COMPLETE**
 - **Feature**: R:R ratio validation added to TA screenshot extraction
 - **R:R > 50:1**: Warning + confidence -30% (likely extraction error)
 - **R:R < 0.1:1**: Warning (SL too wide or Target too close)
@@ -1040,14 +1049,14 @@ See [LICENSE](LICENSE)
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
-- **Learnings Documented**: 90 (L001-L090), **100% integrated** (25 Sherlock learnings operational) with governance framework
+- **Learnings Documented**: 92 (L001-L092), **100% integrated** (25 Sherlock learnings operational) with governance framework
 - **Safety Mechanisms**: 5 (News VETO, Multi-Timeframe, First Green Day Trap, Slippage, BTC CRITICAL VETO)
 - **Telegram Notifications**: ML-validated with STRONG_SHORT/MONITOR/SKIP grouping (Session 246)
 
 ---
 
-**Last Updated**: January 13, 2026
-**Version**: v5.13
-**Status**: Session 321 Liquidity Validator + UI Fix COMPLETE ✅ (18 tokens classified, dark theme restored) 🚀
-**Total Learnings**: 90 (L001-L090), **100% integrated** (25 Sherlock learnings operational)
-**Liquidity Validation**: DEX-aware classification, dark theme UI consistency
+**Last Updated**: January 17, 2026
+**Version**: v5.17
+**Status**: Session 333 Token Data Preservation + L092 COMPLETE ✅ (50 unique tokens, guardrails active) 🚀
+**Total Learnings**: 92 (L001-L092), **100% integrated** (25 Sherlock learnings operational)
+**Token Preservation**: L092 guardrails prevent token deletion, auto-create missing data
