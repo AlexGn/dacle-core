@@ -563,6 +563,7 @@ class TradableOpportunityScanner:
         import json
 
         data_dir = Path(__file__).parent.parent.parent.parent / "data" / "tokens"
+        watchlist_path = Path(__file__).parent.parent.parent.parent / "data" / "watchlist.json"
         now = datetime.utcnow().isoformat()
 
         results = {
@@ -572,12 +573,31 @@ class TradableOpportunityScanner:
             "dry_run": dry_run
         }
 
+        # Session 337: Load watchlist to check if token already exists in normal list
+        existing_watchlist_tokens = set()
+        try:
+            if watchlist_path.exists():
+                with open(watchlist_path, "r") as f:
+                    watchlist_data = json.load(f)
+                    existing_watchlist_tokens = set(watchlist_data.get("tokens", {}).keys())
+                    logger.info(f"Loaded {len(existing_watchlist_tokens)} tokens from watchlist for duplicate check")
+        except Exception as e:
+            logger.warning(f"Could not load watchlist for duplicate check: {e}")
+
         for opp in opportunities:
             symbol = opp.symbol.upper()
             token_dir = data_dir / symbol
             consolidated_path = token_dir / "consolidated.json"
 
-            # Skip if already exists
+            # Session 337: Skip if already in watchlist (normal list)
+            if symbol in existing_watchlist_tokens:
+                results["already_exists"].append({
+                    "symbol": symbol,
+                    "reason": "Already in watchlist (normal list)"
+                })
+                continue
+
+            # Skip if consolidated.json already exists
             if consolidated_path.exists():
                 results["already_exists"].append({
                     "symbol": symbol,
@@ -654,6 +674,42 @@ class TradableOpportunityScanner:
                 # Write consolidated.json
                 with open(consolidated_path, "w") as f:
                     json.dump(consolidated_data, f, indent=2, default=str)
+
+                # Session 337: Also add to watchlist with discovery_metadata for Pending QC section
+                try:
+                    if watchlist_path.exists():
+                        with open(watchlist_path, "r") as f:
+                            watchlist_data = json.load(f)
+                    else:
+                        watchlist_data = {"tokens": {}, "last_updated": now}
+
+                    watchlist_data["tokens"][symbol] = {
+                        "state": "DISCOVERED",
+                        "added_at": now,
+                        "state_history": [{
+                            "from": "NEW",
+                            "to": "DISCOVERED",
+                            "at": now,
+                            "reason": f"Tradable scanner: {opp.discovery_reason}"
+                        }],
+                        "updated_at": now,
+                        "discovery_metadata": {
+                            "qc_status": "pending",
+                            "discovered_at": opp.discovered_at,
+                            "sources": [opp.discovery_source],
+                            "scanner_opportunity_type": opp.opportunity_type.value,
+                            "tradability_score": opp.tradability_score,
+                            "conviction_estimate": consolidated_data["conviction_estimate"],
+                            "is_on_mexc": opp.is_on_mexc
+                        }
+                    }
+                    watchlist_data["last_updated"] = now
+
+                    with open(watchlist_path, "w") as f:
+                        json.dump(watchlist_data, f, indent=2, default=str)
+
+                except Exception as e:
+                    logger.warning(f"Could not add {symbol} to watchlist: {e}")
 
                 results["created"].append({
                     "symbol": symbol,
