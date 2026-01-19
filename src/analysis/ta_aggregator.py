@@ -260,11 +260,13 @@ def get_atr_adjusted_thresholds(atr_pct: Optional[float]) -> Dict[str, float]:
     """
     Calculate dynamic thresholds based on BTC ATR.
 
-    In volatile markets (high ATR), thresholds are wider.
-    In calm markets (low ATR), thresholds are tighter.
+    Session 337 (Gemini Approved):
+    - Flash crash: FIXED at 5% (Gemini Option A - aggressive)
+      "By 10% BTC drop, altcoins have already hit SLs. The 5% threshold catches the cascade early."
+    - Other thresholds scale with ATR
 
     Default thresholds (when ATR unavailable):
-    - Flash crash: 5%
+    - Flash crash: 5% (FIXED - Gemini approved)
     - Near support: 3%
     - Imminent breakdown: 1%
     - Near resistance: 2%
@@ -276,8 +278,9 @@ def get_atr_adjusted_thresholds(atr_pct: Optional[float]) -> Dict[str, float]:
         Dict with adjusted thresholds
     """
     # Default thresholds (current hardcoded values)
+    # Session 337: Flash crash fixed at 5% per Gemini (Option A - aggressive)
     defaults = {
-        "flash_crash_pct": 5.0,          # > X% drop in 4H = flash crash
+        "flash_crash_pct": 5.0,          # FIXED at 5% (Gemini approved Session 337)
         "near_support_pct": 3.0,         # < X% from support = risky
         "imminent_breakdown_pct": 1.0,   # < X% from support = critical
         "near_resistance_pct": 2.0,      # < X% from resistance = caution
@@ -288,19 +291,22 @@ def get_atr_adjusted_thresholds(atr_pct: Optional[float]) -> Dict[str, float]:
         return defaults
 
     # ATR-adjusted thresholds:
-    # - Flash crash = max(3%, ATR * 2) - at least 3% but scales with volatility
+    # Session 337: Flash crash FIXED at 5% per Gemini approval (Option A)
+    # Gemini rationale: "By 10% BTC drop, altcoins have already hit SLs.
+    # The 5% threshold catches the cascade early."
+    # - Flash crash = FIXED 5% (NOT dynamic - Gemini mandate)
     # - Near support = max(2%, ATR * 1.5) - at least 2%
     # - Imminent breakdown = max(0.5%, ATR * 0.5) - at least 0.5%
     # - Near resistance = max(1.5%, ATR * 1.0) - at least 1.5%
     adjusted = {
-        "flash_crash_pct": max(3.0, atr_pct * 2.0),
+        "flash_crash_pct": 5.0,  # FIXED - Gemini Session 337 approved
         "near_support_pct": max(2.0, atr_pct * 1.5),
         "imminent_breakdown_pct": max(0.5, atr_pct * 0.5),
         "near_resistance_pct": max(1.5, atr_pct * 1.0),
     }
 
     logger.debug(
-        f"ATR={atr_pct:.2f}% → Thresholds: flash={adjusted['flash_crash_pct']:.1f}%, "
+        f"ATR={atr_pct:.2f}% → Thresholds: flash={adjusted['flash_crash_pct']:.1f}% (FIXED), "
         f"support={adjusted['near_support_pct']:.1f}%, "
         f"breakdown={adjusted['imminent_breakdown_pct']:.1f}%, "
         f"resistance={adjusted['near_resistance_pct']:.1f}%"
@@ -830,8 +836,11 @@ class TADataAggregator:
                 critical_reasons.append(f"BTC at critical support ({dist_to_support:.1f}% away, threshold: {imminent_threshold:.1f}%)")
 
             # Check for active flash crash (large recent move)
-            # Session 280 F3: ATR-adjusted threshold (was hardcoded 5%)
-            flash_crash_threshold = thresholds["flash_crash_pct"]
+            # Session 337 (Gemini Approved): FIXED 5% threshold - "DEFCON 1" mode
+            # Gemini: "By 10% BTC drop, altcoins have already hit SLs. 5% catches cascade early."
+            flash_crash_threshold = thresholds["flash_crash_pct"]  # Fixed at 5%
+            flash_crash_detected = False
+            flash_crash_magnitude = 0.0
             try:
                 if btc_ohlcv and len(btc_ohlcv) >= 2:
                     current_close = btc_ohlcv[-1][4]
@@ -839,7 +848,9 @@ class TADataAggregator:
                     pct_change = ((current_close - prev_close) / prev_close) * 100
                     if pct_change < -flash_crash_threshold:
                         is_critical = True
-                        critical_reasons.append(f"BTC crashed {pct_change:.1f}% in last 4H (threshold: -{flash_crash_threshold:.1f}%)")
+                        flash_crash_detected = True
+                        flash_crash_magnitude = abs(pct_change)
+                        critical_reasons.append(f"🔴 DEFCON 1: BTC crashed {pct_change:.1f}% in last 4H (threshold: -{flash_crash_threshold:.1f}%)")
             except Exception:
                 pass  # Silently fail - don't break on this check
 
@@ -849,7 +860,18 @@ class TADataAggregator:
                 result["position_size_multiplier"] = 0.0
                 result["leverage_allowed"] = False
                 result["veto_active"] = True
-                result["warning_message"] = f"🚨 BTC CRITICAL - VETO ALL ALT TRADES: {'; '.join(critical_reasons)}"
+
+                # Session 337: Enhanced DEFCON 1 response for flash crash
+                if flash_crash_detected:
+                    result["defcon_level"] = 1
+                    result["flash_crash_detected"] = True
+                    result["flash_crash_magnitude"] = flash_crash_magnitude
+                    result["action_required"] = "CANCEL all new buy orders, verify existing SLs"
+                    result["warning_message"] = f"🚨 DEFCON 1 - FLASH CRASH VETO (L031): {'; '.join(critical_reasons)}"
+                else:
+                    result["defcon_level"] = 2
+                    result["flash_crash_detected"] = False
+                    result["warning_message"] = f"🚨 BTC CRITICAL - VETO ALL ALT TRADES: {'; '.join(critical_reasons)}"
 
             veto_str = " | 🚨 VETO ACTIVE" if result.get('veto_active') else ""
             logger.info(f"[BTC-PRECHECK] Trend: {result['btc_trend']} | "

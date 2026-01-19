@@ -457,6 +457,10 @@ class TradableOpportunityScanner:
                 token_age_days=token_age_days
             )
 
+            # Session 338: Calculate conviction_estimate now so it's available for filtering
+            if opportunity.conviction_estimate is None:
+                opportunity.conviction_estimate = self._estimate_conviction(opportunity)
+
             opportunities.append(opportunity)
 
         # Sort by tradability score (highest first)
