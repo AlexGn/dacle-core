@@ -482,6 +482,15 @@ COINGECKO_FIELDS = {
     "website", "website_url", "twitter_handle", "twitter_url", "telegram_channel"
 }
 
+# Session 339 (L093B): Symbol aliases for tokens where DACLE symbol != CoinGecko symbol
+# Format: "DACLE_SYMBOL": ("COINGECKO_SYMBOL", "coingecko_id", "token_name")
+# Use when CoinGecko lists a token under a different symbol than we track
+COINGECKO_SYMBOL_ALIASES = {
+    "H": ("HSK", "hashkey-ecopoints", "HashKey Platform Token"),
+    # Add more aliases as needed:
+    # "DACLE_SYMBOL": ("CG_SYMBOL", "coingecko-id", "name"),
+}
+
 CMC_FIELDS = {
     "contract_address", "circulating_supply", "market_cap"
 }
@@ -496,6 +505,97 @@ OTC_FIELDS = {
 def needs_source(missing_fields: List[str], source_fields: set) -> bool:
     """Check if any missing field can be provided by this source."""
     return bool(set(missing_fields) & source_fields)
+
+
+def _process_coingecko_data(coin_data: Dict, token_symbol: str) -> Dict[str, Any]:
+    """
+    Process CoinGecko API response into standardized format.
+
+    Session 339 (L093B): Extracted for reuse by alias and normal fetch paths.
+
+    Args:
+        coin_data: Raw response from CoinGecko /coins/{id} endpoint
+        token_symbol: The DACLE token symbol (may differ from CoinGecko symbol)
+
+    Returns:
+        Dict with standardized token data fields
+    """
+    market_data = coin_data.get("market_data", {})
+    links = coin_data.get("links", {})
+
+    # Extract contract addresses from platforms
+    platforms = coin_data.get("platforms", {})
+    contract_address = None
+    for platform, address in platforms.items():
+        if address and address.startswith("0x") and len(address) == 42:
+            contract_address = address
+            break
+
+    # Extract whitepaper URL from links
+    whitepaper_url = None
+    whitepaper_links = links.get("whitepaper") or []
+    if whitepaper_links:
+        whitepaper_url = whitepaper_links if isinstance(whitepaper_links, str) else whitepaper_links[0] if whitepaper_links else None
+
+    # Extract homepage/website
+    website = None
+    homepage_links = links.get("homepage", [])
+    if homepage_links:
+        for hp in homepage_links:
+            if hp and hp.strip():
+                website = hp.strip()
+                break
+
+    # Extract social links
+    twitter_handle = links.get("twitter_screen_name")
+    telegram_channel = links.get("telegram_channel_identifier")
+
+    # Extract description
+    description = coin_data.get("description", {})
+    project_description = description.get("en") if isinstance(description, dict) else description
+
+    # Truncate description if too long
+    if project_description and len(project_description) > 500:
+        project_description = project_description[:497] + "..."
+
+    # Extract categories
+    categories = coin_data.get("categories", [])
+    categories = [c for c in categories if c]
+
+    # Build twitter URL from handle
+    twitter_url = f"https://twitter.com/{twitter_handle}" if twitter_handle else None
+
+    result = {
+        "token_symbol": token_symbol.upper(),
+        "coingecko_id": coin_data.get("id"),
+        "name": coin_data.get("name"),
+        "contract_address": contract_address,
+        "fdv": market_data.get("fully_diluted_valuation", {}).get("usd"),
+        "market_cap": market_data.get("market_cap", {}).get("usd"),
+        "current_price": market_data.get("current_price", {}).get("usd"),
+        "circulating_supply": market_data.get("circulating_supply"),
+        "total_supply": market_data.get("total_supply"),
+        "whitepaper_url": whitepaper_url,
+        "website_url": website,
+        "website": website,
+        "project_description": project_description,
+        "categories": categories if categories else None,
+        "twitter_handle": twitter_handle,
+        "twitter_url": twitter_url,
+        "telegram_channel": telegram_channel,
+        "_source": "coingecko",
+        "_fetched_at": datetime.utcnow().isoformat() + "Z"
+    }
+
+    # Remove None values
+    result = {k: v for k, v in result.items() if v is not None}
+
+    # Log what we found
+    found_fields = [k for k in ["whitepaper_url", "project_description", "categories", "twitter_handle"]
+                    if result.get(k)]
+    logger.info(f"CoinGecko: Processed {token_symbol} (coingecko_id: {coin_data.get('id')}, "
+                f"contract: {contract_address or 'N/A'}, extra fields: {found_fields or 'none'})")
+    return result
 
 
 # ============================================================================
@@ -514,6 +614,7 @@ def fetch_coingecko(token: str, token_name: Optional[str] = None) -> Optional[Di
     - website, twitter_handle, telegram_channel (from links)
 
     Session 84: Added token_name parameter for better identity verification.
+    Session 339 (L093B): Added COINGECKO_SYMBOL_ALIASES for mismatched symbols.
 
     CoinGecko provides (FREE):
     - contract_address (via platforms field)
@@ -530,6 +631,35 @@ def fetch_coingecko(token: str, token_name: Optional[str] = None) -> Optional[Di
     Rate limited to 1 call/second to avoid 429s.
     """
     try:
+        # Session 339 (L093B): Check symbol aliases FIRST
+        # This handles tokens where DACLE uses a different symbol than CoinGecko
+        token_upper = token.upper()
+        if token_upper in COINGECKO_SYMBOL_ALIASES:
+            cg_symbol, coin_id, aliased_name = COINGECKO_SYMBOL_ALIASES[token_upper]
+            logger.info(f"CoinGecko: Symbol alias {token_upper} → {cg_symbol} ({coin_id})")
+            # Skip search - directly fetch the known coin_id
+            time.sleep(COINGECKO_RATE_LIMIT_DELAY)
+            coin_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}"
+            params = {
+                "localization": "false",
+                "tickers": "false",
+                "market_data": "true",
+                "community_data": "true",
+                "developer_data": "true"
+            }
+            try:
+                response = fetch_with_retry(coin_url, {"accept": "application/json"}, params=params, timeout=15)
+            except RetryableError as e:
+                logger.warning(f"CoinGecko alias fetch failed: {e}")
+                return None
+            if response.status_code == 200:
+                data = response.json()
+                # Process and return data (reuse logic from below)
+                return _process_coingecko_data(data, token_upper)
+            else:
+                logger.warning(f"CoinGecko alias fetch failed: {response.status_code}")
+                return None
+
         # Search for the token first (use name if provided for better results)
         search_query = token_name if token_name else token
         search_url = f"https://api.coingecko.com/api/v3/search?query={search_query}"
@@ -613,86 +743,9 @@ def fetch_coingecko(token: str, token_name: Optional[str] = None) -> Optional[Di
             logger.warning(f"CoinGecko coin data failed: {response.status_code}")
             return None
 
+        # Session 339 (L093B): Use helper function to process data (avoids duplication)
         coin_data = response.json()
-        market_data = coin_data.get("market_data", {})
-        links = coin_data.get("links", {})
-
-        # Extract contract addresses from platforms
-        platforms = coin_data.get("platforms", {})
-        contract_address = None
-        for platform, address in platforms.items():
-            if address and address.startswith("0x") and len(address) == 42:
-                contract_address = address
-                break
-
-        # Session 79I: Extract whitepaper URL from links
-        whitepaper_url = None
-        whitepaper_links = links.get("whitepaper") or []
-        if whitepaper_links:
-            whitepaper_url = whitepaper_links if isinstance(whitepaper_links, str) else whitepaper_links[0] if whitepaper_links else None
-
-        # Session 79I: Extract homepage/website
-        website = None
-        homepage_links = links.get("homepage", [])
-        if homepage_links:
-            # Get first non-empty homepage
-            for hp in homepage_links:
-                if hp and hp.strip():
-                    website = hp.strip()
-                    break
-
-        # Session 79I: Extract social links
-        twitter_handle = links.get("twitter_screen_name")
-        telegram_channel = links.get("telegram_channel_identifier")
-
-        # Session 79I: Extract description
-        description = coin_data.get("description", {})
-        project_description = description.get("en") if isinstance(description, dict) else description
-
-        # Truncate description if too long
-        if project_description and len(project_description) > 500:
-            project_description = project_description[:497] + "..."
-
-        # Session 79I: Extract categories
-        categories = coin_data.get("categories", [])
-        # Filter out None values
-        categories = [c for c in categories if c]
-
-        # Build twitter URL from handle
-        twitter_url = f"https://twitter.com/{twitter_handle}" if twitter_handle else None
-
-        result = {
-            "token_symbol": token.upper(),
-            "coingecko_id": coin_id,
-            "name": coin_data.get("name"),
-            "contract_address": contract_address,
-            "fdv": market_data.get("fully_diluted_valuation", {}).get("usd"),
-            "market_cap": market_data.get("market_cap", {}).get("usd"),
-            "current_price": market_data.get("current_price", {}).get("usd"),
-            "circulating_supply": market_data.get("circulating_supply"),
-            "total_supply": market_data.get("total_supply"),
-            # Session 79I: New IMPORTANT fields (use correct field names)
-            "whitepaper_url": whitepaper_url,
-            "website_url": website,  # Match field_definitions.py
-            "website": website,      # Also keep for backwards compatibility
-            "project_description": project_description,
-            "categories": categories if categories else None,
-            "twitter_handle": twitter_handle,
-            "twitter_url": twitter_url,  # Build full URL
-            "telegram_channel": telegram_channel,
-            "_source": "coingecko",
-            "_fetched_at": datetime.utcnow().isoformat() + "Z"
-        }
-
-        # Remove None values
-        result = {k: v for k, v in result.items() if v is not None}
-
-        # Log what we found
-        found_fields = [k for k in ["whitepaper_url", "project_description", "categories", "twitter_handle"]
-                        if result.get(k)]
-        logger.info(f"CoinGecko: Found {token} (contract: {contract_address or 'N/A'}, "
-                    f"new fields: {found_fields or 'none'})")
-        return result
+        return _process_coingecko_data(coin_data, token)
 
     except Exception as e:
         logger.error(f"CoinGecko fetch error: {e}")

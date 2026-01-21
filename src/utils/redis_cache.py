@@ -249,6 +249,33 @@ class RedisCache:
             logger.warning(f"Redis EXISTS error for {key}: {e}")
             return False
 
+    def ttl(self, key: str, namespace: Optional[str] = None) -> int:
+        """
+        Get time-to-live for a key.
+
+        Session 337 P2.2: Added for cache warming logic.
+
+        Args:
+            key: Cache key
+            namespace: Optional namespace
+
+        Returns:
+            Remaining TTL in seconds:
+            - Positive number: seconds remaining
+            - -1: key exists but has no expiry
+            - -2: key doesn't exist
+        """
+        if not self.enabled or not self.client:
+            return -1
+
+        try:
+            full_key = self._make_key(key, namespace)
+            return self.client.ttl(full_key)
+
+        except Exception as e:
+            logger.warning(f"Redis TTL error for {key}: {e}")
+            return -1
+
     def get_ttl(self, key: str, namespace: Optional[str] = None) -> int:
         """
         Get remaining TTL for a key in seconds.

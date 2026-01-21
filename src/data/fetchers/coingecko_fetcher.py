@@ -49,12 +49,22 @@ class CoinGeckoFetcher:
     Replaces CryptoRank as the automated_data source in data consolidation.
 
     Session 336: Added coin list caching to reduce API calls (free tier: 10-30 req/min)
+    Session 339: Added SYMBOL_ALIASES for tokens with mismatched symbols (L093B)
     """
 
     BASE_URL = "https://api.coingecko.com/api/v3"
     TIMEOUT = 30
     COINS_LIST_CACHE_FILE = "/tmp/coingecko_coins_list.json"
     COINS_LIST_CACHE_TTL = 3600 * 24  # 24 hours
+
+    # Session 339 (L093B): Symbol aliases for tokens where DACLE symbol != CoinGecko symbol
+    # Format: "DACLE_SYMBOL": ("COINGECKO_SYMBOL", "coingecko_id")
+    # Use when CoinGecko lists a token under a different symbol than we track
+    SYMBOL_ALIASES = {
+        "H": ("HSK", "hashkey-ecopoints"),     # HashKey Platform Token - listed as HSK on CoinGecko
+        # Add more aliases as needed:
+        # "DACLE_SYMBOL": ("CG_SYMBOL", "coingecko-id"),
+    }
 
     def __init__(self):
         """Initialize fetcher."""
@@ -326,6 +336,7 @@ class CoinGeckoFetcher:
         Find CoinGecko coin ID from symbol or ID.
 
         Session 336: Now uses cached coins list to avoid rate limits.
+        Session 339: Added SYMBOL_ALIASES lookup for mismatched symbols (L093B)
 
         Args:
             symbol_or_id: Token symbol (BTC) or CoinGecko ID (bitcoin)
@@ -333,6 +344,14 @@ class CoinGeckoFetcher:
         Returns:
             CoinGecko coin ID (e.g., "bitcoin") or None
         """
+        # Session 339 (L093B): Check symbol aliases FIRST
+        # This handles tokens where DACLE uses a different symbol than CoinGecko
+        symbol_upper = symbol_or_id.upper()
+        if symbol_upper in self.SYMBOL_ALIASES:
+            cg_symbol, cg_id = self.SYMBOL_ALIASES[symbol_upper]
+            logger.info(f"  Symbol alias: {symbol_upper} → {cg_symbol} ({cg_id})")
+            return cg_id
+
         # If it looks like an ID (lowercase, no special chars), try it directly
         if symbol_or_id.islower() and symbol_or_id.isalnum():
             return symbol_or_id
