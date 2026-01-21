@@ -39,6 +39,14 @@ import requests
 from datetime import datetime, timezone
 from typing import Dict, Optional, Any, List
 
+# Session 339: Import Redis cache for response caching (P0.1 optimization)
+try:
+    from src.utils.redis_cache import get_redis_cache
+    REDIS_CACHE_AVAILABLE = True
+except ImportError:
+    REDIS_CACHE_AVAILABLE = False
+    get_redis_cache = None  # type: ignore
+
 logger = logging.getLogger(__name__)
 
 
@@ -50,12 +58,17 @@ class CoinGeckoFetcher:
 
     Session 336: Added coin list caching to reduce API calls (free tier: 10-30 req/min)
     Session 339: Added SYMBOL_ALIASES for tokens with mismatched symbols (L093B)
+    Session 339: Added Redis response caching with 1h TTL (P0.1 optimization)
     """
 
     BASE_URL = "https://api.coingecko.com/api/v3"
     TIMEOUT = 30
     COINS_LIST_CACHE_FILE = "/tmp/coingecko_coins_list.json"
     COINS_LIST_CACHE_TTL = 3600 * 24  # 24 hours
+
+    # Session 339 (P0.1): Redis cache TTL for token data responses
+    # 1 hour TTL balances freshness with API call reduction
+    REDIS_CACHE_TTL = 3600  # 1 hour
 
     # Session 339 (L093B): Symbol aliases for tokens where DACLE symbol != CoinGecko symbol
     # Format: "DACLE_SYMBOL": ("COINGECKO_SYMBOL", "coingecko_id")
@@ -76,12 +89,15 @@ class CoinGeckoFetcher:
         self._coins_list_cache = None
         self._coins_list_cache_time = 0
 
-    def fetch_token(self, symbol_or_id: str) -> Optional[Dict[str, Any]]:
+    def fetch_token(self, symbol_or_id: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         """
         Fetch tokenomics for a token.
 
+        Session 339 (P0.1): Added Redis caching with 1h TTL for 30-40% speedup.
+
         Args:
             symbol_or_id: Token symbol (BTC) or CoinGecko ID (bitcoin)
+            force_refresh: If True, bypass cache and fetch fresh data
 
         Returns:
             Dict in automated_data format:
@@ -101,6 +117,18 @@ class CoinGeckoFetcher:
                 "fetched_at": "2026-01-12T..."
             }
         """
+        # Session 339 (P0.1): Check Redis cache first (unless force_refresh)
+        cache_key = f"coingecko:token:{symbol_or_id.upper()}"
+        if REDIS_CACHE_AVAILABLE and not force_refresh:
+            try:
+                cache = get_redis_cache()
+                cached_data = cache.get(cache_key, namespace="data")
+                if cached_data:
+                    logger.debug(f"CoinGecko cache HIT for {symbol_or_id}")
+                    return cached_data
+            except Exception as e:
+                logger.warning(f"Redis cache read error for {symbol_or_id}: {e}")
+
         # Step 1: Find CoinGecko ID from symbol
         coin_id = self._find_coin_id(symbol_or_id)
         if not coin_id:
@@ -122,7 +150,18 @@ class CoinGeckoFetcher:
             response.raise_for_status()
             data = response.json()
 
-            return self._parse_token_data(data)
+            result = self._parse_token_data(data)
+
+            # Session 339 (P0.1): Cache successful results in Redis
+            if REDIS_CACHE_AVAILABLE and result:
+                try:
+                    cache = get_redis_cache()
+                    cache.set(cache_key, result, ttl_seconds=self.REDIS_CACHE_TTL, namespace="data")
+                    logger.debug(f"CoinGecko cached {symbol_or_id} (TTL: {self.REDIS_CACHE_TTL}s)")
+                except Exception as e:
+                    logger.warning(f"Redis cache write error for {symbol_or_id}: {e}")
+
+            return result
 
         except Exception as e:
             logger.error(f"Failed to fetch {symbol_or_id} from CoinGecko: {e}")

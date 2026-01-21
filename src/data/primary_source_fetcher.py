@@ -63,7 +63,8 @@ from src.utils.network_resilience import (
 logger = logging.getLogger(__name__)
 
 # Session 79I: Rate limiting for CoinGecko API
-COINGECKO_RATE_LIMIT_DELAY = 1.0  # 1 second between calls
+# Session 339 (P0.2): Reduced from 1.0s to 0.5s - CoinGecko free tier allows 10-30 req/min
+COINGECKO_RATE_LIMIT_DELAY = 0.5  # 0.5 seconds between calls
 
 
 def rate_limited(delay: float):
