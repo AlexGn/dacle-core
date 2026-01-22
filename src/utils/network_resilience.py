@@ -112,9 +112,12 @@ def fetch_with_retry(
         if is_retryable_status(response.status_code):
             # Special handling for rate limit
             if response.status_code == 429:
-                retry_after = response.headers.get('Retry-After', 60)
-                logger.warning(f"Rate limit (429), waiting {retry_after}s")
-                time.sleep(int(retry_after))
+                # Session 340 Part 3: Reduced default from 60s to 5s, max 10s cap
+                # Long waits cause pipeline timeouts - better to fail fast and move on
+                retry_after = response.headers.get('Retry-After', 5)
+                retry_after = min(int(retry_after), 10)  # Cap at 10 seconds max
+                logger.warning(f"Rate limit (429), waiting {retry_after}s (capped at 10s)")
+                time.sleep(retry_after)
 
             raise RetryableError(f"HTTP {response.status_code}")
 
@@ -170,9 +173,12 @@ def post_with_retry(
         if is_retryable_status(response.status_code):
             # Special handling for rate limit
             if response.status_code == 429:
-                retry_after = response.headers.get('Retry-After', 60)
-                logger.warning(f"Rate limit (429), waiting {retry_after}s")
-                time.sleep(int(retry_after))
+                # Session 340 Part 3: Reduced default from 60s to 5s, max 10s cap
+                # Long waits cause pipeline timeouts - better to fail fast and move on
+                retry_after = response.headers.get('Retry-After', 5)
+                retry_after = min(int(retry_after), 10)  # Cap at 10 seconds max
+                logger.warning(f"Rate limit (429), waiting {retry_after}s (capped at 10s)")
+                time.sleep(retry_after)
 
             raise RetryableError(f"HTTP {response.status_code}")
 
