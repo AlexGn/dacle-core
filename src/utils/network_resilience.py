@@ -4,6 +4,7 @@ Network Resilience & Data Normalization Utilities
 Session 148: Phase 2 & 3 Pipeline Enhancements
 
 Session 267: Migrated from scripts/helpers/phase2_phase3_enhancements.py to src/utils/network_resilience.py
+Session 340 Part 4: Added GlobalRateLimiter for parallel fetch rate control (Gemini recommendation)
 
 Standalone module for retry logic and data normalization.
 This module can be imported without modifying existing files extensively.
@@ -11,6 +12,7 @@ Designed to survive auto-formatters and git operations.
 
 Phase 2: Retry Logic with Exponential Backoff
 Phase 3: Data Normalization and Sanity Validation
+Phase 4: Global Rate Limiting (Session 340)
 
 Created: December 17, 2025 (Session 148)
 """
@@ -18,6 +20,8 @@ Created: December 17, 2025 (Session 148)
 import time
 import logging
 import re
+import threading
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 import requests
@@ -189,6 +193,195 @@ def post_with_retry(
     except (requests.Timeout, requests.ConnectionError) as e:
         logger.warning(f"Network error: {e} - will retry")
         raise RetryableError(str(e))
+
+
+# ============================================================================
+# PHASE 4: GLOBAL RATE LIMITING (Session 340 Part 4)
+# ============================================================================
+
+class GlobalRateLimiter:
+    """
+    Process-wide rate limiter to prevent hitting API limits during parallel fetches.
+
+    Session 340 Part 4 (Gemini Recommendation):
+    - Even with 5 threads, we never exceed X requests/sec across the entire process.
+    - CryptoRank/DropsTab use Cloudflare protection with IP-based rate limits.
+    - Without limiter: 5 threads × instant requests = rate limit hit.
+    - With limiter: Controlled request pacing, no 429 errors.
+
+    Usage:
+        from src.utils.network_resilience import GLOBAL_RATE_LIMITER
+
+        def fetch_cryptorank_data(symbol: str):
+            GLOBAL_RATE_LIMITER.acquire("cryptorank")  # Block until allowed
+            return requests.get(f"https://api.cryptorank.io/...")
+
+    Thread Safety:
+        - Uses per-API locks to prevent race conditions
+        - Safe to use from multiple threads simultaneously
+    """
+
+    # Per-API rate limits (requests per second)
+    DEFAULT_LIMITS = {
+        "cryptorank": 2.0,      # 2 req/sec (conservative, Cloudflare protected)
+        "dropstab": 1.0,        # 1 req/sec (conservative)
+        "dexscreener": 5.0,     # 300/min = 5/sec
+        "coinmarketcap": 1.0,   # Free tier conservative
+        "coingecko": 0.5,       # 30/min = 0.5/sec (DISABLED in Session 340 but keep limit)
+        "binance": 10.0,        # Public API generous limits
+        "perplexity": 0.5,      # LLM API conservative
+        "openai": 1.0,          # Depends on tier, conservative default
+    }
+
+    def __init__(self, custom_limits: Optional[Dict[str, float]] = None):
+        """
+        Initialize the rate limiter.
+
+        Args:
+            custom_limits: Optional dict to override default limits.
+                           Example: {"cryptorank": 1.0} for even more conservative
+        """
+        self._locks = defaultdict(threading.Lock)
+        self._last_request: Dict[str, float] = defaultdict(float)
+        self._limits = self.DEFAULT_LIMITS.copy()
+
+        if custom_limits:
+            self._limits.update(custom_limits)
+
+        self._stats: Dict[str, Dict[str, int]] = defaultdict(lambda: {"acquired": 0, "waited": 0})
+
+    def acquire(self, api_name: str, block: bool = True) -> bool:
+        """
+        Acquire permission to make an API request.
+
+        Blocks until the rate limit allows the next request for this API.
+        Thread-safe: Multiple threads can call this simultaneously.
+
+        Args:
+            api_name: Name of the API (must be in limits dict, or uses 1.0 default)
+            block: If True (default), block until rate limit allows.
+                   If False, return immediately with True/False.
+
+        Returns:
+            True if acquired, False if non-blocking and would exceed rate limit.
+
+        Example:
+            GLOBAL_RATE_LIMITER.acquire("cryptorank")  # Blocks if needed
+            response = requests.get(url)
+        """
+        limit = self._limits.get(api_name.lower(), 1.0)  # Default: 1 req/sec
+        min_interval = 1.0 / limit  # Seconds between requests
+
+        with self._locks[api_name]:
+            self._stats[api_name]["acquired"] += 1
+
+            elapsed = time.time() - self._last_request[api_name]
+            wait_time = min_interval - elapsed
+
+            if wait_time > 0:
+                if not block:
+                    return False
+
+                self._stats[api_name]["waited"] += 1
+                logger.debug(f"GlobalRateLimiter: {api_name} waiting {wait_time:.2f}s")
+                time.sleep(wait_time)
+
+            self._last_request[api_name] = time.time()
+            return True
+
+    def get_stats(self) -> Dict[str, Dict[str, int]]:
+        """
+        Get rate limiter statistics.
+
+        Returns:
+            Dict with per-API stats: {api_name: {acquired: N, waited: M}}
+        """
+        return dict(self._stats)
+
+    def reset_stats(self) -> None:
+        """Reset statistics counters."""
+        self._stats.clear()
+
+    def get_current_limits(self) -> Dict[str, float]:
+        """Get the current rate limits for all APIs."""
+        return self._limits.copy()
+
+    def update_limit(self, api_name: str, requests_per_second: float) -> None:
+        """
+        Dynamically update the rate limit for an API.
+
+        Useful for runtime adjustments based on 429 responses.
+
+        Args:
+            api_name: Name of the API
+            requests_per_second: New rate limit
+        """
+        self._limits[api_name.lower()] = requests_per_second
+        logger.info(f"GlobalRateLimiter: Updated {api_name} limit to {requests_per_second} req/sec")
+
+
+# Singleton instance - import this in your code
+GLOBAL_RATE_LIMITER = GlobalRateLimiter()
+
+
+def rate_limited_fetch(
+    api_name: str,
+    url: str,
+    headers: dict,
+    timeout: int = 15,
+    params: Optional[dict] = None
+) -> requests.Response:
+    """
+    Convenience function combining rate limiting with retry logic.
+
+    Session 340 Part 4: Wraps fetch_with_retry with global rate limiting.
+    Use this for parallel fetches to avoid rate limit errors.
+
+    Args:
+        api_name: Name of the API for rate limiting (e.g., "cryptorank")
+        url: API endpoint URL
+        headers: HTTP headers dict
+        timeout: Request timeout in seconds
+        params: Optional query parameters dict
+
+    Returns:
+        requests.Response object
+
+    Raises:
+        RetryableError: After all retry attempts exhausted
+
+    Example:
+        response = rate_limited_fetch("dexscreener", url, headers)
+    """
+    GLOBAL_RATE_LIMITER.acquire(api_name)
+    return fetch_with_retry(url, headers, timeout, params)
+
+
+def rate_limited_post(
+    api_name: str,
+    url: str,
+    headers: Optional[dict] = None,
+    json_data: Optional[dict] = None,
+    timeout: int = 15
+) -> requests.Response:
+    """
+    Convenience function combining rate limiting with POST retry logic.
+
+    Args:
+        api_name: Name of the API for rate limiting
+        url: API endpoint URL
+        headers: Optional HTTP headers dict
+        json_data: Optional JSON payload dict
+        timeout: Request timeout in seconds
+
+    Returns:
+        requests.Response object
+
+    Raises:
+        RetryableError: After all retry attempts exhausted
+    """
+    GLOBAL_RATE_LIMITER.acquire(api_name)
+    return post_with_retry(url, headers, json_data, timeout)
 
 
 # ============================================================================
@@ -541,9 +734,17 @@ def apply_retry_to_api_call(
 
 # Export main classes and functions
 __all__ = [
+    # Phase 2: Retry Logic
     'RetryableError',
     'is_retryable_status',
     'fetch_with_retry',
+    'post_with_retry',
+    # Phase 4: Global Rate Limiting (Session 340)
+    'GlobalRateLimiter',
+    'GLOBAL_RATE_LIMITER',
+    'rate_limited_fetch',
+    'rate_limited_post',
+    # Phase 3: Data Normalization
     'DataNormalizer',
     'validate_field_value',
     'apply_retry_to_api_call'

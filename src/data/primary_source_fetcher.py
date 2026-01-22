@@ -57,7 +57,8 @@ from src.utils.network_resilience import (
     fetch_with_retry,
     post_with_retry,
     RetryableError,
-    DataNormalizer
+    DataNormalizer,
+    GLOBAL_RATE_LIMITER  # Session 340 Part 4: Rate limiting for parallel fetches
 )
 
 logger = logging.getLogger(__name__)
@@ -1775,6 +1776,7 @@ def save_to_sources(token: str, filename: str, data: Dict) -> Path:
 
 # ============================================================================
 # SESSION 275: PARALLEL FETCHING OPTIMIZATION
+# SESSION 340 Part 4: Added GlobalRateLimiter integration (Gemini recommendation)
 # ============================================================================
 # Reduces token addition time from 15-20s to 4-5s by fetching sources in parallel.
 #
@@ -1782,6 +1784,12 @@ def save_to_sources(token: str, filename: str, data: Dict) -> Path:
 # Phase 2 (sequential): CryptoRank Web fallback (only if API failed)
 # Phase 3 (conditional): CMC (only if contract_address missing or no major source)
 # Phase 4 (conditional): OTC data (only if needed)
+#
+# Session 340 Part 4 Enhancement (Gemini):
+# - Even with 4 threads, we never exceed X requests/sec across the entire process
+# - CryptoRank/DropsTab use Cloudflare protection with IP-based rate limits
+# - Without limiter: 4 threads × instant requests = rate limit hit (429 errors)
+# - With limiter: Controlled request pacing, no 429 errors
 # ============================================================================
 
 def _fetch_source_wrapper(
@@ -1794,10 +1802,18 @@ def _fetch_source_wrapper(
     """
     Wrapper for parallel source fetching with error handling.
 
+    Session 340 Part 4: Added GlobalRateLimiter integration to prevent
+    hitting API rate limits during parallel fetches. Each source acquires
+    permission from the rate limiter before making the request.
+
     Returns:
         Tuple of (source_name, data or None)
     """
     try:
+        # Session 340 Part 4: Acquire rate limit before fetching
+        # This ensures we don't exceed API rate limits even with parallel threads
+        GLOBAL_RATE_LIMITER.acquire(source_name)
+
         if source_name in ["cryptorank", "coingecko", "coinmarketcap_full"]:
             # These functions accept token_name
             data = fetch_func(token, token_name=token_name)
