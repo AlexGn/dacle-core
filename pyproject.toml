@@ -49,6 +49,7 @@ dev = [
     "black>=23.11.0",
     "isort>=5.12.0",
     "mypy>=1.7.0",
+    "python-lsp-server[all]>=1.14.0",  # LSP for enhanced Navigator (Session 342)
 ]
 # Session 263: Removed legacy dependencies (Together AI deprecated in Session 261)
 
