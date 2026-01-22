@@ -3,6 +3,7 @@ DACLE Utilities
 
 Session 257: Added atomic state management for thread-safe JSON operations.
 Session 337: Added L093 weekend trading restrictions (Gemini approved).
+Session 342: Added global BTC macro cache for cross-workflow efficiency.
 """
 
 from src.utils.atomic_state import (
@@ -24,6 +25,13 @@ from src.utils.trading_hours import (
     TradingRestriction,
 )
 
+from src.utils.btc_cache import (
+    get_btc_macro_context,
+    invalidate_btc_cache,
+    get_btc_cache_status,
+    calculate_btc_position_modifier,
+)
+
 __all__ = [
     # Atomic state operations
     'atomic_read',
@@ -40,4 +48,9 @@ __all__ = [
     'is_saturday_restricted',
     'is_friday_sunset',
     'TradingRestriction',
+    # BTC macro cache (Session 342)
+    'get_btc_macro_context',
+    'invalidate_btc_cache',
+    'get_btc_cache_status',
+    'calculate_btc_position_modifier',
 ]
