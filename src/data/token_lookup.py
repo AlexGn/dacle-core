@@ -38,6 +38,8 @@ import os
 import requests
 from pathlib import Path
 from typing import Dict, Optional, Any
+
+from src.utils.network_resilience import GLOBAL_RATE_LIMITER  # Session 340 Part 4
 from functools import lru_cache
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -101,6 +103,9 @@ def _search_cryptorank(query: str) -> Optional[Dict[str, Any]]:
         return None
 
     try:
+        # Session 340 Part 4: Acquire global rate limit before API call
+        GLOBAL_RATE_LIMITER.acquire("cryptorank")
+
         url = f"https://api.cryptorank.io/v1/currencies?search={query}&limit=5"
         headers = {"X-Api-Key": api_key}
         response = requests.get(url, headers=headers, timeout=10)
