@@ -66,6 +66,9 @@ logger = logging.getLogger(__name__)
 # Session 339 (P0.2): Reduced from 1.0s to 0.5s - CoinGecko free tier allows 10-30 req/min
 COINGECKO_RATE_LIMIT_DELAY = 0.5  # 0.5 seconds between calls
 
+# Session 340: DexScreener API endpoint (no rate limits, faster)
+DEXSCREENER_SEARCH_URL = "https://api.dexscreener.com/latest/dex/search"
+
 
 def rate_limited(delay: float):
     """Decorator to add delay between calls to respect rate limits."""
@@ -132,6 +135,122 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 # - CoinGecko showed live price data → Token was actually live TODAY
 # - Solution: Check CoinGecko first, if price exists → status=Live
 # ============================================================================
+
+
+def check_token_live_status_fast(
+    token_symbol: str,
+    token_name: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Session 340: Fast live status check using DexScreener (NO rate limits).
+
+    DexScreener has:
+    - No rate limits (vs CoinGecko 10-30 req/min)
+    - Fast response (<500ms vs CoinGecko 2-3s when rate limited)
+    - Same data: price, FDV, market cap
+
+    Use this instead of check_token_live_status() for faster pipeline execution.
+
+    Args:
+        token_symbol: Token symbol (e.g., "POWER")
+        token_name: Token name for better matching (optional)
+
+    Returns:
+        Dict with is_live, status, current_price, fdv, etc.
+    """
+    try:
+        # Search DexScreener (no rate limits)
+        search_url = f"{DEXSCREENER_SEARCH_URL}?q={token_symbol}"
+        response = requests.get(search_url, timeout=10)
+
+        if response.status_code != 200:
+            logger.warning(f"DexScreener search failed: {response.status_code}")
+            return {
+                "is_live": None,
+                "status": "Unknown",
+                "error": f"DexScreener error: {response.status_code}",
+                "source": "dexscreener"
+            }
+
+        data = response.json()
+        pairs = data.get("pairs", [])
+
+        if not pairs:
+            # Token not found on DEX - could be pre-TGE or CEX-only
+            logger.info(f"Live check: {token_symbol} not found on DexScreener")
+            return {
+                "is_live": None,  # Unknown - might be CEX-only
+                "status": "Unknown",
+                "reason": "Token not found on DexScreener (may be CEX-only or pre-TGE)",
+                "source": "dexscreener"
+            }
+
+        # Find best matching pair by symbol
+        best_pair = None
+        for pair in pairs:
+            base_token = pair.get("baseToken", {})
+            if base_token.get("symbol", "").upper() == token_symbol.upper():
+                # Prefer pairs with higher liquidity
+                if best_pair is None or (pair.get("liquidity", {}).get("usd", 0) or 0) > \
+                   (best_pair.get("liquidity", {}).get("usd", 0) or 0):
+                    best_pair = pair
+
+        if not best_pair:
+            # Symbol not matched in any pair
+            return {
+                "is_live": None,
+                "status": "Unknown",
+                "reason": "No matching pair found",
+                "source": "dexscreener"
+            }
+
+        # Extract data from best pair
+        price_usd = float(best_pair.get("priceUsd") or 0)
+        fdv = float(best_pair.get("fdv") or 0)
+        market_cap = float(best_pair.get("marketCap") or 0)
+        liquidity = best_pair.get("liquidity", {}).get("usd", 0)
+
+        if price_usd > 0:
+            # Token is LIVE!
+            logger.info(f"🟢 LIVE CHECK: {token_symbol} is LIVE! Price: ${price_usd}, FDV: ${fdv:,.0f}")
+            return {
+                "is_live": True,
+                "status": "Live",
+                "current_price": price_usd,
+                "fdv": fdv,
+                "market_cap": market_cap,
+                "liquidity_usd": liquidity,
+                "chain": best_pair.get("chainId"),
+                "dex_name": best_pair.get("dexId"),
+                "pair_address": best_pair.get("pairAddress"),
+                "tge_detected_at": datetime.now().isoformat(),
+                "source": "dexscreener"
+            }
+        else:
+            return {
+                "is_live": False,
+                "status": "Pre-TGE",
+                "reason": "Token found but no price data",
+                "source": "dexscreener"
+            }
+
+    except requests.Timeout:
+        logger.warning(f"DexScreener timeout for {token_symbol}")
+        return {
+            "is_live": None,
+            "status": "Unknown",
+            "error": "DexScreener timeout",
+            "source": "dexscreener"
+        }
+    except Exception as e:
+        logger.error(f"DexScreener error for {token_symbol}: {e}")
+        return {
+            "is_live": None,
+            "status": "Unknown",
+            "error": str(e),
+            "source": "dexscreener"
+        }
+
 
 @rate_limited(COINGECKO_RATE_LIMIT_DELAY)
 def check_token_live_status(
