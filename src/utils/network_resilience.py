@@ -222,8 +222,11 @@ class GlobalRateLimiter:
     """
 
     # Per-API rate limits (requests per second)
+    # Session 340 Part 4: CryptoRank reduced from 2.0 to 1.0 req/sec
+    # Even with rate limiter, parallel requests from subprocess + main process
+    # can exceed CryptoRank's actual limit. 1 req/sec provides safety margin.
     DEFAULT_LIMITS = {
-        "cryptorank": 2.0,      # 2 req/sec (conservative, Cloudflare protected)
+        "cryptorank": 1.0,      # 1 req/sec (Session 340 fix: was 2.0, caused 429 errors)
         "dropstab": 1.0,        # 1 req/sec (conservative)
         "dexscreener": 5.0,     # 300/min = 5/sec
         "coinmarketcap": 1.0,   # Free tier conservative
