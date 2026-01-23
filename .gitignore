@@ -151,3 +151,4 @@ data/ta_uploads/
 src/data/cache/
 dashboard/feedback_v*.html
 config/webhook_config.json
+.worktrees/
