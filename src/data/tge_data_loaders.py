@@ -2004,11 +2004,11 @@ def consolidate_tge_data_if_available(token: str, automated_data: Dict[str, Any]
 # SESSION 318: COINGECKO FETCHER (CryptoRank Replacement)
 # =============================================================================
 
-def fetch_token_data_from_coingecko(token: str) -> Optional[Dict[str, Any]]:
+def fetch_token_data_from_unified(token: str) -> Optional[Dict[str, Any]]:
     """
-    Fetch token data from CoinGecko API for LISTED tokens.
+    Fetch token data from unified multi-source fetcher for LISTED tokens.
 
-    Session 318: Replacement for broken CryptoRank API as automated_data source.
+    Session 346: Replaced CoinGecko with UnifiedTokenomicsFetcher (multi-source waterfall).
 
     Provides complete tokenomics for listed tokens:
     - FDV (Fully Diluted Valuation)
@@ -2028,95 +2028,107 @@ def fetch_token_data_from_coingecko(token: str) -> Optional[Dict[str, Any]]:
         Only works for LISTED tokens (post-TGE). For pre-TGE tokens,
         use manual research or wait for listing.
     """
-    # Import CoinGecko fetcher
+    # Import unified fetcher
     try:
-        from src.data.fetchers.coingecko_fetcher import CoinGeckoFetcher
+        from src.data.fetchers.unified_tokenomics_fetcher import UnifiedTokenomicsFetcher
     except ImportError:
-        print_error("CoinGecko fetcher not available - check imports")
+        print_error("Unified tokenomics fetcher not available - check imports")
         return None
 
     # Session 290: Redis caching (24h TTL - listed tokens change slowly)
     if REDIS_AVAILABLE:
         redis_cache = get_redis_cache()
-        cache_key = f"coingecko:{token.upper()}"
+        cache_key = f"unified:{token.upper()}"
 
         # Try to get from cache
         cached = redis_cache.get(cache_key, namespace="tge_data")
         if cached is not None:
-            logger.debug(f"✅ Cache HIT: fetch_token_data_from_coingecko({token})")
-            print_info(f"✅ Using cached CoinGecko data for {token}")
+            logger.debug(f"✅ Cache HIT: fetch_token_data_from_unified({token})")
+            print_info(f"✅ Using cached unified data for {token}")
             return cached
 
-        logger.debug(f"❌ Cache MISS: fetch_token_data_from_coingecko({token}) - fetching from API")
+        logger.debug(f"❌ Cache MISS: fetch_token_data_from_unified({token}) - fetching from APIs")
 
-    print_info(f"🔍 Fetching token data from CoinGecko for: {token}")
+    print_info(f"🔍 Fetching token data from multiple sources for: {token}")
 
     try:
-        fetcher = CoinGeckoFetcher()
-        data = fetcher.fetch_token(token)
+        fetcher = UnifiedTokenomicsFetcher()
+        result = fetcher.fetch(token)
+
+        # Extract data and add quality metadata
+        data = result["data"]
+        data["_data_quality"] = {
+            "score": result["quality_score"],
+            "primary_source": result["primary_source"],
+            "sources_used": result["sources_used"],
+        }
 
         if not data:
-            print_warning(f"Token {token} not found on CoinGecko")
+            print_warning(f"Token {token} not found in any source")
             print_info("Possible reasons:")
-            print_info("  1. Token not yet listed on CoinGecko (wait for listing)")
+            print_info("  1. Token not yet listed (wait for listing)")
             print_info("  2. Incorrect token symbol (check spelling)")
-            print_info("  3. Token delisted (check CoinMarketCap)")
+            print_info("  3. Token delisted")
             return None
 
         # Session 290: Cache result for 24h
         if REDIS_AVAILABLE:
             redis_cache = get_redis_cache()
-            cache_key = f"coingecko:{token.upper()}"
+            cache_key = f"unified:{token.upper()}"
             redis_cache.set(cache_key, data, ttl_seconds=86400, namespace="tge_data")
-            logger.debug(f"💾 Cached coingecko({token}) for 24h")
+            logger.debug(f"💾 Cached unified({token}) for 24h")
 
-        print_success(f"✅ Found {data['symbol']} ({data['name']}) on CoinGecko")
-        print_info(f"  Price: ${data.get('price_usd', 'N/A')}")
-        print_info(f"  Market Cap: ${data.get('market_cap', 0):,.0f}")
-        print_info(f"  FDV: ${data.get('fdv', 0):,.0f}")
+        print_success(f"✅ Found {data.get('symbol', token)} from {result['primary_source']} (quality: {result['quality_score']}%)")
+        print_info(f"  Sources used: {', '.join(result['sources_used'])}")
+        if data.get('price'):
+            print_info(f"  Price: ${data.get('price', 'N/A')}")
+        if data.get('market_cap'):
+            print_info(f"  Market Cap: ${data.get('market_cap', 0):,.0f}")
+        if data.get('fdv'):
+            print_info(f"  FDV: ${data.get('fdv', 0):,.0f}")
         if data.get('float_pct'):
             print_info(f"  Float: {data['float_pct']:.1f}%")
-        print_info(f"  Exchanges: {len(data.get('listing_exchanges', []))} listed")
 
         return data
 
     except Exception as e:
-        print_error(f"Error fetching CoinGecko data: {str(e)}")
-        logger.exception("CoinGecko fetch failed")
+        print_error(f"Error fetching unified data: {str(e)}")
+        logger.exception("Unified fetch failed")
         return None
 
 
-def fetch_automated_token_data(token: str, prefer_source: str = "coingecko") -> Optional[Dict[str, Any]]:
+def fetch_automated_token_data(token: str, prefer_source: str = "unified") -> Optional[Dict[str, Any]]:
     """
     Smart fetch function that tries multiple sources.
 
-    Session 318: Intelligent fallback between CoinGecko and CryptoRank.
+    Session 346: Replaced CoinGecko with UnifiedTokenomicsFetcher.
+    Session 318: Intelligent fallback between sources.
 
     Strategy:
-    1. Try CoinGecko first (FREE, works for listed tokens)
+    1. Try Unified fetcher first (multi-source: CryptoRank → Binance → DexScreener)
     2. If not found, try CryptoRank (DEPRECATED, may fail)
 
     Args:
         token: Token symbol
-        prefer_source: "coingecko" or "cryptorank" (default: coingecko)
+        prefer_source: "unified" or "cryptorank" (default: unified)
 
     Returns:
         Token data dict or None
 
     Example:
-        # Auto-select best source
+        # Auto-select best source (unified multi-source)
         data = fetch_automated_token_data("BTC")
 
         # Force CryptoRank (for pre-TGE tokens)
         data = fetch_automated_token_data("UPCOMING_TOKEN", prefer_source="cryptorank")
     """
-    sources = ["coingecko", "cryptorank"] if prefer_source == "coingecko" else ["cryptorank", "coingecko"]
+    sources = ["unified", "cryptorank"] if prefer_source == "unified" else ["cryptorank", "unified"]
 
     for source in sources:
         try:
-            if source == "coingecko":
-                print_info(f"📊 Trying CoinGecko for {token}...")
-                data = fetch_token_data_from_coingecko(token)
+            if source == "unified":
+                print_info(f"📊 Trying unified multi-source fetcher for {token}...")
+                data = fetch_token_data_from_unified(token)
                 if data:
                     return data
             elif source == "cryptorank":
