@@ -714,6 +714,7 @@ class BlofinTradeSync:
             trade_dict = {
                 "trade_id": trade_id,
                 "token": token,
+                "exchange": "BLOFIN",  # Session 371: Multi-exchange support
                 "trade_type": trade_type,
                 "result": result,
                 "submitted_at": datetime.now(timezone.utc).isoformat(),
