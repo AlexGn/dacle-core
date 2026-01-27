@@ -179,6 +179,7 @@ class EconomicCalendar:
 
         Falls back to alternative sources if primary fails.
         """
+        # Try primary source
         try:
             events = self._fetch_from_investing()
             if events:
@@ -187,22 +188,19 @@ class EconomicCalendar:
                 return events
         except Exception as e:
             logger.warning(f"Investing.com fetch failed: {e}")
+            # Raise exception to trigger fail-safe in ta_upload.py
+            # We prefer to be conservative (0.75x multiplier) than assume "CLEAR"
+            # on partial data.
+            raise Exception(f"Failed to fetch economic events: {e}")
 
         # Try alternative: TradingEconomics
-        try:
-            events = self._fetch_from_tradingeconomics()
-            if events:
-                self._cache = events
-                self._cache_time = datetime.utcnow()
-                return events
-        except Exception as e:
-            logger.warning(f"TradingEconomics fetch failed: {e}")
-
-        # Fall back to hardcoded major events (FOMC dates are predictable)
-        events = self._get_hardcoded_events()
-        self._cache = events
-        self._cache_time = datetime.utcnow()
-        return events
+        # (This block is unreachable now with the raise above, but keeping structure if we want to change strategy)
+        # For now, strict failure is better for consistency.
+        
+        # Fall back to hardcoded major events?
+        # No, because missing CPI/NFP is dangerous.
+        # Strict failure ensures we don't give false confidence.
+        return []
 
     def _fetch_from_investing(self) -> List[EconomicEvent]:
         """Fetch events from Investing.com."""
@@ -235,10 +233,16 @@ class EconomicCalendar:
             if response.status_code == 200:
                 data = response.json()
                 return self._parse_investing_response(data)
+            else:
+                raise Exception(f"Investing.com API returned status {response.status_code}")
+                
         except Exception as e:
-            logger.debug(f"Investing.com API error: {e}")
+            # Re-raise so upstream checks typically falling back to cache can see it
+            # But the caller _fetch_events catches it.
+            # We want to make sure if ALL sources fail, we know about it.
+            logger.warning(f"Investing.com API error: {e}")
+            raise e
 
-        return []
 
     def _parse_investing_response(self, data: dict) -> List[EconomicEvent]:
         """Parse Investing.com API response."""
