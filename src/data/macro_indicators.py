@@ -46,17 +46,16 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+# YFinance integration
+import yfinance as yf
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+
 # Cache configuration
 CACHE_TTL_SECONDS = 15 * 60  # 15 minutes
 
 # Module-level cache
 _cache: Optional['MacroContext'] = None
 _cache_timestamp: Optional[float] = None
-
-# Yahoo Finance API headers
-YAHOO_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-}
 
 
 @dataclass
@@ -76,68 +75,34 @@ class MacroContext:
     source: str  # "YAHOO" | "CACHED" | "UNAVAILABLE"
 
 
-def _make_yahoo_request(symbol: str, timeout: int = 10) -> Optional[dict]:
-    """
-    Make a request to Yahoo Finance API for chart data.
-
-    Args:
-        symbol: The symbol to fetch (e.g., "DX-Y.NYB" or "^VIX")
-        timeout: Request timeout in seconds
-
-    Returns:
-        Dict with meta data or None on failure
-    """
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=5d"
-
-    try:
-        response = requests.get(url, headers=YAHOO_HEADERS, timeout=timeout)
-
-        if response.status_code != 200:
-            logger.warning(f"Yahoo Finance API returned status {response.status_code} for {symbol}")
-            return None
-
-        data = response.json()
-        result = data.get('chart', {}).get('result', [])
-
-        if not result:
-            logger.debug(f"Yahoo Finance API returned empty data for {symbol}")
-            return None
-
-        return result[0].get('meta', {})
-
-    except requests.exceptions.Timeout:
-        logger.warning(f"Yahoo Finance API timeout for {symbol}")
-        return None
-    except requests.exceptions.RequestException as e:
-        logger.warning(f"Yahoo Finance API request error for {symbol}: {e}")
-        return None
-    except ValueError as e:
-        logger.warning(f"Yahoo Finance API JSON decode error for {symbol}: {e}")
-        return None
-    except Exception as e:
-        logger.warning(f"Yahoo Finance API unexpected error for {symbol}: {e}")
-        return None
-
-
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(Exception)
+)
 def fetch_dxy_change_pct() -> Optional[float]:
     """
-    Fetch DXY (US Dollar Index) daily change percentage.
+    Fetch DXY (US Dollar Index) daily change percentage using yfinance.
 
     Returns:
         Daily change percentage (e.g., -1.20 for -1.20%) or None on failure
     """
     try:
-        data = _make_yahoo_request("DX-Y.NYB")
+        # Fetch 5 days of history to ensure we get previous close
+        # "DX-Y.NYB" is the symbol for US Dollar Index on Yahoo Finance
+        ticker = yf.Ticker("DX-Y.NYB")
+        hist = ticker.history(period="5d")
 
-        if data is None:
+        if hist.empty or len(hist) < 2:
+            logger.warning("Empty DXY history from yfinance")
             return None
 
-        # Get current price and previous close
-        current_price = data.get('regularMarketPrice')
-        previous_close = data.get('chartPreviousClose') or data.get('previousClose')
+        # Get latest close and previous close
+        # iloc[-1] is today/latest, iloc[-2] is previous trading day
+        current_price = hist['Close'].iloc[-1]
+        previous_close = hist['Close'].iloc[-2]
 
-        if current_price is None or previous_close is None:
-            logger.debug("DXY data missing price or previous close")
+        if not current_price or not previous_close:
             return None
 
         # Calculate change percentage
@@ -145,34 +110,48 @@ def fetch_dxy_change_pct() -> Optional[float]:
         return round(change_pct, 2)
 
     except Exception as e:
-        logger.warning(f"Error calculating DXY change: {e}")
-        return None
+        logger.warning(f"Error fetching DXY with yfinance: {e}")
+        raise e  # Raise to trigger retry
 
 
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=2, max=10),
+    retry=retry_if_exception_type(Exception)
+)
 def fetch_vix_level() -> Optional[float]:
     """
-    Fetch current VIX (Volatility Index) level.
+    Fetch current VIX (Volatility Index) level using yfinance.
 
     Returns:
         Current VIX level (e.g., 16.09) or None on failure
     """
     try:
-        data = _make_yahoo_request("^VIX")
-
-        if data is None:
-            return None
-
-        vix_level = data.get('regularMarketPrice')
-
-        if vix_level is None:
-            logger.debug("VIX data missing price")
-            return None
-
-        return round(float(vix_level), 2)
+        # "^VIX" is the symbol for CBOE Volatility Index
+        ticker = yf.Ticker("^VIX")
+        # For VIX, we just need the latest price
+        # fast_info often has it, or we can use history
+        
+        # Try history first (most reliable for "current" level)
+        hist = ticker.history(period="1d")
+        
+        if not hist.empty:
+            vix_level = hist['Close'].iloc[-1]
+            return round(float(vix_level), 2)
+            
+        # Fallback to info (slower but sometimes works if history fails)
+        info = ticker.info
+        vix_level = info.get('regularMarketPrice') or info.get('previousClose')
+        
+        if vix_level is not None:
+             return round(float(vix_level), 2)
+             
+        logger.warning("No VIX data found in history or info")
+        return None
 
     except Exception as e:
-        logger.warning(f"Error fetching VIX: {e}")
-        return None
+        logger.warning(f"Error fetching VIX with yfinance: {e}")
+        raise e  # Raise to trigger retry
 
 
 def fetch_macro_context() -> MacroContext:
@@ -200,8 +179,17 @@ def fetch_macro_context() -> MacroContext:
             )
 
     # Fetch fresh data
-    dxy = fetch_dxy_change_pct()
-    vix = fetch_vix_level()
+    try:
+        dxy = fetch_dxy_change_pct()
+    except Exception as e:
+        logger.warning(f"Failed to fetch DXY after retries: {e}")
+        dxy = None
+
+    try:
+        vix = fetch_vix_level()
+    except Exception as e:
+        logger.warning(f"Failed to fetch VIX after retries: {e}")
+        vix = None
 
     # Determine source
     if dxy is not None or vix is not None:
