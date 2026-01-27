@@ -154,18 +154,76 @@ def fetch_vix_level() -> Optional[float]:
         raise e  # Raise to trigger retry
 
 
+
+# Disk cache configuration
+import json
+from pathlib import Path
+
+DISK_CACHE_DIR = Path("data/cache")
+DISK_CACHE_FILE = DISK_CACHE_DIR / "macro_context.json"
+MAX_STALE_AGE_HOURS = 24  # Allow loading stale data up to 24 hours old
+
+def save_cache_to_disk(context: MacroContext):
+    """Save valid macro context to disk."""
+    try:
+        DISK_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        
+        data = {
+            "dxy_change_pct": context.dxy_change_pct,
+            "vix_level": context.vix_level,
+            "timestamp": context.timestamp.timestamp(),
+            "source": context.source   
+        }
+        
+        with open(DISK_CACHE_FILE, 'w') as f:
+            json.dump(data, f)
+            
+    except Exception as e:
+        logger.warning(f"Failed to save macro cache to disk: {e}")
+
+def load_cache_from_disk() -> Optional[MacroContext]:
+    """Load macro context from disk if available."""
+    try:
+        if not DISK_CACHE_FILE.exists():
+            return None
+            
+        with open(DISK_CACHE_FILE, 'r') as f:
+            data = json.load(f)
+            
+        ts = datetime.fromtimestamp(data["timestamp"])
+        
+        # Check if too old (absolute safety limit)
+        if (datetime.now() - ts).total_seconds() > MAX_STALE_AGE_HOURS * 3600:
+            logger.warning("Disk cache too old, ignoring")
+            return None
+            
+        return MacroContext(
+            dxy_change_pct=data.get("dxy_change_pct"),
+            vix_level=data.get("vix_level"),
+            timestamp=ts,
+            source="STALE" # Mark as stale when loading from disk fallback
+        )
+            
+    except Exception as e:
+        logger.warning(f"Failed to load macro cache from disk: {e}")
+        return None
+
 def fetch_macro_context() -> MacroContext:
     """
     Fetch complete macro context (DXY change + VIX level).
 
-    Uses caching to avoid redundant API calls within 15 minutes.
+    Strategy:
+    1. Check memory cache (fastest)
+    2. Try live fetch (freshness) -> Save to disk on success
+    3. Fallback to disk cache (robustness)
+    4. Return UNAVAILABLE if all fail
 
     Returns:
         MacroContext with DXY change %, VIX level, timestamp, and source
     """
     global _cache, _cache_timestamp
 
-    # Check cache
+    # 1. Check memory cache
     current_time = time.time()
     if _cache is not None and _cache_timestamp is not None:
         age = current_time - _cache_timestamp
@@ -178,25 +236,29 @@ def fetch_macro_context() -> MacroContext:
                 source="CACHED"
             )
 
-    # Fetch fresh data
+    # 2. Try  Fetch fresh data
+    dxy = None
+    vix = None
+    fetch_success = False
+    
     try:
         dxy = fetch_dxy_change_pct()
     except Exception as e:
         logger.warning(f"Failed to fetch DXY after retries: {e}")
-        dxy = None
 
     try:
         vix = fetch_vix_level()
     except Exception as e:
         logger.warning(f"Failed to fetch VIX after retries: {e}")
-        vix = None
 
-    # Determine source
+    # Determine if live fetch succeeded (partial success is okay)
     if dxy is not None or vix is not None:
         source = "YAHOO"
+        fetch_success = True
     else:
         source = "UNAVAILABLE"
 
+    # Construct context
     context = MacroContext(
         dxy_change_pct=dxy,
         vix_level=vix,
@@ -204,10 +266,25 @@ def fetch_macro_context() -> MacroContext:
         source=source
     )
 
-    # Update cache
-    _cache = context
-    _cache_timestamp = current_time
-
+    # If successfully fetched, save to both caches
+    if fetch_success:
+        _cache = context
+        _cache_timestamp = current_time
+        save_cache_to_disk(context)
+        return context
+    
+    # 3. Fallback to disk cache if live fetch failed
+    logger.warning("Live macro fetch failed, attempting disk fallback...")
+    disk_context = load_cache_from_disk()
+    
+    if disk_context:
+        logger.info(f"Loaded macro context from disk (timestamp: {disk_context.timestamp})")
+        # Update memory cache with the disk data so we don't hit disk every time
+        _cache = disk_context
+        _cache_timestamp = current_time 
+        return disk_context
+        
+    # 4. Total failure
     return context
 
 
