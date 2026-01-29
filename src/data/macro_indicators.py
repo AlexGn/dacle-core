@@ -75,6 +75,25 @@ class MacroContext:
     source: str  # "YAHOO" | "CACHED" | "UNAVAILABLE"
 
 
+# Module-level session
+_session = None
+
+def _get_session():
+    """Get or create requests session with anti-blocking headers."""
+    global _session
+    if _session is None:
+        import requests
+        _session = requests.Session()
+        _session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        })
+    return _session
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -90,7 +109,8 @@ def fetch_dxy_change_pct() -> Optional[float]:
     try:
         # Fetch 5 days of history to ensure we get previous close
         # "DX-Y.NYB" is the symbol for US Dollar Index on Yahoo Finance
-        ticker = yf.Ticker("DX-Y.NYB")
+        # Session 351: Use custom session to avoid 429s
+        ticker = yf.Ticker("DX-Y.NYB", session=_get_session())
         hist = ticker.history(period="5d")
 
         if hist.empty or len(hist) < 2:
@@ -128,7 +148,8 @@ def fetch_vix_level() -> Optional[float]:
     """
     try:
         # "^VIX" is the symbol for CBOE Volatility Index
-        ticker = yf.Ticker("^VIX")
+        # Session 351: Use custom session
+        ticker = yf.Ticker("^VIX", session=_get_session())
         # For VIX, we just need the latest price
         # fast_info often has it, or we can use history
         
