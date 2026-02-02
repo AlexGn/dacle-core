@@ -1095,12 +1095,25 @@ def _build_reasoning(
         zone = volume_profile.get("zone", "")
         qvwap = volume_profile.get("vwap")
         signal = volume_profile.get("signal", "")
-        parts = [f"MP-VWAP: Price in {zone} zone"]
+        zone_label = zone.replace("_", " ").title()
+        parts = [f"MP-VWAP: Price in {zone_label} zone"]
         if qvwap:
             parts.append(f"QVWAP at {qvwap:.4f}")
         if signal and signal != "NEUTRAL":
-            parts.append(signal)
-        reasoning.append(" — ".join(parts))
+            signal_labels = {
+                "LONG_ZONE": "Near value area low",
+                "SHORT_ZONE": "Near value area high",
+            }
+            label = signal_labels.get(signal, signal.replace("_", " ").title())
+            # Flag when MP-VWAP signal conflicts with trade direction
+            conflicts = (
+                (direction == "SHORT" and signal == "LONG_ZONE")
+                or (direction == "LONG" and signal == "SHORT_ZONE")
+            )
+            if conflicts:
+                label = f"\u26a0\ufe0f {label} (caution for {direction})"
+            parts.append(label)
+        reasoning.append(" \u2014 ".join(parts))
 
     # TVEM Band context (Session 355 P1a — L058)
     tvem_data = tvem_data or {}
@@ -1116,7 +1129,33 @@ def _build_reasoning(
         if tvem_signal and tvem_signal != "NEUTRAL":
             signal_label = tvem_signal.replace("_", " ").title()
             parts.append(signal_label)
-        reasoning.append(" — ".join(parts))
+        reasoning.append(" \u2014 ".join(parts))
+
+        # Direction-aware oversold/overbought warning
+        oversold_short = (
+            direction == "SHORT"
+            and tvem_signal in ("OVERSOLD", "BULLISH_RETEST")
+        )
+        overbought_long = (
+            direction == "LONG"
+            and tvem_signal in ("OVERBOUGHT", "BEARISH_RETEST")
+        )
+        if oversold_short or overbought_long:
+            rsi_confirms = (
+                (direction == "SHORT" and rsi < 40)
+                or (direction == "LONG" and rsi > 60)
+            )
+            severity = "high" if rsi_confirms else "moderate"
+            if severity == "high":
+                reasoning.append(
+                    f"\u26a0\ufe0f Bounce risk: TVEM {tvem_signal.replace('_',' ').lower()}"
+                    f" + RSI {rsi:.1f} \u2014 consider tighter stops or reduced size"
+                )
+            else:
+                reasoning.append(
+                    f"\u26a0\ufe0f TVEM {tvem_signal.replace('_',' ').lower()}"
+                    f" \u2014 watch for reversal signals"
+                )
 
     # Harmonic patterns (Session 355 P2)
     harmonics = harmonics or []
