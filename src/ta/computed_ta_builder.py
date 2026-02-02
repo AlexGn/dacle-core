@@ -1288,6 +1288,27 @@ def _analyze_candle_behavior_at_levels(
             seen[key] = obs
 
     result = list(seen.values())
+
+    # --- Proximity-based dedup: same type at levels within 1% → keep strongest ---
+    proximity_deduped: list[dict] = []
+    for obs in result:
+        merged = False
+        for existing in proximity_deduped:
+            if existing["type"] != obs["type"]:
+                continue
+            # Check if levels are within 1% of each other
+            avg_level = (existing["level"] + obs["level"]) / 2
+            if avg_level > 0 and abs(existing["level"] - obs["level"]) / avg_level <= 0.01:
+                # Keep the one with the strongest level or highest strength
+                if strength_order.get(obs["strength"], 0) > strength_order.get(existing["strength"], 0):
+                    proximity_deduped.remove(existing)
+                    proximity_deduped.append(obs)
+                merged = True
+                break
+        if not merged:
+            proximity_deduped.append(obs)
+    result = proximity_deduped
+
     # Sort: strong first, then by type (rejection > absorption)
     result.sort(key=lambda x: (-strength_order.get(x["strength"], 0), x["type"]))
     return result
@@ -1486,7 +1507,9 @@ def _build_reasoning(
 
     # Patterns — Session 354: only show direction-aligned patterns
     # Session 358: chart patterns get richer reasoning with targets/levels
+    # Session 359: flag when chart pattern target already exceeded
     dir_pattern_type = "bearish_reversal" if direction == "SHORT" else "bullish_reversal"
+    current_price = ohlcv[-1][4] if ohlcv else None
     shown_patterns = 0
     for p in patterns:
         ptype = p.get("pattern_type", "")
@@ -1502,6 +1525,22 @@ def _build_reasoning(
                 if vol_ok:
                     parts.append("volume confirmed")
                 parts.append(f"confidence {conf:.0%}")
+                # Session 359: check if target already reached or show progress
+                if target is not None and current_price is not None and target > 0:
+                    if direction == "SHORT" and current_price <= target:
+                        parts.append("\u26a0\ufe0f TARGET ALREADY REACHED")
+                    elif direction == "LONG" and current_price >= target:
+                        parts.append("\u26a0\ufe0f TARGET ALREADY REACHED")
+                    elif direction == "SHORT" and entry is not None and entry > target:
+                        total_move = entry - target
+                        completed = entry - current_price
+                        pct_done = (completed / total_move) * 100 if total_move > 0 else 0
+                        parts.append(f"{pct_done:.0f}% of move completed to target")
+                    elif direction == "LONG" and entry is not None and entry < target:
+                        total_move = target - entry
+                        completed = current_price - entry
+                        pct_done = (completed / total_move) * 100 if total_move > 0 else 0
+                        parts.append(f"{pct_done:.0f}% of move completed to target")
                 reasoning.append(" — ".join(parts))
             else:
                 # Candlestick pattern (CandlestickDetector)
@@ -1836,15 +1875,28 @@ def _suggest_entries_near_price(
     else:
         filtered = [c for c in candidates if c["level"] < current_price]
 
-    # Filter by distance: within 3% of current price
+    # Filter by distance: within 5% of current price
     for c in filtered:
         c["distance_pct"] = round(abs(c["level"] - current_price) / current_price * 100, 2)
 
-    nearby = [c for c in filtered if c["distance_pct"] <= 3.0]
+    nearby = [c for c in filtered if c["distance_pct"] <= 5.0]
 
-    # Sort by distance, return top 3
+    # Sort by distance, select up to 3 with minimum 1.5% spacing
     nearby.sort(key=lambda x: x["distance_pct"])
-    return nearby[:3]
+    selected: list[dict] = []
+    for c in nearby:
+        if len(selected) >= 3:
+            break
+        # Check minimum spacing from all already-selected entries
+        too_close = False
+        for s in selected:
+            spacing = abs(c["level"] - s["level"]) / current_price * 100
+            if spacing < 1.5:
+                too_close = True
+                break
+        if not too_close:
+            selected.append(c)
+    return selected
 
 
 # ---------------------------------------------------------------------------
@@ -2079,8 +2131,8 @@ def build_computed_ta(
             ema_data=ema_data,
             volume_profile=volume_profile,
         )
-        # Append DCA confluences to main list
-        confluences.extend(dca_confluences)
+        # DCA confluences kept separate — they are NOT main confluences
+        # and should not inflate the confluence count (Fix 6, Session 360)
 
     # ------------------------------------------------------------------
     # Step 5: Build reasoning
