@@ -485,8 +485,15 @@ def _build_confluences_for_pipeline(
 # Structure classification
 # ---------------------------------------------------------------------------
 
-def _classify_market_structure(structure_data: dict) -> str:
-    """Convert market structure analysis to LH_LL / HH_HL / UNKNOWN."""
+def _classify_market_structure(
+    structure_data: dict,
+    ema_data: Optional[dict] = None,
+) -> str:
+    """Convert market structure analysis to LH_LL / HH_HL / UNKNOWN.
+
+    Falls back to EMA alignment when the swing-point analyzer returns
+    "unknown" (e.g. insufficient swing data for CHoCH/BOS detection).
+    """
     structure = structure_data.get("current_structure", "unknown")
     if structure == "bearish":
         return "LH_LL"
@@ -494,6 +501,15 @@ def _classify_market_structure(structure_data: dict) -> str:
         return "HH_HL"
     elif structure == "ranging":
         return "RANGING"
+
+    # Fallback: infer from EMA alignment when structure analyzer has no data
+    if ema_data:
+        alignment = ema_data.get("dual_ema", {}).get("alignment", "unknown")
+        if alignment == "bearish":
+            return "LH_LL"
+        elif alignment == "bullish":
+            return "HH_HL"
+
     return "UNKNOWN"
 
 
@@ -746,7 +762,7 @@ def build_computed_ta(
 
     # Market structure (CHoCH, BOS, swing points)
     structure_data = _compute_market_structure(token_symbol, timeframe)
-    structure_label = _classify_market_structure(structure_data)
+    # NOTE: structure_label resolved after EMAs so we can fall back to EMA alignment
 
     # Candlestick patterns
     patterns = _compute_patterns(ohlcv)
@@ -763,6 +779,9 @@ def build_computed_ta(
 
     # EMAs (12, 24, 200) with alignment classification
     ema_data = _compute_emas(ohlcv)
+
+    # Market structure label (with EMA fallback when swing-point data unavailable)
+    structure_label = _classify_market_structure(structure_data, ema_data)
 
     # Trend classification
     trend = _classify_trend(ema_data, structure_data)
