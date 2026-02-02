@@ -431,15 +431,41 @@ def _build_confluences_for_pipeline(
 
     # Additional factors from confluence counter
     for desc in confluence_result.get("factor_descriptions", []):
-        # Only add if not already represented
-        if not any(desc.lower() in c["name"].lower() for c in confluences):
+        # Only add if not already represented (check both directions)
+        desc_lower = desc.lower()
+        already_present = False
+        for c in confluences:
+            c_lower = c["name"].lower()
+            # Check if either string contains the other, or if they share
+            # key terms (e.g. "ema 12/24" vs "12+24 ema")
+            if desc_lower in c_lower or c_lower in desc_lower:
+                already_present = True
+                break
+            # Catch EMA alignment duplicates with different formatting
+            if "ema" in desc_lower and "ema" in c_lower:
+                if ("12" in desc_lower and "24" in desc_lower and
+                        "12" in c_lower and "24" in c_lower):
+                    already_present = True
+                    break
+        if not already_present:
             confluences.append({
                 "type": "confirmation",
                 "name": desc,
                 "indicator": "CONFLUENCE_FACTOR",
             })
 
-    return confluences
+    # Session 354: Deduplicate by indicator type — keep first occurrence
+    seen_indicators: set[str] = set()
+    deduped: list[dict] = []
+    for c in confluences:
+        indicator = c.get("indicator", "")
+        if indicator and indicator in seen_indicators:
+            continue
+        if indicator:
+            seen_indicators.add(indicator)
+        deduped.append(c)
+
+    return deduped
 
 
 # ---------------------------------------------------------------------------
@@ -522,11 +548,17 @@ def _build_reasoning(
     )
     reasoning.append(f"Trend: {trend}, Market structure: {structure_label}")
 
-    # RSI
+    # RSI — Session 354: direction-specific interpretation
     if rsi < 30:
-        reasoning.append(f"RSI {rsi:.1f} — oversold (caution for SHORT)")
+        if direction == "SHORT":
+            reasoning.append(f"RSI {rsi:.1f} — oversold (bounce risk, penalizes SHORT)")
+        else:
+            reasoning.append(f"RSI {rsi:.1f} — oversold (favorable dip-buy for LONG)")
     elif rsi > 70:
-        reasoning.append(f"RSI {rsi:.1f} — overbought (favorable for SHORT)")
+        if direction == "LONG":
+            reasoning.append(f"RSI {rsi:.1f} — overbought (reversal risk, penalizes LONG)")
+        else:
+            reasoning.append(f"RSI {rsi:.1f} — overbought (favorable for SHORT)")
     else:
         reasoning.append(f"RSI {rsi:.1f} — neutral zone")
 
@@ -539,12 +571,19 @@ def _build_reasoning(
     alignment = ema_data.get("dual_ema", {}).get("alignment", "?")
     reasoning.append(f"EMA 12/24 alignment: {alignment}")
 
-    # Patterns
-    for p in patterns[:3]:
-        reasoning.append(
-            f"Pattern: {p.get('pattern_name', '?')} "
-            f"({p.get('strength', '?')}, {p.get('pattern_type', '?')})"
-        )
+    # Patterns — Session 354: only show direction-aligned patterns
+    dir_pattern_type = "bearish_reversal" if direction == "SHORT" else "bullish_reversal"
+    shown_patterns = 0
+    for p in patterns:
+        ptype = p.get("pattern_type", "")
+        if ptype == dir_pattern_type or ptype == "neutral":
+            reasoning.append(
+                f"Pattern: {p.get('pattern_name', '?')} "
+                f"({p.get('strength', '?')}, {ptype})"
+            )
+            shown_patterns += 1
+            if shown_patterns >= 3:
+                break
 
     # Confluence
     rating = confluence_result.get("rating", "NONE")
@@ -795,21 +834,46 @@ def build_computed_ta(
     elif n_confluences >= 2:
         confidence = min(confidence + 0.02, 1.0)
 
+    # Session 354: Entry vs current price distance warning
+    if current_price and entry > 0:
+        entry_distance_pct = abs(entry - current_price) / entry * 100
+        if entry_distance_pct > 10:
+            reasoning.insert(0,
+                f"⚠️ Entry {entry:.4f} is {entry_distance_pct:.1f}% from "
+                f"current price {current_price:.4f} — setup may be stale"
+            )
+            confidence = max(confidence - 0.10, 0.50)
+        elif entry_distance_pct > 5:
+            reasoning.insert(0,
+                f"Entry {entry:.4f} is {entry_distance_pct:.1f}% from "
+                f"current price {current_price:.4f}"
+            )
+
     # ------------------------------------------------------------------
     # Step 7: Assemble TAExtractionResult
     # ------------------------------------------------------------------
+    # Session 354: Filter patterns to direction-aligned only
+    aligned_type = "bearish_reversal" if direction == "SHORT" else "bullish_reversal"
+    aligned_patterns = [
+        p.get("pattern_name", "")
+        for p in patterns
+        if p.get("pattern_type") == aligned_type or p.get("pattern_type") == "neutral"
+    ][:5]
+
     result = TAExtractionResult(
         entry_levels=[entry],
         stop_loss=sl,
         take_profit_1=tp,
         dca_level=dca,
-        patterns_detected=[p.get("pattern_name", "") for p in patterns[:5]],
+        patterns_detected=aligned_patterns,
         trend_direction=trend,
         timeframe=timeframe,
         market_structure=structure_label,
         extraction_confidence=confidence,
         reasoning=reasoning,
         confluences=confluences,
+        rsi_value=rsi,
+        current_price=current_price,
     )
 
     logger.info(
