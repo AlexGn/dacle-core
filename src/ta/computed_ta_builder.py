@@ -339,6 +339,7 @@ def _build_confluences_for_pipeline(
         direction == "LONG" and alignment == "bullish"
     ):
         confluences.append({
+            "tier": "structural",
             "type": "structural",
             "name": f"EMA 12/24 {alignment} alignment",
             "indicator": "EMA_ALIGNMENT",
@@ -351,6 +352,7 @@ def _build_confluences_for_pipeline(
         direction == "LONG" and pos == "above"
     ):
         confluences.append({
+            "tier": "structural",
             "type": "structural",
             "name": f"Price {pos} 200 EMA ({ema_200:.4f})" if ema_200 else f"Price {pos} 200 EMA",
             "indicator": "EMA_200_POSITION",
@@ -361,6 +363,7 @@ def _build_confluences_for_pipeline(
     for s in sr_levels.get("supports", [])[:3]:
         if abs(s["price"] - entry) / entry < 0.03:
             confluences.append({
+                "tier": "zones",
                 "type": "zones",
                 "name": f"Support at {s['price']:.4f} ({s.get('strength', 'MODERATE')})",
                 "indicator": "SUPPORT_RETEST",
@@ -370,6 +373,7 @@ def _build_confluences_for_pipeline(
     for r in sr_levels.get("resistances", [])[:3]:
         if abs(r["price"] - entry) / entry < 0.03:
             confluences.append({
+                "tier": "zones",
                 "type": "zones",
                 "name": f"Resistance at {r['price']:.4f} ({r.get('strength', 'MODERATE')})",
                 "indicator": "RESISTANCE_RETEST",
@@ -380,6 +384,7 @@ def _build_confluences_for_pipeline(
     poc = volume_profile.get("poc")
     if poc and abs(poc - entry) / entry < 0.02:
         confluences.append({
+            "tier": "zones",
             "type": "zones",
             "name": f"POC at {poc:.4f}",
             "indicator": "MP_VWAP_ZONE",
@@ -389,6 +394,7 @@ def _build_confluences_for_pipeline(
     vah = volume_profile.get("vah")
     if vah and abs(vah - entry) / entry < 0.02:
         confluences.append({
+            "tier": "zones",
             "type": "zones",
             "name": f"VAH at {vah:.4f}",
             "indicator": "MP_VWAP_ZONE",
@@ -398,6 +404,7 @@ def _build_confluences_for_pipeline(
     val = volume_profile.get("val")
     if val and abs(val - entry) / entry < 0.02:
         confluences.append({
+            "tier": "zones",
             "type": "zones",
             "name": f"VAL at {val:.4f}",
             "indicator": "MP_VWAP_ZONE",
@@ -409,6 +416,7 @@ def _build_confluences_for_pipeline(
         if isinstance(fib_price, (int, float)) and fib_price > 0:
             if abs(fib_price - entry) / entry < 0.02:
                 confluences.append({
+                    "tier": "zones",
                     "type": "zones",
                     "name": f"Fib {fib_name} at {fib_price:.4f}",
                     "indicator": "FIBONACCI_LEVEL",
@@ -424,6 +432,7 @@ def _build_confluences_for_pipeline(
             strength = p.get("strength", "MODERATE")
             tier = "structural" if strength == "STRONG" else "confirmation"
             confluences.append({
+                "tier": tier,
                 "type": tier,
                 "name": p.get("pattern_name", "Unknown Pattern"),
                 "indicator": f"CHART_PATTERN_{strength}",
@@ -449,6 +458,7 @@ def _build_confluences_for_pipeline(
                     break
         if not already_present:
             confluences.append({
+                "tier": "confirmation",
                 "type": "confirmation",
                 "name": desc,
                 "indicator": "CONFLUENCE_FACTOR",
