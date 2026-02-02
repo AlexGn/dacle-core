@@ -1316,13 +1316,14 @@ def _analyze_momentum_narrative(
     if abs(bearish_pct - bullish_pct) < 0.2 and wick_increasing:
         return "Indecision: balanced candle colors with increasing wicks"
 
-    # Default: describe the distribution
+    # Default: only show if there's a clear lean (>60%), suppress noise
     if bearish_pct > 0.6:
         return f"Bearish leaning: {bearish_count}/{lookback} bearish candles"
     elif bullish_pct > 0.6:
         return f"Bullish leaning: {bullish_count}/{lookback} bullish candles"
 
-    return f"Mixed signals: {bullish_count} bullish, {bearish_count} bearish out of {lookback} candles"
+    # 40-60% split is noise — no actionable signal
+    return ""
 
 
 # ---------------------------------------------------------------------------
@@ -1530,14 +1531,27 @@ def _build_reasoning(
         else:
             reasoning.append(f"Trendline: {trendline.get('direction', '?')}, {touches} touches, {dist:.1f}% away")
 
-    # FVG context
+    # FVG context — focus on nearest relevant FVG, not raw counts
     fvg_count = sd.get("fvg_count", 0)
     if fvg_count > 0:
-        bear_fvgs = sd.get("bearish_fvg_count", 0)
-        bull_fvgs = sd.get("bullish_fvg_count", 0)
         in_fvg = sd.get("in_fvg_zone", False) if direction == "SHORT" \
             else sd.get("in_bullish_fvg_zone", False)
-        fvg_str = f"FVGs: {fvg_count} total ({bear_fvgs} bearish, {bull_fvgs} bullish)"
+        # Show nearest direction-aligned FVG if available
+        fvg_key = "nearest_bearish_fvg" if direction == "SHORT" else "nearest_bullish_fvg"
+        nearest = sd.get(fvg_key)
+        if nearest and nearest.get("top") and nearest.get("bottom"):
+            fvg_str = (
+                f"Nearest {'bearish' if direction == 'SHORT' else 'bullish'} FVG: "
+                f"{nearest['bottom']:.4f}-{nearest['top']:.4f}"
+            )
+            if nearest.get("strength"):
+                fvg_str += f" ({nearest['strength']})"
+        elif fvg_count <= 5:
+            bear_fvgs = sd.get("bearish_fvg_count", 0)
+            bull_fvgs = sd.get("bullish_fvg_count", 0)
+            fvg_str = f"FVGs: {fvg_count} ({bear_fvgs} bearish, {bull_fvgs} bullish)"
+        else:
+            fvg_str = f"FVGs: {fvg_count} detected"
         if in_fvg:
             fvg_str += " — price IN FVG zone (imbalance fill expected)"
         reasoning.append(fvg_str)
@@ -1557,15 +1571,17 @@ def _build_reasoning(
                 ob_str += " (preceded by liquidity sweep)"
         reasoning.append(ob_str)
 
-    # Liquidity Sweeps
+    # Liquidity Sweeps — filter noise (depth < 0.5% AND weak = not actionable)
     sweeps = sd.get("liquidity_sweeps", [])
     if sweeps:
         recent = sweeps[0]
         depth = recent.get("sweep_depth_pct", 0)
-        reasoning.append(
-            f"Liquidity sweep: {recent.get('direction', '?')} "
-            f"(depth {depth:.1f}%, {recent.get('strength', '?')})"
-        )
+        strength = recent.get("strength", "weak")
+        if not (depth < 0.5 and strength == "weak"):
+            reasoning.append(
+                f"Liquidity sweep: {recent.get('direction', '?')} "
+                f"(depth {depth:.1f}%, {strength})"
+            )
 
     # EQH/EQL (equal highs/lows = liquidity targets)
     eqh_count = sd.get("eqh_count", 0)
@@ -1594,7 +1610,15 @@ def _build_reasoning(
         elif direction == "LONG" and zone == "discount":
             reasoning.append(f"Price in discount zone ({dist_eq:.1f}% from equilibrium) — favorable for LONG")
         elif zone in ("premium", "discount"):
-            reasoning.append(f"Price in {zone} zone ({dist_eq:.1f}% from equilibrium)")
+            # Misaligned: SHORT in discount or LONG in premium
+            if (direction == "SHORT" and zone == "discount") or \
+               (direction == "LONG" and zone == "premium"):
+                reasoning.append(
+                    f"\u26a0\ufe0f Price in {zone} zone ({dist_eq:.1f}% from equilibrium)"
+                    f" — unfavorable for {direction}"
+                )
+            else:
+                reasoning.append(f"Price in {zone} zone ({dist_eq:.1f}% from equilibrium)")
 
     # Candle behavior at key levels (Session 357 Phase 2A)
     if ohlcv:
@@ -1602,7 +1626,18 @@ def _build_reasoning(
             ohlcv, sr_levels, sd, entry, direction,
         )
         for b in behaviors[:3]:  # top 3 most relevant
-            reasoning.append(b["description"])
+            desc = b["description"]
+            level_name = b.get("level_name", "")
+            # Direction-aware warnings: rejection at support = bad for SHORT,
+            # rejection at resistance = bad for LONG
+            is_counter = (
+                (direction == "SHORT" and "support" in level_name)
+                or (direction == "LONG" and "resistance" in level_name)
+            )
+            if is_counter and b.get("type") == "rejection_wick":
+                defender = "buyers" if "support" in level_name else "sellers"
+                desc = f"\u26a0\ufe0f {desc} — {defender} defending (caution for {direction})"
+            reasoning.append(desc)
 
     # Multi-candle momentum narrative (Session 357 Phase 2B)
     if ohlcv:
@@ -1629,6 +1664,16 @@ def _build_reasoning(
             reasoning.append(f"DCA confluences: {', '.join(conf_names)}")
         else:
             reasoning.append("DCA: no confluence alignment with key levels")
+
+    # ------------------------------------------------------------------
+    # Priority reorder: pin setup+trend at top, then warnings, then rest
+    # ------------------------------------------------------------------
+    if len(reasoning) > 2:
+        pinned = reasoning[:2]  # setup line + trend/structure line
+        rest = reasoning[2:]
+        warnings = [r for r in rest if "\u26a0\ufe0f" in r]
+        non_warnings = [r for r in rest if "\u26a0\ufe0f" not in r]
+        reasoning = pinned + warnings + non_warnings
 
     return reasoning
 
