@@ -50,6 +50,9 @@ def _fetch_ohlcv_binance(
     """
     exchange = ccxt.binance({"enableRateLimit": True, "timeout": 15000})
 
+    # Binance requires lowercase intervals (e.g. "4h" not "4H")
+    timeframe = timeframe.lower()
+
     pairs = [
         f"{symbol}/USDT:USDT",  # Perpetual (priority for shorts)
         f"{symbol}/USDT",       # Spot
@@ -64,7 +67,7 @@ def _fetch_ohlcv_binance(
                 )
                 return ohlcv
         except Exception as e:
-            logger.debug(f"{pair} not available: {e}")
+            logger.warning(f"{pair} not available: {e}")
             continue
 
     logger.warning(f"No OHLCV data found for {symbol}")
