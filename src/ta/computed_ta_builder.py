@@ -548,6 +548,7 @@ def _build_reasoning(
     patterns: list[dict],
     sr_levels: dict,
     volume_data: dict,
+    num_confluences: int = 0,
 ) -> list[str]:
     """Build human-readable reasoning list for the TA result."""
     reasoning = []
@@ -595,10 +596,11 @@ def _build_reasoning(
             if shown_patterns >= 3:
                 break
 
-    # Confluence
+    # Confluence — use the actual number of confluences in the final list,
+    # not the counter's "score" (which is a 1-4 category count)
     rating = confluence_result.get("rating", "NONE")
-    score = confluence_result.get("score", 0)
-    reasoning.append(f"Confluence: {rating} ({score} factors)")
+    count = num_confluences or confluence_result.get("score", 0)
+    reasoning.append(f"Confluence: {rating} ({count} factors)")
 
     # Volume
     if volume_data.get("volume_spike"):
@@ -823,6 +825,7 @@ def build_computed_ta(
         patterns=patterns,
         sr_levels=sr_levels,
         volume_data=volume_data,
+        num_confluences=len(confluences),
     )
 
     # ------------------------------------------------------------------
