@@ -611,6 +611,7 @@ def _build_confluences_for_pipeline(
     direction: str,
     entry: float,
     current_price: float,
+    structure_data: Optional[dict] = None,
 ) -> list[dict]:
     """
     Build the confluences list for TAExtractionResult.
@@ -754,6 +755,82 @@ def _build_confluences_for_pipeline(
                 "type": tier,
                 "name": p.get("pattern_name", "Unknown Pattern"),
                 "indicator": f"CHART_PATTERN_{strength}",
+            })
+
+    # ------------------------------------------------------------------
+    # Session 357: Market structure confluences (trendlines, FVGs, OBs, equilibrium)
+    # ------------------------------------------------------------------
+    sd = structure_data or {}
+
+    # Trendline confluence
+    trendline = sd.get("trendline")
+    if trendline and trendline.get("detected"):
+        tl_direction = trendline.get("direction", "")
+        tl_broken = trendline.get("broken", False)
+        tl_touches = trendline.get("touch_count", 0)
+        tl_strength = trendline.get("strength", "weak")
+        # Trendline break aligned with trade direction = structural confluence
+        if tl_broken:
+            ascending_break_short = direction == "SHORT" and "up" in tl_direction.lower()
+            descending_break_long = direction == "LONG" and "down" in tl_direction.lower()
+            if ascending_break_short or descending_break_long:
+                tier = "structural" if tl_touches >= 3 else "confirmation"
+                confluences.append({
+                    "tier": tier, "type": tier,
+                    "name": f"Trendline break ({tl_touches} touches, {tl_strength})",
+                    "indicator": "TRENDLINE_BREAK",
+                })
+        # Approaching trendline (breakout imminent)
+        elif trendline.get("breakout_imminent"):
+            dist = trendline.get("distance_pct", 0)
+            confluences.append({
+                "tier": "confirmation", "type": "confirmation",
+                "name": f"Approaching trendline ({dist:.1f}% away, {tl_touches} touches)",
+                "indicator": "TRENDLINE_APPROACH",
+            })
+
+    # FVG confluence — direction-aligned FVG near entry
+    if direction == "SHORT":
+        fvg = sd.get("nearest_bearish_fvg")
+    else:
+        fvg = sd.get("nearest_bullish_fvg")
+    if fvg:
+        fvg_mid = fvg.get("midpoint", 0)
+        if fvg_mid and entry > 0 and abs(fvg_mid - entry) / entry < 0.03:
+            confluences.append({
+                "tier": "zones", "type": "zones",
+                "name": f"FVG zone {fvg.get('bottom', 0):.4f}-{fvg.get('top', 0):.4f} ({fvg.get('strength', 'moderate')})",
+                "indicator": "FVG_ZONE",
+                "level": fvg_mid,
+            })
+
+    # Order Block confluence — unmitigated OB near entry
+    if direction == "SHORT":
+        ob = sd.get("unmitigated_bearish_ob")
+    else:
+        ob = sd.get("unmitigated_bullish_ob")
+    if ob:
+        ob_mid = ob.get("midpoint", 0)
+        if ob_mid and entry > 0 and abs(ob_mid - entry) / entry < 0.03:
+            tier = "structural" if ob.get("preceded_by_sweep") else "zones"
+            confluences.append({
+                "tier": tier, "type": tier,
+                "name": f"Order Block {ob.get('bottom', 0):.4f}-{ob.get('top', 0):.4f} ({ob.get('strength', 'moderate')})",
+                "indicator": "ORDER_BLOCK",
+                "level": ob_mid,
+            })
+
+    # Equilibrium zone alignment
+    eq = sd.get("equilibrium")
+    if eq:
+        zone = eq.get("zone", "")
+        if (direction == "SHORT" and zone == "premium") or \
+           (direction == "LONG" and zone == "discount"):
+            eq_price = eq.get("equilibrium_price", 0)
+            confluences.append({
+                "tier": "confirmation", "type": "confirmation",
+                "name": f"Price in {zone} zone (eq at {eq_price:.4f})" if eq_price else f"Price in {zone} zone",
+                "indicator": "EQUILIBRIUM_ZONE",
             })
 
     # Harmonic patterns (Session 355 P2)
@@ -1008,6 +1085,247 @@ def _compute_volume_analysis(ohlcv: list[list]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Session 357: Candle behavior at key levels
+# ---------------------------------------------------------------------------
+
+def _analyze_candle_behavior_at_levels(
+    ohlcv: list[list],
+    sr_levels: dict,
+    structure_data: dict,
+    entry: float,
+    direction: str,
+    lookback: int = 5,
+) -> list[dict]:
+    """Analyze how recent candles behave at key levels.
+
+    Checks for rejection wicks, absorption, and engulfing patterns
+    at support/resistance, order block zones, and entry price.
+
+    Returns list of observations sorted by relevance:
+    [{"type": "rejection_wick", "level": 1.234, "level_name": "resistance",
+      "description": "Strong rejection wick at resistance (wick 3.2x body)"}]
+    """
+    if not ohlcv or len(ohlcv) < lookback + 1:
+        return []
+
+    observations: list[dict] = []
+
+    # Collect key levels to check
+    key_levels: list[tuple[float, str]] = []
+
+    # Entry price
+    if entry > 0:
+        key_levels.append((entry, "entry"))
+
+    # S/R levels
+    for s in sr_levels.get("supports", [])[:3]:
+        price = s.get("price", 0)
+        if price > 0:
+            key_levels.append((price, f"support ({s.get('strength', 'MODERATE')})"))
+    for r in sr_levels.get("resistances", [])[:3]:
+        price = r.get("price", 0)
+        if price > 0:
+            key_levels.append((price, f"resistance ({r.get('strength', 'MODERATE')})"))
+
+    # Order Block zones
+    sd = structure_data or {}
+    for ob_key, ob_label in [
+        ("unmitigated_bearish_ob", "bearish OB"),
+        ("unmitigated_bullish_ob", "bullish OB"),
+    ]:
+        ob = sd.get(ob_key)
+        if ob and ob.get("midpoint"):
+            key_levels.append((ob["midpoint"], ob_label))
+
+    if not key_levels:
+        return []
+
+    # Analyze recent candles at each key level
+    recent_candles = ohlcv[-lookback:]
+    for level, level_name in key_levels:
+        if level <= 0:
+            continue
+
+        for candle in recent_candles:
+            _, o, h, l, c, vol = candle
+            body = abs(c - o)
+            upper_wick = h - max(o, c)
+            lower_wick = min(o, c) - l
+            full_range = h - l
+            if full_range <= 0:
+                continue
+
+            # Did this candle touch the level? (within 0.5%)
+            touches_level = (l <= level * 1.005) and (h >= level * 0.995)
+            if not touches_level:
+                continue
+
+            body_safe = max(body, full_range * 0.01)  # avoid division by zero
+
+            # Rejection wick: long wick > 2x body at level
+            if level_name.startswith("resistance") or (direction == "SHORT" and level_name == "entry"):
+                # Upper wick rejection at resistance/entry (bearish rejection)
+                if upper_wick > body_safe * 2:
+                    ratio = upper_wick / body_safe
+                    observations.append({
+                        "type": "rejection_wick",
+                        "level": level,
+                        "level_name": level_name,
+                        "description": f"Rejection wick at {level_name} (wick {ratio:.1f}x body)",
+                        "strength": "strong" if ratio > 3 else "moderate",
+                    })
+            elif level_name.startswith("support") or (direction == "LONG" and level_name == "entry"):
+                # Lower wick rejection at support/entry (bullish rejection)
+                if lower_wick > body_safe * 2:
+                    ratio = lower_wick / body_safe
+                    observations.append({
+                        "type": "rejection_wick",
+                        "level": level,
+                        "level_name": level_name,
+                        "description": f"Rejection wick at {level_name} (wick {ratio:.1f}x body)",
+                        "strength": "strong" if ratio > 3 else "moderate",
+                    })
+
+            # Absorption: high volume + small body at level (institutional activity)
+            if body < full_range * 0.3 and vol > 0:
+                # Check if this candle had above-average volume
+                recent_vols = [c_[5] for c_ in ohlcv[-20:] if c_[5] > 0]
+                if recent_vols:
+                    avg_vol = sum(recent_vols) / len(recent_vols)
+                    if vol > avg_vol * 1.5:
+                        observations.append({
+                            "type": "absorption",
+                            "level": level,
+                            "level_name": level_name,
+                            "description": f"Absorption at {level_name} (small body, {vol/avg_vol:.1f}x avg volume)",
+                            "strength": "strong" if vol > avg_vol * 2 else "moderate",
+                        })
+
+    # Deduplicate by level_name, keep strongest
+    seen: dict[str, dict] = {}
+    strength_order = {"strong": 2, "moderate": 1}
+    for obs in observations:
+        key = f"{obs['type']}_{obs['level_name']}"
+        existing = seen.get(key)
+        if not existing or strength_order.get(obs["strength"], 0) > strength_order.get(existing["strength"], 0):
+            seen[key] = obs
+
+    result = list(seen.values())
+    # Sort: strong first, then by type (rejection > absorption)
+    result.sort(key=lambda x: (-strength_order.get(x["strength"], 0), x["type"]))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Session 357: Multi-candle momentum narrative
+# ---------------------------------------------------------------------------
+
+def _analyze_momentum_narrative(
+    ohlcv: list[list],
+    direction: str,
+    lookback: int = 10,
+) -> str:
+    """Produce a one-line momentum narrative from recent candle character.
+
+    Analyzes body size trend, wick ratios, candle color distribution,
+    and range trend to classify momentum.
+
+    Examples:
+    - "Momentum weakening: decreasing body sizes, increasing upper wicks"
+    - "Strong selling pressure: 7/10 bearish candles with expanding bodies"
+    - "Indecision: alternating candles with shrinking range"
+    """
+    if not ohlcv or len(ohlcv) < lookback:
+        return ""
+
+    recent = ohlcv[-lookback:]
+
+    # Body sizes
+    bodies: list[float] = []
+    upper_wicks: list[float] = []
+    lower_wicks: list[float] = []
+    ranges: list[float] = []
+    bullish_count = 0
+    bearish_count = 0
+
+    for candle in recent:
+        _, o, h, l, c, _ = candle
+        body = abs(c - o)
+        full_range = h - l
+        bodies.append(body)
+        ranges.append(full_range)
+        upper_wicks.append(h - max(o, c))
+        lower_wicks.append(min(o, c) - l)
+        if c > o:
+            bullish_count += 1
+        elif c < o:
+            bearish_count += 1
+
+    if not bodies or not ranges:
+        return ""
+
+    # Body size trend: compare first half vs second half
+    half = lookback // 2
+    first_half_body = sum(bodies[:half]) / half if half > 0 else 0
+    second_half_body = sum(bodies[half:]) / (lookback - half) if (lookback - half) > 0 else 0
+
+    body_expanding = second_half_body > first_half_body * 1.2
+    body_contracting = second_half_body < first_half_body * 0.8
+
+    # Wick trend
+    first_half_wick = sum(upper_wicks[:half]) + sum(lower_wicks[:half])
+    second_half_wick = sum(upper_wicks[half:]) + sum(lower_wicks[half:])
+    wick_increasing = second_half_wick > first_half_wick * 1.3 if first_half_wick > 0 else False
+
+    # Range trend
+    first_half_range = sum(ranges[:half]) / half if half > 0 else 0
+    second_half_range = sum(ranges[half:]) / (lookback - half) if (lookback - half) > 0 else 0
+    range_expanding = second_half_range > first_half_range * 1.2
+    range_contracting = second_half_range < first_half_range * 0.8
+
+    # Classification
+    total = bullish_count + bearish_count
+    if total == 0:
+        return "Indecision: all doji candles"
+
+    bearish_pct = bearish_count / total
+    bullish_pct = bullish_count / total
+
+    # Strong directional momentum
+    if bearish_pct >= 0.7 and body_expanding:
+        return f"Strong selling pressure: {bearish_count}/{lookback} bearish candles with expanding bodies"
+    if bullish_pct >= 0.7 and body_expanding:
+        return f"Strong buying pressure: {bullish_count}/{lookback} bullish candles with expanding bodies"
+
+    # Weakening momentum
+    if body_contracting and wick_increasing:
+        return "Momentum weakening: decreasing body sizes, increasing wicks"
+    if body_contracting:
+        return "Momentum fading: decreasing body sizes over recent candles"
+
+    # Compression
+    if range_contracting and not body_expanding:
+        return "Range compression: contracting candles suggest imminent breakout"
+
+    # Expanding volatility
+    if range_expanding and body_expanding:
+        dominant = "bearish" if bearish_pct > 0.55 else "bullish" if bullish_pct > 0.55 else "mixed"
+        return f"Expanding volatility: widening ranges with {dominant} bias"
+
+    # Indecision
+    if abs(bearish_pct - bullish_pct) < 0.2 and wick_increasing:
+        return "Indecision: balanced candle colors with increasing wicks"
+
+    # Default: describe the distribution
+    if bearish_pct > 0.6:
+        return f"Bearish leaning: {bearish_count}/{lookback} bearish candles"
+    elif bullish_pct > 0.6:
+        return f"Bullish leaning: {bullish_count}/{lookback} bullish candles"
+
+    return f"Mixed signals: {bullish_count} bullish, {bearish_count} bearish out of {lookback} candles"
+
+
+# ---------------------------------------------------------------------------
 # Reasoning builder
 # ---------------------------------------------------------------------------
 
@@ -1030,15 +1348,30 @@ def _build_reasoning(
     volume_profile: Optional[dict] = None,
     tvem_data: Optional[dict] = None,
     harmonics: Optional[list[dict]] = None,
+    structure_data: Optional[dict] = None,
+    ohlcv: Optional[list[list]] = None,
 ) -> list[str]:
     """Build human-readable reasoning list for the TA result."""
     reasoning = []
 
-    # Direction and trend
+    sd = structure_data or {}
+
+    # Direction and trend (enriched with CHoCH/BOS details — Session 357)
     reasoning.append(
         f"{direction} setup: Entry {entry:.4f}, SL {sl:.4f}, TP {tp:.4f}"
     )
-    reasoning.append(f"Trend: {trend}, Market structure: {structure_label}")
+    structure_parts = [f"Market structure: {structure_label}"]
+    choch = sd.get("choch_details")
+    if choch and choch.get("direction"):
+        choch_price = choch.get("price", 0)
+        if choch_price:
+            structure_parts.append(f"CHoCH {choch['direction']} at {choch_price:.4f}")
+        else:
+            structure_parts.append(f"CHoCH {choch['direction']}")
+    bos = sd.get("bos_details")
+    if bos and bos.get("direction"):
+        structure_parts.append(f"BOS {bos['direction']} confirmed")
+    reasoning.append(f"Trend: {trend}, {' | '.join(structure_parts)}")
 
     # RSI — Session 354 + 356: direction-specific sub-range interpretation
     if rsi < 30:
@@ -1179,6 +1512,103 @@ def _build_reasoning(
             parts.append(f"D at {d_price:.4f}")
         parts.append(f"{comp:.0f}% complete")
         reasoning.append(" — ".join(parts))
+
+    # ------------------------------------------------------------------
+    # Session 357: Market structure reasoning (trendlines, FVGs, OBs, sweeps, EQH/EQL, equilibrium)
+    # ------------------------------------------------------------------
+
+    # Trendline context
+    trendline = sd.get("trendline")
+    if trendline and trendline.get("detected"):
+        touches = trendline.get("touch_count", 0)
+        strength = trendline.get("strength", "weak")
+        dist = trendline.get("distance_pct", 0)
+        if trendline.get("broken"):
+            reasoning.append(f"Trendline BROKEN ({touches} touches, {strength}) — trend shift signal")
+        elif trendline.get("breakout_imminent"):
+            reasoning.append(f"Trendline breakout imminent ({dist:.1f}% away, {touches} touches)")
+        else:
+            reasoning.append(f"Trendline: {trendline.get('direction', '?')}, {touches} touches, {dist:.1f}% away")
+
+    # FVG context
+    fvg_count = sd.get("fvg_count", 0)
+    if fvg_count > 0:
+        bear_fvgs = sd.get("bearish_fvg_count", 0)
+        bull_fvgs = sd.get("bullish_fvg_count", 0)
+        in_fvg = sd.get("in_fvg_zone", False) if direction == "SHORT" \
+            else sd.get("in_bullish_fvg_zone", False)
+        fvg_str = f"FVGs: {fvg_count} total ({bear_fvgs} bearish, {bull_fvgs} bullish)"
+        if in_fvg:
+            fvg_str += " — price IN FVG zone (imbalance fill expected)"
+        reasoning.append(fvg_str)
+
+    # Order Blocks
+    bear_obs = sd.get("bearish_ob_count", 0)
+    bull_obs = sd.get("bullish_ob_count", 0)
+    if bear_obs or bull_obs:
+        ob_str = f"Order Blocks: {bear_obs} bearish, {bull_obs} bullish"
+        ob = sd.get("unmitigated_bearish_ob" if direction == "SHORT" else "unmitigated_bullish_ob")
+        if ob:
+            ob_mid = ob.get("midpoint", 0)
+            dir_label = "bearish" if direction == "SHORT" else "bullish"
+            if ob_mid:
+                ob_str += f" — unmitigated {dir_label} OB at {ob_mid:.4f}"
+            if ob.get("preceded_by_sweep"):
+                ob_str += " (preceded by liquidity sweep)"
+        reasoning.append(ob_str)
+
+    # Liquidity Sweeps
+    sweeps = sd.get("liquidity_sweeps", [])
+    if sweeps:
+        recent = sweeps[0]
+        depth = recent.get("sweep_depth_pct", 0)
+        reasoning.append(
+            f"Liquidity sweep: {recent.get('direction', '?')} "
+            f"(depth {depth:.1f}%, {recent.get('strength', '?')})"
+        )
+
+    # EQH/EQL (equal highs/lows = liquidity targets)
+    eqh_count = sd.get("eqh_count", 0)
+    eql_count = sd.get("eql_count", 0)
+    if eqh_count or eql_count:
+        parts = []
+        if eqh_count:
+            eqh_part = f"{eqh_count} EQH"
+            if sd.get("eqh_above_price"):
+                eqh_part += " above price (liquidity target)"
+            parts.append(eqh_part)
+        if eql_count:
+            eql_part = f"{eql_count} EQL"
+            if sd.get("eql_below_price"):
+                eql_part += " below price (liquidity target)"
+            parts.append(eql_part)
+        reasoning.append(f"Equal levels: {', '.join(parts)}")
+
+    # Equilibrium zone
+    eq = sd.get("equilibrium")
+    if eq:
+        zone = eq.get("zone", "unknown")
+        dist_eq = eq.get("distance_to_eq_pct", 0)
+        if direction == "SHORT" and zone == "premium":
+            reasoning.append(f"Price in premium zone ({dist_eq:.1f}% from equilibrium) — favorable for SHORT")
+        elif direction == "LONG" and zone == "discount":
+            reasoning.append(f"Price in discount zone ({dist_eq:.1f}% from equilibrium) — favorable for LONG")
+        elif zone in ("premium", "discount"):
+            reasoning.append(f"Price in {zone} zone ({dist_eq:.1f}% from equilibrium)")
+
+    # Candle behavior at key levels (Session 357 Phase 2A)
+    if ohlcv:
+        behaviors = _analyze_candle_behavior_at_levels(
+            ohlcv, sr_levels, sd, entry, direction,
+        )
+        for b in behaviors[:3]:  # top 3 most relevant
+            reasoning.append(b["description"])
+
+    # Multi-candle momentum narrative (Session 357 Phase 2B)
+    if ohlcv:
+        momentum = _analyze_momentum_narrative(ohlcv, direction)
+        if momentum:
+            reasoning.append(f"Candle character: {momentum}")
 
     # S/R context
     n_supports = len(sr_levels.get("supports", []))
@@ -1491,6 +1921,7 @@ def build_computed_ta(
         direction=direction,
         entry=entry,
         current_price=current_price,
+        structure_data=structure_data,
     )
 
     # ------------------------------------------------------------------
@@ -1530,6 +1961,8 @@ def build_computed_ta(
         volume_profile=volume_profile,
         tvem_data=tvem_data,
         harmonics=harmonics,
+        structure_data=structure_data,
+        ohlcv=ohlcv,
     )
 
     # ------------------------------------------------------------------
