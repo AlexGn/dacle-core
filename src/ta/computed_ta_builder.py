@@ -1040,7 +1040,7 @@ def _build_reasoning(
     )
     reasoning.append(f"Trend: {trend}, Market structure: {structure_label}")
 
-    # RSI — Session 354: direction-specific interpretation
+    # RSI — Session 354 + 356: direction-specific sub-range interpretation
     if rsi < 30:
         if direction == "SHORT":
             reasoning.append(f"RSI {rsi:.1f} — oversold (bounce risk, penalizes SHORT)")
@@ -1051,8 +1051,18 @@ def _build_reasoning(
             reasoning.append(f"RSI {rsi:.1f} — overbought (reversal risk, penalizes LONG)")
         else:
             reasoning.append(f"RSI {rsi:.1f} — overbought (favorable for SHORT)")
+    elif rsi <= 40:
+        if direction == "SHORT":
+            reasoning.append(f"RSI {rsi:.1f} — approaching oversold (caution for SHORT)")
+        else:
+            reasoning.append(f"RSI {rsi:.1f} — leaning oversold (mildly favorable for LONG)")
+    elif rsi >= 60:
+        if direction == "SHORT":
+            reasoning.append(f"RSI {rsi:.1f} — leaning overbought (mildly favorable for SHORT)")
+        else:
+            reasoning.append(f"RSI {rsi:.1f} — approaching overbought (caution for LONG)")
     else:
-        reasoning.append(f"RSI {rsi:.1f} — neutral zone")
+        reasoning.append(f"RSI {rsi:.1f} — neutral (40-60, no directional edge)")
 
     # EMAs
     ema_200 = ema_data.get("ema_200")
