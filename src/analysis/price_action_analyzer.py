@@ -1405,6 +1405,354 @@ class PatternRecognitionEngine:
 
         return None
 
+    def detect_normal_head_and_shoulders(
+        self,
+        ohlcv: List,
+        lookback: int = 50
+    ) -> Optional[Dict]:
+        """
+        Detect normal (bearish) head & shoulders pattern.
+
+        Mirror of inverse H&S using swing HIGHS instead of swing LOWS:
+        - Left shoulder: local high
+        - Head: higher high (middle) — HIGHEST point
+        - Right shoulder: lower high (similar height to left shoulder)
+        - Neckline: max(lows between shoulders) — support level
+        - Target: Neckline - (Head - Neckline) — measured move down
+
+        Volume: declining on head (exhaustion of buyers), increasing on
+        right shoulder breakdown.
+
+        Session 358: Bearish chart pattern gap closure.
+
+        Args:
+            ohlcv: OHLCV data [[timestamp, open, high, low, close, volume], ...]
+            lookback: Number of candles to analyze (default: 50)
+
+        Returns:
+            Pattern dict if detected, None otherwise
+        """
+        if not ohlcv or len(ohlcv) < lookback:
+            return None
+
+        recent_candles = ohlcv[-lookback:]
+        highs = [candle[2] for candle in recent_candles]
+        lows = [candle[3] for candle in recent_candles]
+        volumes = [candle[5] for candle in recent_candles]
+        closes = [candle[4] for candle in recent_candles]
+
+        # Find swing highs (local maxima)
+        swing_highs = self._find_swing_points(highs, "high", window=self.swing_window)
+
+        if len(swing_highs) < 3:
+            return None
+
+        # Check last 3 consecutive swing highs for pattern
+        for i in range(len(swing_highs) - 2):
+            left = swing_highs[i]
+            head = swing_highs[i + 1]
+            right = swing_highs[i + 2]
+
+            # Validate: Head is highest point
+            if not (head['price'] > left['price'] and head['price'] > right['price']):
+                continue
+
+            # Validate: Shoulders are roughly equal (±5% tolerance)
+            shoulder_diff = abs(left['price'] - right['price']) / left['price']
+            if shoulder_diff > self.shoulder_tolerance:
+                continue
+
+            # Calculate neckline (support connecting shoulder lows)
+            left_low_idx = left['idx']
+            right_low_idx = right['idx']
+            between_lows = lows[left_low_idx:right_low_idx + 1]
+            neckline = min(between_lows) if between_lows else (left['price'] + right['price']) / 2
+
+            # Calculate target: Neckline - (Head - Neckline) — measured move down
+            distance = head['price'] - neckline
+            target = neckline - distance
+
+            # Volume confirmation
+            vol_declining = volumes[head['idx']] < volumes[left['idx']]
+            vol_increasing = volumes[right['idx']] > volumes[head['idx']]
+
+            # Calculate confidence score
+            confidence = 0.6  # Base confidence
+            if vol_declining and vol_increasing:
+                confidence = 0.8  # Strong volume confirmation
+            elif vol_declining or vol_increasing:
+                confidence = 0.7  # Partial volume confirmation
+
+            # Check if current price is near neckline (potential breakdown)
+            current_price = closes[-1]
+            near_neckline = abs(current_price - neckline) / neckline < 0.02  # Within 2%
+            if near_neckline:
+                confidence += 0.1
+
+            confidence = min(confidence, 1.0)
+
+            return {
+                "pattern": "normal_h_and_s",
+                "left_shoulder": round(left['price'], 6),
+                "head": round(head['price'], 6),
+                "right_shoulder": round(right['price'], 6),
+                "neckline": round(neckline, 6),
+                "target": round(target, 6),
+                "confidence": round(confidence, 2),
+                "detected_at": recent_candles[-1][0],
+                "volume_confirmed": vol_declining and vol_increasing
+            }
+
+        return None
+
+    def detect_double_top(
+        self,
+        ohlcv: List,
+        lookback: int = 50
+    ) -> Optional[Dict]:
+        """
+        Detect double top pattern (bearish reversal).
+
+        Mirror of double bottom using swing HIGHS:
+        - First top: Initial rally creating first high
+        - Valley: Temporary pullback (forms support)
+        - Second top: Second rally to similar price as first high
+        - Breakdown: Price breaks below valley support
+
+        Validation:
+        1. Two swing highs within ±2% of each other
+        2. Valley between tops is at least 3% below peaks
+        3. Minimum 5 candle separation
+        4. Volume declining on second top (exhaustion)
+        5. Target = Valley - (Top_Avg - Valley)
+
+        Session 358: Bearish chart pattern gap closure.
+
+        Args:
+            ohlcv: OHLCV data [[timestamp, open, high, low, close, volume], ...]
+            lookback: Number of candles to analyze (default: 50)
+
+        Returns:
+            Pattern dict if detected, None otherwise
+        """
+        if not ohlcv or len(ohlcv) < lookback:
+            return None
+
+        recent_candles = ohlcv[-lookback:]
+        highs = [candle[2] for candle in recent_candles]
+        lows = [candle[3] for candle in recent_candles]
+        closes = [candle[4] for candle in recent_candles]
+        volumes = [candle[5] for candle in recent_candles]
+
+        # Find swing highs
+        swing_highs = self._find_swing_points(highs, "high", window=self.swing_window)
+
+        if len(swing_highs) < 2:
+            return None
+
+        # Check pairs of swing highs for double top pattern
+        for i in range(len(swing_highs) - 1):
+            first_high = swing_highs[i]
+            second_high = swing_highs[i + 1]
+
+            # Validate: Minimum separation (at least 5 candles)
+            separation = second_high['idx'] - first_high['idx']
+            if separation < 5:
+                continue
+
+            # Validate: Tops are at similar price (±2% tolerance)
+            price_diff = abs(first_high['price'] - second_high['price']) / first_high['price']
+            if price_diff > 0.02:
+                continue
+
+            # Find valley (lowest low) between the two highs
+            between_start = first_high['idx']
+            between_end = second_high['idx']
+            between_lows = lows[between_start:between_end + 1]
+            valley_price = min(between_lows) if between_lows else (first_high['price'] + second_high['price']) / 2
+            valley_idx = between_start + between_lows.index(valley_price)
+
+            # Validate: Valley is at least 3% below tops
+            top_avg = (first_high['price'] + second_high['price']) / 2
+            valley_depth = (top_avg - valley_price) / top_avg
+            if valley_depth < 0.03:
+                continue
+
+            # Calculate target: Valley - (Top_Avg - Valley) — measured move down
+            distance = top_avg - valley_price
+            target = valley_price - distance
+
+            # Volume confirmation
+            vol_declining = volumes[second_high['idx']] < volumes[first_high['idx']]
+            vol_at_valley = volumes[valley_idx]
+            avg_volume = sum(volumes) / len(volumes)
+            vol_increasing_at_valley = vol_at_valley > avg_volume
+
+            # Calculate confidence
+            confidence = 0.6  # Base confidence
+            if vol_declining:
+                confidence += 0.1  # Second top shows less buying pressure
+            if vol_increasing_at_valley:
+                confidence += 0.1  # Sellers pushing through support
+            if price_diff < 0.01:  # Very tight tops (within 1%)
+                confidence += 0.1
+
+            confidence = min(confidence, 1.0)
+
+            # Check if current price is near valley (potential breakdown)
+            current_price = closes[-1]
+            near_valley = abs(current_price - valley_price) / valley_price < 0.02
+            if near_valley:
+                confidence += 0.05
+                confidence = min(confidence, 1.0)
+
+            return {
+                "pattern": "double_top",
+                "first_top": round(first_high['price'], 6),
+                "second_top": round(second_high['price'], 6),
+                "valley": round(valley_price, 6),
+                "target": round(target, 6),
+                "separation_candles": separation,
+                "confidence": round(confidence, 2),
+                "detected_at": recent_candles[-1][0],
+                "volume_confirmed": vol_declining
+            }
+
+        return None
+
+    def detect_deviation_fakeout(
+        self,
+        ohlcv: List,
+        sr_levels: Dict,
+        lookback: int = 10
+    ) -> Optional[Dict]:
+        """
+        Detect deviation/fakeout at S/R levels (David's "deviation sur les graph").
+
+        A deviation occurs when price briefly breaks an S/R level but closes
+        back on the original side — a false breakout that traps traders.
+
+        Bearish deviation: wick above resistance, close below it.
+        Bullish deviation: wick below support, close above it.
+
+        Session 358: Token-level deviation/fakeout detection.
+
+        Args:
+            ohlcv: OHLCV data [[timestamp, open, high, low, close, volume], ...]
+            sr_levels: Dict with 'supports' and 'resistances' lists from S/R detector
+            lookback: Number of recent candles to check (default: 10)
+
+        Returns:
+            Strongest deviation found, or None
+        """
+        if not ohlcv or len(ohlcv) < 2 or not sr_levels:
+            return None
+
+        recent_candles = ohlcv[-lookback:] if len(ohlcv) >= lookback else ohlcv
+        deviations: List[Dict] = []
+
+        # Collect S/R prices
+        levels: List[tuple] = []  # (price, type)
+        for s in sr_levels.get("supports", []):
+            price = s.get("price", 0) if isinstance(s, dict) else s
+            if price and price > 0:
+                levels.append((price, "support"))
+        for r in sr_levels.get("resistances", []):
+            price = r.get("price", 0) if isinstance(r, dict) else r
+            if price and price > 0:
+                levels.append((price, "resistance"))
+
+        if not levels:
+            return None
+
+        for candle_idx, candle in enumerate(recent_candles):
+            _, o, h, l, c, vol = candle
+            body = abs(c - o)
+
+            for level_price, level_type in levels:
+                if level_price <= 0:
+                    continue
+
+                if level_type == "resistance":
+                    # Bearish deviation: wick above resistance, close below
+                    if h > level_price and c < level_price:
+                        wick_beyond = h - level_price
+                        wick_beyond_pct = wick_beyond / level_price * 100
+                        body_safe = max(body, (h - l) * 0.01)
+                        wick_ratio = wick_beyond / body_safe
+
+                        confidence = 0.5
+                        if wick_ratio > 3:
+                            confidence = 0.8
+                        elif wick_ratio > 2:
+                            confidence = 0.7
+                        elif wick_ratio > 1:
+                            confidence = 0.6
+
+                        candles_ago = len(recent_candles) - 1 - candle_idx
+                        # More recent = higher confidence
+                        if candles_ago <= 2:
+                            confidence += 0.1
+                        confidence = min(confidence, 1.0)
+
+                        deviations.append({
+                            "pattern": "deviation_fakeout",
+                            "direction": "bearish",
+                            "level": round(level_price, 6),
+                            "level_type": "resistance",
+                            "wick_beyond_pct": round(wick_beyond_pct, 2),
+                            "candles_ago": candles_ago,
+                            "confidence": round(confidence, 2),
+                            "detected_at": candle[0] if len(candle) > 0 else None,
+                            "description": (
+                                f"Bearish deviation at resistance {level_price:.4f}"
+                                f" — wick pierced {wick_beyond_pct:.1f}% but closed below"
+                            ),
+                        })
+
+                elif level_type == "support":
+                    # Bullish deviation: wick below support, close above
+                    if l < level_price and c > level_price:
+                        wick_beyond = level_price - l
+                        wick_beyond_pct = wick_beyond / level_price * 100
+                        body_safe = max(body, (h - l) * 0.01)
+                        wick_ratio = wick_beyond / body_safe
+
+                        confidence = 0.5
+                        if wick_ratio > 3:
+                            confidence = 0.8
+                        elif wick_ratio > 2:
+                            confidence = 0.7
+                        elif wick_ratio > 1:
+                            confidence = 0.6
+
+                        candles_ago = len(recent_candles) - 1 - candle_idx
+                        if candles_ago <= 2:
+                            confidence += 0.1
+                        confidence = min(confidence, 1.0)
+
+                        deviations.append({
+                            "pattern": "deviation_fakeout",
+                            "direction": "bullish",
+                            "level": round(level_price, 6),
+                            "level_type": "support",
+                            "wick_beyond_pct": round(wick_beyond_pct, 2),
+                            "candles_ago": candles_ago,
+                            "confidence": round(confidence, 2),
+                            "detected_at": candle[0] if len(candle) > 0 else None,
+                            "description": (
+                                f"Bullish deviation at support {level_price:.4f}"
+                                f" — wick pierced {wick_beyond_pct:.1f}% but closed above"
+                            ),
+                        })
+
+        if not deviations:
+            return None
+
+        # Return strongest deviation (highest confidence, most recent as tiebreaker)
+        deviations.sort(key=lambda d: (-d["confidence"], d["candles_ago"]))
+        return deviations[0]
+
     def detect_cup_and_handle(
         self,
         ohlcv: List,
@@ -1639,34 +1987,51 @@ class PatternRecognitionEngine:
     def detect_all_patterns(
         self,
         ohlcv: List,
+        sr_levels: Optional[Dict] = None,
         lookback: int = 100
-    ) -> List[str]:
+    ) -> List[Dict]:
         """
-        Detect all chart patterns and return list of pattern names.
+        Detect all chart patterns and return list of pattern dicts.
+
+        Session 358: Updated to return full pattern dicts (not just names)
+        and include new bearish patterns (normal H&S, double top, deviation).
 
         Args:
             ohlcv: OHLCV data
+            sr_levels: S/R levels dict (needed for deviation detection)
             lookback: Number of candles to analyze
 
         Returns:
-            List of detected pattern names (e.g., ["inverse_h_and_s", "double_bottom"])
+            List of detected pattern dicts with 'pattern' key
         """
         detected = []
 
-        # Detect inverse H&S (most common in Sherlock data)
+        # Bearish patterns (Session 358)
+        normal_hs = self.detect_normal_head_and_shoulders(ohlcv, lookback=min(lookback, 50))
+        if normal_hs:
+            detected.append(normal_hs)
+
+        double_top = self.detect_double_top(ohlcv, lookback=min(lookback, 50))
+        if double_top:
+            detected.append(double_top)
+
+        if sr_levels:
+            deviation = self.detect_deviation_fakeout(ohlcv, sr_levels, lookback=min(lookback, 10))
+            if deviation:
+                detected.append(deviation)
+
+        # Bullish patterns (existing)
         inv_hs = self.detect_inverse_head_and_shoulders(ohlcv, lookback=min(lookback, 50))
         if inv_hs:
-            detected.append("inverse_h_and_s")
+            detected.append(inv_hs)
 
-        # Detect cup & handle
         cup = self.detect_cup_and_handle(ohlcv, lookback=lookback)
         if cup:
-            detected.append("cup_and_handle")
+            detected.append(cup)
 
-        # Detect double bottom
         double_bot = self.detect_double_bottom(ohlcv, lookback=min(lookback, 50))
         if double_bot:
-            detected.append("double_bottom")
+            detected.append(double_bot)
 
         return detected
 

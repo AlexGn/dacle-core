@@ -259,6 +259,83 @@ def _compute_funding_rate(symbol: str) -> Optional[float]:
         return None
 
 
+def _compute_chart_patterns(ohlcv: list[list], sr_levels: dict) -> list[dict]:
+    """Detect chart patterns (H&S, Double Top/Bottom, Deviation).
+
+    Uses PatternRecognitionEngine to find structural reversal patterns
+    and wraps them in the pipeline-compatible format expected by
+    _build_confluences_for_pipeline (pattern_type + strength).
+
+    Session 358: Close Quick TA pattern gaps.
+    """
+    try:
+        from src.analysis.price_action_analyzer import PatternRecognitionEngine
+
+        engine = PatternRecognitionEngine()
+        results: list[dict] = []
+
+        # Normal H&S (bearish)
+        hs = engine.detect_normal_head_and_shoulders(ohlcv)
+        if hs:
+            results.append({
+                "pattern_name": f"Head & Shoulders (neckline {hs['neckline']:.4f}, target {hs['target']:.4f})",
+                "pattern_type": "bearish_reversal",
+                "strength": "STRONG" if hs["confidence"] >= 0.7 else "MODERATE",
+                "confidence": hs["confidence"],
+                "raw": hs,
+            })
+
+        # Inverse H&S (bullish)
+        inv_hs = engine.detect_inverse_head_and_shoulders(ohlcv)
+        if inv_hs:
+            results.append({
+                "pattern_name": f"Inverse H&S (neckline {inv_hs['neckline']:.4f}, target {inv_hs['target']:.4f})",
+                "pattern_type": "bullish_reversal",
+                "strength": "STRONG" if inv_hs["confidence"] >= 0.7 else "MODERATE",
+                "confidence": inv_hs["confidence"],
+                "raw": inv_hs,
+            })
+
+        # Double Top (bearish)
+        dt = engine.detect_double_top(ohlcv)
+        if dt:
+            results.append({
+                "pattern_name": f"Double Top (valley {dt['valley']:.4f}, target {dt['target']:.4f})",
+                "pattern_type": "bearish_reversal",
+                "strength": "STRONG" if dt["confidence"] >= 0.7 else "MODERATE",
+                "confidence": dt["confidence"],
+                "raw": dt,
+            })
+
+        # Double Bottom (bullish)
+        db = engine.detect_double_bottom(ohlcv)
+        if db:
+            results.append({
+                "pattern_name": f"Double Bottom (peak {db['peak']:.4f}, target {db['target']:.4f})",
+                "pattern_type": "bullish_reversal",
+                "strength": "STRONG" if db["confidence"] >= 0.7 else "MODERATE",
+                "confidence": db["confidence"],
+                "raw": db,
+            })
+
+        # Deviation/Fakeout
+        dev = engine.detect_deviation_fakeout(ohlcv, sr_levels)
+        if dev:
+            ptype = "bearish_reversal" if dev["direction"] == "bearish" else "bullish_reversal"
+            results.append({
+                "pattern_name": dev["description"],
+                "pattern_type": ptype,
+                "strength": "STRONG" if dev["confidence"] >= 0.7 else "MODERATE",
+                "confidence": dev["confidence"],
+                "raw": dev,
+            })
+
+        return results
+    except Exception as e:
+        logger.warning(f"Chart pattern detection failed: {e}")
+        return []
+
+
 def _compute_confluence(
     ema_data: dict,
     vwap_data: dict,
@@ -1408,15 +1485,30 @@ def _build_reasoning(
     reasoning.append(f"EMA 12/24 alignment: {alignment}")
 
     # Patterns — Session 354: only show direction-aligned patterns
+    # Session 358: chart patterns get richer reasoning with targets/levels
     dir_pattern_type = "bearish_reversal" if direction == "SHORT" else "bullish_reversal"
     shown_patterns = 0
     for p in patterns:
         ptype = p.get("pattern_type", "")
         if ptype == dir_pattern_type or ptype == "neutral":
-            reasoning.append(
-                f"Pattern: {p.get('pattern_name', '?')} "
-                f"({p.get('strength', '?')}, {ptype})"
-            )
+            raw = p.get("raw")
+            if raw:
+                # Chart pattern (H&S, Double Top/Bottom, Deviation) — show target
+                pattern_key = raw.get("pattern", "")
+                target = raw.get("target")
+                conf = raw.get("confidence", 0)
+                vol_ok = raw.get("volume_confirmed", False)
+                parts = [f"Pattern: {p.get('pattern_name', '?')} ({p.get('strength', '?')})"]
+                if vol_ok:
+                    parts.append("volume confirmed")
+                parts.append(f"confidence {conf:.0%}")
+                reasoning.append(" — ".join(parts))
+            else:
+                # Candlestick pattern (CandlestickDetector)
+                reasoning.append(
+                    f"Pattern: {p.get('pattern_name', '?')} "
+                    f"({p.get('strength', '?')}, {ptype})"
+                )
             shown_patterns += 1
             if shown_patterns >= 3:
                 break
@@ -1886,7 +1978,6 @@ def build_computed_ta(
 
     # Candlestick patterns
     patterns = _compute_patterns(ohlcv)
-    pattern_names = [p.get("pattern_name", "") for p in patterns]
 
     # Support/Resistance levels
     sr_levels = _compute_sr_levels(ohlcv_dicts, current_price)
@@ -1927,6 +2018,13 @@ def build_computed_ta(
     harmonics = _detect_harmonics(ohlcv, current_price)
     if harmonics:
         volume_profile["_harmonics"] = harmonics
+
+    # Chart patterns: H&S, Double Top/Bottom, Deviation (Session 358)
+    chart_patterns = _compute_chart_patterns(ohlcv, sr_levels)
+    patterns.extend(chart_patterns)
+
+    # Build pattern_names after merging candlestick + chart patterns
+    pattern_names = [p.get("pattern_name", "") for p in patterns]
 
     # VWAP data for confluence counter (use actual QVWAP when available)
     vwap_data = {}
