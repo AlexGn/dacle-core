@@ -1797,6 +1797,62 @@ def _build_reasoning(
             reasoning.append("DCA: no confluence alignment with key levels")
 
     # ------------------------------------------------------------------
+    # Session 370+: Macro-SL coherence check + scale-in for LONGs (L112)
+    # ------------------------------------------------------------------
+    if direction == "LONG" and entry and sl:
+        sl_dist_pct = abs(entry - sl) / entry * 100 if entry > 0 else 0
+
+        # 1. SL width check vs nearest support/EMA levels
+        nearest_support_below = None
+        for s in sr_levels.get("supports", []):
+            if s["price"] < entry:
+                if nearest_support_below is None or s["price"] > nearest_support_below:
+                    nearest_support_below = s["price"]
+
+        ema_200 = ema_data.get("ema_200")
+        ema_24_val = ema_data.get("ema_24")
+
+        # Check if SL is above key support (too tight)
+        key_level_below = None
+        key_level_name = None
+        for level, name in [
+            (nearest_support_below, "nearest support"),
+            (ema_200, "200 EMA"),
+            (ema_24_val, "24 EMA"),
+        ]:
+            if level and level < entry and level < sl:
+                # SL is above this key level — it could get swept
+                key_level_below = level
+                key_level_name = name
+                break
+
+        if key_level_below and key_level_name:
+            buffer_needed = abs(entry - key_level_below) / entry * 100
+            reasoning.append(
+                f"\u26a0\ufe0f SL ({sl:.4f}) is above {key_level_name} ({key_level_below:.4f})"
+                f" — consider widening to {buffer_needed:.1f}% below entry"
+                f" (current SL: {sl_dist_pct:.1f}%) per L055/L112"
+            )
+
+        # 2. RSI neutral + LONG = macro uncertain warning
+        if 35 < rsi < 65:
+            # RSI neutral zone — no clear directional edge for LONG
+            alignment = ema_data.get("dual_ema", {}).get("alignment", "")
+            ema_misaligned = alignment in ("bearish_aligned", "sandwich")
+            if ema_misaligned:
+                reasoning.append(
+                    f"\u26a0\ufe0f RSI neutral ({rsi:.1f}) + EMA {alignment.replace('_', ' ')}"
+                    f" — macro uncertain for LONG, consider scale-in entry"
+                    f" (30-50% initial size, add on confirmation) per L112"
+                )
+            elif sl_dist_pct < 3.0:
+                reasoning.append(
+                    f"\u26a0\ufe0f RSI neutral ({rsi:.1f}) with tight SL ({sl_dist_pct:.1f}%)"
+                    f" — for swing LONG in uncertain macro, consider"
+                    f" wider SL (5-8%) or scale-in entry per L112/L039"
+                )
+
+    # ------------------------------------------------------------------
     # Priority reorder: pin setup+trend at top, then warnings, then rest
     # ------------------------------------------------------------------
     if len(reasoning) > 2:
