@@ -2235,6 +2235,17 @@ def build_computed_ta(
     elif n_confluences >= 2:
         confidence = min(confidence + 0.02, 1.0)
 
+    # Session 371: SL-above-support penalty (technical setup flaw, not macro)
+    if direction == "LONG" and entry and sl:
+        for level, _name in [
+            (max((s["price"] for s in sr_levels.get("supports", []) if s["price"] < entry), default=None), "support"),
+            (ema_data.get("ema_200"), "200 EMA"),
+            (ema_data.get("ema_24"), "24 EMA"),
+        ]:
+            if level and level < entry and level < sl:
+                confidence = max(confidence - 0.07, 0.50)
+                break
+
     # Session 354: Entry vs current price distance warning
     # Session 355: Smart entry suggestions when entry is stale
     suggested_entries: list[dict] | None = None
