@@ -2082,6 +2082,59 @@ def validate_levels(
 # Main entry point
 # ---------------------------------------------------------------------------
 
+def _compute_mtf_context(
+    token_symbol: str,
+    token_age_hours: float,
+    direction: str,
+) -> dict:
+    """
+    Session 374c: Compute multi-timeframe context using L043 lifecycle-aware TFs.
+
+    Returns {mode, entry_tf, confirm_tf, aligned: bool, reasoning: str}
+    or empty dict on failure.
+    """
+    try:
+        from src.analysis.market_structure import MarketStructureAnalyzer
+
+        analyzer = MarketStructureAnalyzer()
+        ctx = analyzer._get_entry_timeframe_context(token_age_hours)
+
+        mode = ctx.get("mode", "STANDARD")
+        entry_tf = ctx.get("entry_tf", "4h")
+        confirm_tf = ctx.get("confirm_tf", "4h")
+
+        # If confirm TF is different from main 4h, fetch and analyze
+        aligned = True
+        reasoning = f"MTF {mode}: entry={entry_tf}, confirm={confirm_tf}"
+
+        if confirm_tf != "4h":
+            confirm_struct = _compute_market_structure(token_symbol, confirm_tf)
+            if confirm_struct:
+                confirm_label = _classify_market_structure(confirm_struct)
+
+                # Check alignment: confirm TF should agree with direction
+                if direction == "SHORT" and confirm_label in ("HH_HL",):
+                    aligned = False
+                    reasoning += f" | {confirm_tf} structure={confirm_label} DISAGREES with SHORT"
+                elif direction == "LONG" and confirm_label in ("LH_LL",):
+                    aligned = False
+                    reasoning += f" | {confirm_tf} structure={confirm_label} DISAGREES with LONG"
+                else:
+                    reasoning += f" | {confirm_tf} structure={confirm_label} confirms {direction}"
+
+        return {
+            "mode": mode,
+            "entry_tf": entry_tf,
+            "confirm_tf": confirm_tf,
+            "aligned": aligned,
+            "reasoning": reasoning,
+            "position_multiplier": ctx.get("position_multiplier", 1.0),
+        }
+    except Exception as e:
+        logger.warning(f"MTF context failed (non-fatal): {e}")
+        return {}
+
+
 def build_computed_ta(
     token_symbol: str,
     direction: str,
@@ -2090,6 +2143,7 @@ def build_computed_ta(
     tp: float,
     dca: Optional[float] = None,
     timeframe: str = "4h",
+    token_age_hours: Optional[float] = None,
 ) -> TAExtractionResult:
     """
     Build a TAExtractionResult from real market data.
@@ -2106,6 +2160,7 @@ def build_computed_ta(
         tp: Take profit price level (TP1)
         dca: Optional DCA level
         timeframe: Chart timeframe (default "4h")
+        token_age_hours: Optional token age for MTF timeframe selection (L043)
 
     Returns:
         TAExtractionResult ready for TATransformer.transform()
@@ -2358,8 +2413,31 @@ def build_computed_ta(
                 )
 
     # ------------------------------------------------------------------
+    # Step 6b: MTF context (Session 374c — GAP #5)
+    # ------------------------------------------------------------------
+    if token_age_hours is not None:
+        mtf_ctx = _compute_mtf_context(token_symbol, token_age_hours, direction)
+        if mtf_ctx:
+            reasoning.append(mtf_ctx.get("reasoning", ""))
+            if not mtf_ctx.get("aligned", True):
+                confidence = max(confidence - 0.05, 0.50)
+
+    # ------------------------------------------------------------------
     # Step 7: Assemble TAExtractionResult
     # ------------------------------------------------------------------
+    # Session 374c: Compute TP2/TP3 from R:R multiples (2x, 3x risk)
+    risk = abs(entry - sl)
+    if risk > 0:
+        if direction == "SHORT":
+            tp2 = entry - 2 * risk if entry - 2 * risk > 0 else None
+            tp3 = entry - 3 * risk if entry - 3 * risk > 0 else None
+        else:
+            tp2 = entry + 2 * risk
+            tp3 = entry + 3 * risk
+    else:
+        tp2 = None
+        tp3 = None
+
     # Session 354: Filter patterns to direction-aligned only
     aligned_type = "bearish_reversal" if direction == "SHORT" else "bullish_reversal"
     aligned_patterns = [
@@ -2372,6 +2450,8 @@ def build_computed_ta(
         entry_levels=[entry],
         stop_loss=sl,
         take_profit_1=tp,
+        take_profit_2=tp2,
+        take_profit_3=tp3,
         dca_level=dca,
         patterns_detected=aligned_patterns,
         trend_direction=trend,
@@ -2380,6 +2460,7 @@ def build_computed_ta(
         extraction_confidence=confidence,
         reasoning=reasoning,
         confluences=confluences,
+        dca_confluences=dca_confluences,
         rsi_value=rsi,
         current_price=current_price,
         suggested_entries=suggested_entries,

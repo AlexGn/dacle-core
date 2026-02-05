@@ -108,6 +108,110 @@ def record_outcome(
     return False
 
 
+TRADE_LOG_PATH = Path("data/trades/trade_log.json")
+
+
+def sync_ta_outcomes(
+    trade_log_path: Optional[str] = None,
+    match_window_days: int = 14,
+) -> dict:
+    """
+    Match unrecorded TA predictions to actual trade outcomes from trade_log.json.
+
+    Matches by: token (exact) + direction (exact) + logged_at within ±match_window_days
+    of trade entry date.
+
+    Returns {matched: [...], unmatched: [...], total_synced: int}.
+    """
+    log_path = Path(trade_log_path) if trade_log_path else TRADE_LOG_PATH
+    if not log_path.exists():
+        logger.warning(f"Trade log not found: {log_path}")
+        return {"matched": [], "unmatched": [], "total_synced": 0}
+
+    try:
+        with open(log_path) as f:
+            trade_log = json.load(f)
+    except (json.JSONDecodeError, IOError) as e:
+        logger.warning(f"Failed to load trade log: {e}")
+        return {"matched": [], "unmatched": [], "total_synced": 0}
+
+    # Normalize trade log to list
+    trades = trade_log if isinstance(trade_log, list) else trade_log.get("trades", [])
+
+    outcomes = _load_outcomes()
+    unmatched_entries = [o for o in outcomes if o.get("outcome") is None]
+
+    if not unmatched_entries:
+        return {"matched": [], "unmatched": [], "total_synced": 0}
+
+    matched = []
+    still_unmatched = []
+
+    for entry in unmatched_entries:
+        token = entry.get("token", "").upper()
+        direction = entry.get("direction", "").upper()
+        logged_at_str = entry.get("logged_at", "")
+
+        if not logged_at_str:
+            still_unmatched.append(entry["tracking_id"])
+            continue
+
+        try:
+            logged_at = datetime.fromisoformat(logged_at_str.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            still_unmatched.append(entry["tracking_id"])
+            continue
+
+        # Find matching trade
+        best_match = None
+        best_lag = None
+        for trade in trades:
+            trade_token = (trade.get("token") or trade.get("symbol", "")).upper()
+            trade_direction = (trade.get("direction") or trade.get("side", "")).upper()
+            trade_result = (trade.get("result") or trade.get("outcome", "")).upper()
+
+            if trade_token != token or trade_direction != direction:
+                continue
+
+            if not trade_result or trade_result not in ("WIN", "LOSS", "BREAKEVEN"):
+                continue
+
+            # Parse trade date
+            trade_date_str = trade.get("entry_date") or trade.get("open_time") or trade.get("date", "")
+            if not trade_date_str:
+                continue
+
+            try:
+                trade_date = datetime.fromisoformat(str(trade_date_str).replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                continue
+
+            lag_days = abs((trade_date - logged_at).total_seconds()) / 86400
+            if lag_days <= match_window_days:
+                if best_lag is None or lag_days < best_lag:
+                    best_match = trade
+                    best_lag = lag_days
+
+        if best_match:
+            outcome = (best_match.get("result") or best_match.get("outcome", "")).upper()
+            pnl = best_match.get("pnl_pct") or best_match.get("realized_pnl_pct")
+            record_outcome(
+                tracking_id=entry["tracking_id"],
+                outcome=outcome,
+                actual_pnl_pct=pnl,
+                notes=f"Auto-synced from trade_log (lag: {best_lag:.1f}d)",
+            )
+            matched.append(entry["tracking_id"])
+        else:
+            still_unmatched.append(entry["tracking_id"])
+
+    return {
+        "matched": matched,
+        "unmatched": still_unmatched,
+        "total_synced": len(matched),
+    }
+
+
 def get_score_accuracy_stats() -> dict:
     """
     Calculate accuracy statistics by score range.
