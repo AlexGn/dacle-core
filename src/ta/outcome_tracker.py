@@ -19,24 +19,57 @@ OUTCOME_LOG_PATH = Path("data/ta/outcome_log.json")
 
 
 def _load_outcomes() -> list[dict]:
-    """Load existing outcome log."""
+    """Load existing outcome log with shared file locking.
+
+    Session 374d: Issue #4 fix — uses atomic_read for concurrent safety.
+    """
     if not OUTCOME_LOG_PATH.exists():
         OUTCOME_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
         return []
     try:
-        with open(OUTCOME_LOG_PATH) as f:
-            return json.load(f)
+        from src.utils.atomic_state import atomic_read
+        data = atomic_read(str(OUTCOME_LOG_PATH))
+        return data if isinstance(data, list) else []
+    except ImportError:
+        # Fallback if atomic_state not available
+        try:
+            with open(OUTCOME_LOG_PATH) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            return []
     except (json.JSONDecodeError, IOError):
         return []
 
 
 def _save_outcomes(outcomes: list[dict]) -> None:
-    """Save outcome log atomically."""
+    """Save outcome log atomically via temp file + rename.
+
+    Session 374d: Issue #4 fix — atomic write for concurrent safety.
+    Note: Cannot use atomic_write() because it expects a dict (adds _last_updated).
+    Outcome log is a list, so we use the same temp+rename pattern directly.
+    """
+    import os
+    import tempfile
+
     OUTCOME_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = OUTCOME_LOG_PATH.with_suffix(".tmp")
-    with open(temp_path, "w") as f:
-        json.dump(outcomes, f, indent=2)
-    temp_path.replace(OUTCOME_LOG_PATH)
+    temp_fd, temp_path = tempfile.mkstemp(
+        dir=OUTCOME_LOG_PATH.parent,
+        prefix=f".{OUTCOME_LOG_PATH.stem}_",
+        suffix=".tmp",
+    )
+    try:
+        with os.fdopen(temp_fd, "w") as f:
+            json.dump(outcomes, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.rename(temp_path, str(OUTCOME_LOG_PATH))
+    except Exception:
+        # Clean up temp file on failure
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
 
 
 def log_ta_score(
@@ -144,6 +177,29 @@ def sync_ta_outcomes(
     if not unmatched_entries:
         return {"matched": [], "unmatched": [], "total_synced": 0}
 
+    # Session 374d: Issue #9 fix — build indexed trade lookup O(N+M)
+    # instead of O(N*M) nested loop. Index by (token, direction) key.
+    from collections import defaultdict
+    trade_index: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for trade in trades:
+        trade_token = (trade.get("token") or trade.get("symbol", "")).upper()
+        trade_direction = (trade.get("direction") or trade.get("side", "")).upper()
+        trade_result = (trade.get("result") or trade.get("outcome", "")).upper()
+        if not trade_result or trade_result not in ("WIN", "LOSS", "BREAKEVEN"):
+            continue
+        trade_date_str = trade.get("entry_date") or trade.get("open_time") or trade.get("date", "")
+        if not trade_date_str:
+            continue
+        try:
+            trade_date = datetime.fromisoformat(str(trade_date_str).replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            continue
+        trade_index[(trade_token, trade_direction)].append({
+            "trade": trade,
+            "date": trade_date,
+            "result": trade_result,
+        })
+
     matched = []
     still_unmatched = []
 
@@ -162,34 +218,15 @@ def sync_ta_outcomes(
             still_unmatched.append(entry["tracking_id"])
             continue
 
-        # Find matching trade
+        # O(1) lookup by (token, direction), then scan only matching trades
+        candidates = trade_index.get((token, direction), [])
         best_match = None
         best_lag = None
-        for trade in trades:
-            trade_token = (trade.get("token") or trade.get("symbol", "")).upper()
-            trade_direction = (trade.get("direction") or trade.get("side", "")).upper()
-            trade_result = (trade.get("result") or trade.get("outcome", "")).upper()
-
-            if trade_token != token or trade_direction != direction:
-                continue
-
-            if not trade_result or trade_result not in ("WIN", "LOSS", "BREAKEVEN"):
-                continue
-
-            # Parse trade date
-            trade_date_str = trade.get("entry_date") or trade.get("open_time") or trade.get("date", "")
-            if not trade_date_str:
-                continue
-
-            try:
-                trade_date = datetime.fromisoformat(str(trade_date_str).replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                continue
-
-            lag_days = abs((trade_date - logged_at).total_seconds()) / 86400
+        for candidate in candidates:
+            lag_days = abs((candidate["date"] - logged_at).total_seconds()) / 86400
             if lag_days <= match_window_days:
                 if best_lag is None or lag_days < best_lag:
-                    best_match = trade
+                    best_match = candidate["trade"]
                     best_lag = lag_days
 
         if best_match:
