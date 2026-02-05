@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.20 - Compound Intelligence, Feb 5, 2026)
+## 📊 Current Status (v5.21 - Quick TA Consolidation, Feb 5, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -46,7 +46,16 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🔒 LATEST (Session 372)**: Compound Intelligence — R:R Sizing + Pattern Mining + Token Blocking ✅ **COMPLETE**
+**🔒 LATEST (Session 374)**: Quick TA Pipeline Consolidation — Safety Gaps + P1/P2/P3 Improvements + Learning Stats ✅ **COMPLETE**
+- **Session 374**: Wired outcome tracker (log_ta_score → record_outcome), persisted macro/btc_context in TA results.
+- **Session 374b (P0 Safety)**: Token win rate gating in computed TA endpoint, weekend restriction (L093) for entry zone monitor.
+- **Session 374c/d (P1-P3)**: Auto-outcome recording with trade log sync, DCA confluences scored, TP2/TP3 computed, entry_decision populated, auto-playbook generation, rectangle dead code documented.
+- **Session 374e**: Learning stats API endpoints (`GET /api/ta/accuracy-stats`, `GET /api/ta/calibration-suggestions`) + lazy-loaded dashboard card.
+- **5-Step Feedback Loop**: log_ta_score → sync_ta_outcomes → record_outcome → get_score_accuracy_stats → get_calibration_suggestions.
+- **Test Coverage**: 2,445 total tests passing (289 TA tests, 9 learning stats tests).
+- **Git Commits**: `801ceb2f`, `6de54390`, `4b1c9d53`, `fba7ce64`, `877088cc`.
+
+**🔒 PREVIOUS (Session 372)**: Compound Intelligence — R:R Sizing + Pattern Mining + Token Blocking ✅ **COMPLETE**
 - **P1: R:R Position Modifier**: Scales position size based on risk/reward ratio (1.25x for 4-7 R:R, 0.5x for low R:R).
 - **P2: Outcome Pattern Analyzer**: Mines 126 trades for systematic patterns (direction, leverage, holding period, size, monthly).
 - **P3: Token Win Rate Gating**: Blocks historically poor-performing tokens (MANA, ZEC, WET, HYPE at 0% WR).
@@ -1060,8 +1069,8 @@ See [LICENSE](LICENSE)
 - **Agent System**: 7 agents (Agents 6 & 7 added Session 84), 5,450+ lines of logic
 - **Documentation**: 135+ markdown files (PRD, guides, sessions, analysis, reviews)
 - **Knowledge Base**: 9 case studies embedded (Wormhole, Starknet, ZKSync, Meteora, etc.)
-- **Test Coverage**: 850+ unit tests (100% passing, 0 skipped)
-- **Sessions Completed**: 360+ major development sessions
+- **Test Coverage**: 2,445+ unit tests (100% passing, 0 skipped)
+- **Sessions Completed**: 374+ major development sessions
 - **Database Tables**: 11+ (projects, mentions, trades, patterns, OTC data, validation, etc.)
 - **Model Status**: v1.0 LOCKED (ρ=-0.612 OUTSTANDING)
 - **Validation System**: Forward validation (OOS) tracking active
@@ -1072,7 +1081,7 @@ See [LICENSE](LICENSE)
 ---
 
 **Last Updated**: February 5, 2026
-**Version**: v5.20
-**Status**: Session 372 Compound Intelligence COMPLETE ✅ (R:R Sizing, Pattern Mining, Token Blocking) 🚀
+**Version**: v5.21
+**Status**: Session 374 Quick TA Consolidation COMPLETE ✅ (Safety Gaps, P1-P3 Improvements, Learning Stats API)
 **Total Learnings**: 92 (L001-L092), **100% integrated** (25 Sherlock learnings operational)
 **Token Preservation**: L092 guardrails prevent token deletion, auto-create missing data
