@@ -1161,6 +1161,57 @@ def _compute_volume_analysis(ohlcv: list[list]) -> dict:
     }
 
 
+def _detect_sideways_range(ohlcv: list[list], lookback_candles: int = 42) -> dict:
+    """Detect sideways/ranging market from TOKEN OHLCV data.
+
+    Session 373b: Data-driven sideways detection at source level.
+    Uses the token's own 7-day range (42 x 4h candles) to detect ranging markets.
+    Evidence: 11 of 38 feedback trades cite L039 whipsaw from sideways markets.
+
+    Args:
+        ohlcv: OHLCV candle data [[ts, o, h, l, c, v], ...]
+        lookback_candles: Number of candles to check (default 42 = ~7 days of 4h)
+
+    Returns:
+        dict with keys:
+            range_pct: float - 7-day range as percentage of avg price
+            is_sideways: bool - True if range < 5%
+            is_deep_sideways: bool - True if range < 3%
+            label: str - "SIDEWAYS" / "DEEP_SIDEWAYS" / "TRENDING"
+    """
+    if not ohlcv or len(ohlcv) < 10:
+        return {"range_pct": None, "is_sideways": False, "is_deep_sideways": False, "label": "UNKNOWN"}
+
+    recent = ohlcv[-lookback_candles:]
+    highs = [c[2] for c in recent]
+    lows = [c[3] for c in recent]
+    max_high = max(highs)
+    min_low = min(lows)
+    avg_price = (max_high + min_low) / 2
+
+    if avg_price <= 0:
+        return {"range_pct": None, "is_sideways": False, "is_deep_sideways": False, "label": "UNKNOWN"}
+
+    range_pct = (max_high - min_low) / avg_price * 100
+
+    is_deep = range_pct < 3.0
+    is_sideways = range_pct < 5.0
+
+    if is_deep:
+        label = "DEEP_SIDEWAYS"
+    elif is_sideways:
+        label = "SIDEWAYS"
+    else:
+        label = "TRENDING"
+
+    return {
+        "range_pct": round(range_pct, 2),
+        "is_sideways": is_sideways,
+        "is_deep_sideways": is_deep,
+        "label": label,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Session 357: Candle behavior at key levels
 # ---------------------------------------------------------------------------
@@ -1449,9 +1500,23 @@ def _build_reasoning(
     harmonics: Optional[list[dict]] = None,
     structure_data: Optional[dict] = None,
     ohlcv: Optional[list[list]] = None,
+    sideways_data: Optional[dict] = None,
 ) -> list[str]:
     """Build human-readable reasoning list for the TA result."""
     reasoning = []
+
+    # Session 373b: Sideways market warning at source level (L039)
+    sw = sideways_data or {}
+    if sw.get("is_deep_sideways"):
+        reasoning.append(
+            f"\u26a0\ufe0f DEEP SIDEWAYS: Token 7d range {sw['range_pct']:.1f}% "
+            f"— high whipsaw risk, widen SL buffer +5% (L039)"
+        )
+    elif sw.get("is_sideways"):
+        reasoning.append(
+            f"\u26a0\ufe0f SIDEWAYS MARKET: Token 7d range {sw['range_pct']:.1f}% "
+            f"— whipsaw risk, widen SL buffer +2-5% (L039)"
+        )
 
     sd = structure_data or {}
 
@@ -2131,6 +2196,9 @@ def build_computed_ta(
     chart_patterns = _compute_chart_patterns(ohlcv, sr_levels)
     patterns.extend(chart_patterns)
 
+    # Session 373b: Sideways market detection at source level (L039)
+    sideways_data = _detect_sideways_range(ohlcv)
+
     # Build pattern_names after merging candlestick + chart patterns
     pattern_names = [p.get("pattern_name", "") for p in patterns]
 
@@ -2214,6 +2282,7 @@ def build_computed_ta(
         harmonics=harmonics,
         structure_data=structure_data,
         ohlcv=ohlcv,
+        sideways_data=sideways_data,
     )
 
     # ------------------------------------------------------------------
@@ -2234,6 +2303,12 @@ def build_computed_ta(
         confidence = min(confidence + 0.05, 1.0)
     elif n_confluences >= 2:
         confidence = min(confidence + 0.02, 1.0)
+
+    # Session 373b: Sideways market confidence penalty (L039)
+    if sideways_data.get("is_deep_sideways"):
+        confidence = max(confidence - 0.10, 0.50)
+    elif sideways_data.get("is_sideways"):
+        confidence = max(confidence - 0.05, 0.50)
 
     # Session 371: SL-above-support penalty (technical setup flaw, not macro)
     if direction == "LONG" and entry and sl:
