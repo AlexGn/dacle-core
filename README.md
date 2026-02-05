@@ -25,7 +25,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.19 - Computed TA Enhancements, Feb 3, 2026)
+## 📊 Current Status (v5.20 - Compound Intelligence, Feb 5, 2026)
 
 ### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
 
@@ -46,7 +46,15 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-**🔒 LATEST (Session 355-359)**: Computed TA Major Enhancements ✅ **COMPLETE**
+**🔒 LATEST (Session 372)**: Compound Intelligence — R:R Sizing + Pattern Mining + Token Blocking ✅ **COMPLETE**
+- **P1: R:R Position Modifier**: Scales position size based on risk/reward ratio (1.25x for 4-7 R:R, 0.5x for low R:R).
+- **P2: Outcome Pattern Analyzer**: Mines 126 trades for systematic patterns (direction, leverage, holding period, size, monthly).
+- **P3: Token Win Rate Gating**: Blocks historically poor-performing tokens (MANA, ZEC, WET, HYPE at 0% WR).
+- **Feedback Learning Loop**: 126 trades now flow into ML predictions automatically.
+- **Test Coverage**: 49 new unit tests across 3 test files (15 + 25 + 9).
+- **Expected Impact**: +$858-1,058 annual improvement across defense, sizing, and learning layers.
+
+**🔒 PREVIOUS (Session 355-359)**: Computed TA Major Enhancements ✅ **COMPLETE**
 - **TVEM Bands Integration**: Band calculation, confluence factors, DCA validation, reasoning output.
 - **Harmonic Pattern Detection**: Full XABCD pipeline integration operational.
 - **Chart Patterns**: Normal H&S, Double Top, Deviation detection added.
@@ -1063,8 +1071,8 @@ See [LICENSE](LICENSE)
 
 ---
 
-**Last Updated**: February 3, 2026
-**Version**: v5.19
-**Status**: Session 359 Computed TA Enhancements COMPLETE ✅ (TVEM Bands, Harmonic Patterns, Chart Patterns) 🚀
+**Last Updated**: February 5, 2026
+**Version**: v5.20
+**Status**: Session 372 Compound Intelligence COMPLETE ✅ (R:R Sizing, Pattern Mining, Token Blocking) 🚀
 **Total Learnings**: 92 (L001-L092), **100% integrated** (25 Sherlock learnings operational)
 **Token Preservation**: L092 guardrails prevent token deletion, auto-create missing data
