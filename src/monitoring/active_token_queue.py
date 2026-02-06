@@ -377,7 +377,7 @@ class ActiveTokenQueue:
 
     def cleanup_old_tokens(self, days: int = 7) -> int:
         """
-        Remove tokens older than N days (TGE passed).
+        Remove tokens older than N days (TGE passed), but KEEP tokens with active TA.
 
         Args:
             days: Number of days to keep (default: 7)
@@ -388,14 +388,65 @@ class ActiveTokenQueue:
         try:
             cutoff_date = (datetime.utcnow() - timedelta(days=days)).isoformat()
 
+            # 1. Fetch tokens that are candidates for deletion
             result = self.kb.client.table(self.table_name)\
-                .delete()\
+                .select('id', 'token_symbol', 'created_at')\
                 .lt('created_at', cutoff_date)\
                 .execute()
 
-            count = len(result.data) if result.data else 0
-            if count > 0:
-                logger.info(f"🧹 Cleaned up {count} old tokens (>{days} days)")
+            if not result.data:
+                return 0
+
+            tokens_to_check = result.data
+            tokens_to_delete = []
+            tokens_to_keep_with_ta = []
+
+            # 2. Check each candidate for active David TA
+            from pathlib import Path
+            project_root = Path(__file__).parent.parent.parent
+            data_dir = project_root / "data" / "tokens"
+
+            for token in tokens_to_check:
+                symbol = token['token_symbol']
+                token_id = token['id']
+                consolidated_path = data_dir / symbol / "consolidated.json"
+
+                has_active_ta = False
+                if consolidated_path.exists():
+                    try:
+                        with open(consolidated_path) as f:
+                            data = json.load(f)
+                            if "david_ta_overlay" in data:
+                                has_active_ta = True
+                    except Exception as e:
+                        logger.warning(f"Error checking TA for {symbol}: {e}")
+
+                if has_active_ta:
+                    tokens_to_keep_with_ta.append(symbol)
+                else:
+                    tokens_to_delete.append(token_id)
+
+            # 3. Perform deletion if any
+            if tokens_to_delete:
+                # Supabase delete with in filter
+                delete_result = self.kb.client.table(self.table_name)\
+                    .delete()\
+                    .in_('id', tokens_to_delete)\
+                    .execute()
+                
+                count = len(delete_result.data) if delete_result.data else 0
+                if count > 0:
+                    logger.info(f"🧹 Cleaned up {count} old tokens (>{days} days)")
+                    # Log precisely which ones were deleted
+                    deleted_symbols = [t['token_symbol'] for t in tokens_to_check if t['id'] in tokens_to_delete]
+                    logger.info(f"🗑️  Deleted: {', '.join(deleted_symbols)}")
+            else:
+                count = 0
+
+            # 4. Log kept tokens
+            if tokens_to_keep_with_ta:
+                logger.info(f"🛡️  KEPT {len(tokens_to_keep_with_ta)} tokens with active David TA: {', '.join(tokens_to_keep_with_ta)}")
+
             return count
 
         except Exception as e:
