@@ -37,15 +37,16 @@ logger = logging.getLogger(__name__)
 # OHLCV data fetching
 # ---------------------------------------------------------------------------
 
-def _fetch_ohlcv_binance(
+def _fetch_ohlcv(
     symbol: str,
     timeframe: str = "4h",
     limit: int = 200,
 ) -> list[list]:
     """
-    Fetch OHLCV candles from Binance via CCXT.
+    Fetch OHLCV candles via CCXT.
 
-    Tries perpetual first (what David trades), then spot.
+    Tries perpetual first (what David trades), then spot, then Blofin.
+    Blofin fallback catches tokens listed there but not on Binance.
     Returns list of [timestamp, open, high, low, close, volume].
     """
     exchange = ccxt.binance({"enableRateLimit": True, "timeout": 15000})
@@ -70,8 +71,22 @@ def _fetch_ohlcv_binance(
             logger.warning(f"{pair} not available: {e}")
             continue
 
+    # Session 383: Blofin fallback for tokens not on Binance
+    try:
+        from src.data.fetchers.blofin_fetcher import BlofinFetcher
+        blofin = BlofinFetcher()
+        ohlcv = blofin.fetch_ohlcv(symbol, timeframe, limit)
+        if ohlcv and len(ohlcv) > 0:
+            return ohlcv
+    except Exception as e:
+        logger.warning(f"Blofin OHLCV fallback failed for {symbol}: {e}")
+
     logger.warning(f"No OHLCV data found for {symbol}")
     return []
+
+
+# Backward compatibility alias
+_fetch_ohlcv_binance = _fetch_ohlcv
 
 
 def _ohlcv_to_dicts(ohlcv: list[list]) -> list[dict]:
@@ -2179,7 +2194,7 @@ def build_computed_ta(
     # ------------------------------------------------------------------
     # Step 1: Fetch OHLCV data
     # ------------------------------------------------------------------
-    ohlcv = _fetch_ohlcv_binance(token_symbol, timeframe, limit=200)
+    ohlcv = _fetch_ohlcv(token_symbol, timeframe, limit=200)
     if not ohlcv or len(ohlcv) < 20:
         logger.warning(f"Insufficient OHLCV data for {token_symbol}, returning minimal result")
         return TAExtractionResult(
