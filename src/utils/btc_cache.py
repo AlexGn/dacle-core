@@ -96,13 +96,15 @@ async def fetch_btc_from_binance() -> dict:
         rs = avg_gain / avg_loss
         rsi = 100 - (100 / (1 + rs))
 
-        # Regime classification (L081)
+        # Regime classification (L081, Session 389b: added NEUTRAL)
         if rsi < 30:
             regime = "OVERSOLD"
         elif rsi > 70:
             regime = "OVERBOUGHT"
         elif range_7d < 5:
             regime = "SIDEWAYS"
+        elif abs(sma_distance) < 1.5 and 40 <= rsi <= 60:
+            regime = "NEUTRAL"
         elif trend == "UPTREND":
             regime = "BULLISH"
         else:
@@ -279,7 +281,9 @@ def calculate_btc_position_modifier(btc_context: dict, direction: str = "SHORT")
 
     if direction.upper() == "SHORT":
         # SHORTs prefer bearish conditions
-        if regime == "BEARISH" or trend == "DOWNTREND":
+        if regime == "NEUTRAL":
+            modifier = 1.0  # No adjustment in neutral
+        elif regime == "BEARISH" or trend == "DOWNTREND":
             modifier = 1.1  # Aligned with direction
         elif regime == "BULLISH" or trend == "UPTREND":
             modifier = 0.75  # Counter-trend
@@ -290,7 +294,9 @@ def calculate_btc_position_modifier(btc_context: dict, direction: str = "SHORT")
 
     elif direction.upper() == "LONG":
         # LONGs prefer bullish conditions
-        if regime == "BULLISH" or trend == "UPTREND":
+        if regime == "NEUTRAL":
+            modifier = 1.0  # No adjustment in neutral
+        elif regime == "BULLISH" or trend == "UPTREND":
             modifier = 1.1  # Aligned with direction
         elif regime == "BEARISH" or trend == "DOWNTREND":
             modifier = 0.75  # Counter-trend

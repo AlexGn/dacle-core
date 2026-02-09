@@ -170,7 +170,17 @@ class BlofinTradeSync:
                 }
             })
 
-            logger.info("Blofin exchange initialized successfully")
+            # Session 389b: Force IPv4 to avoid dual-stack IP whitelist errors
+            # Blofin API key is whitelisted for IPv4 only; VPS has dual-stack
+            # so connections sometimes go over IPv6 → "IP not in whitelist"
+            try:
+                import socket
+                import urllib3.util.connection as urllib3_conn
+                urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
+            except Exception:
+                pass  # Non-critical: will still work if IPv4 happens to be selected
+
+            logger.info("Blofin exchange initialized successfully (IPv4 forced)")
 
         except ImportError:
             logger.error("ccxt not installed")
@@ -313,7 +323,7 @@ class BlofinTradeSync:
             logger.error(f"Failed to fetch Blofin position history: {e}")
             return []
 
-    def get_open_positions(self) -> List[Dict[str, Any]]:
+    def get_open_positions(self) -> Optional[List[Dict[str, Any]]]:
         """
         Fetch current open positions from Blofin Futures API.
 
@@ -372,7 +382,7 @@ class BlofinTradeSync:
 
         except Exception as e:
             logger.error(f"Failed to fetch open positions: {e}")
-            return []
+            return None  # Session 389b: None = error, [] = genuinely 0 positions
 
     def get_account_balance(self) -> Dict[str, Any]:
         """
