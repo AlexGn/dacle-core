@@ -152,3 +152,8 @@ src/data/cache/
 dashboard/feedback_v*.html
 config/webhook_config.json
 .worktrees/
+
+# Prevent claude-mem from creating CLAUDE.md stubs everywhere (Session 382)
+# Only allow root CLAUDE.md (project changelog)
+**/CLAUDE.md
+!/CLAUDE.md
