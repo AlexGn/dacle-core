@@ -8,4 +8,10 @@
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
 | #8969 | 9:44 AM | 🔵 | Learning System Spans L001-L112 with L093 Weekend Restrictions and L112 Scale-In Protocol | ~632 |
+
+### Feb 8, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #10284 | 8:11 PM | 🟣 | Session 342 Global BTC Macro Cache Eliminates Redundant API Calls with 5-Minute Redis/Memory TTL | ~285 |
 </claude-mem-context>

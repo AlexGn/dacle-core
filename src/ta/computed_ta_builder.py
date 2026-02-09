@@ -74,6 +74,12 @@ def _fetch_ohlcv(
     # Session 383: Blofin fallback for tokens not on Binance
     try:
         from src.data.fetchers.blofin_fetcher import BlofinFetcher
+    except ImportError:
+        logger.debug("BlofinFetcher not available — skipping Blofin OHLCV fallback")
+        logger.warning(f"No OHLCV data found for {symbol}")
+        return []
+
+    try:
         blofin = BlofinFetcher()
         ohlcv = blofin.fetch_ohlcv(symbol, timeframe, limit)
         if ohlcv and len(ohlcv) > 0:
