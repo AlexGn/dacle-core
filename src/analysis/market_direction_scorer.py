@@ -76,6 +76,7 @@ class DirectionUpdate:
     signals: List[SignalResult]
     key_levels: dict
     position_implications: dict           # sizing hints for SHORT/LONG
+    context_signals: List[SignalResult] = field(default_factory=list)
     shift_detected: bool = False
     previous_bias: Optional[str] = None
     timestamp: str = ""
@@ -99,6 +100,17 @@ class DirectionUpdate:
                     "emoji": s.emoji,
                 }
                 for s in self.signals
+            ],
+            "context_signals": [
+                {
+                    "name": s.name,
+                    "weight_pct": int(s.weight * 100),
+                    "score": round(s.score, 2),
+                    "value": s.value,
+                    "label": s.label,
+                    "emoji": s.emoji,
+                }
+                for s in self.context_signals
             ],
             "key_levels": self.key_levels,
             "position_implications": self.position_implications,
@@ -202,6 +214,60 @@ def _score_funding(rate_pct: Optional[float]) -> SignalResult:
                             f"{rate_pct:.4f}% — Negative (crowded shorts)", "🔴")
     return SignalResult("Funding", 0.10, 0.0, round(rate_pct, 4),
                         f"{rate_pct:.4f}% — Neutral", "🟡")
+
+
+# =============================================================================
+# Context Indicators (weight=0, informational only)
+# =============================================================================
+
+def _context_total1(total1_t: Optional[float], change_24h: Optional[float]) -> SignalResult:
+    """TOTAL1 (total crypto MC) — Context indicator. Rising = bullish."""
+    if total1_t is None or change_24h is None:
+        return SignalResult("TOTAL1", 0.0, 0.0, None, "N/A", "⚪")
+    label = f"${total1_t:.2f}T ({change_24h:+.1f}%/24h)"
+    if change_24h > 1.0:
+        return SignalResult("TOTAL1", 0.0, 1.0, round(total1_t, 2), label, "🟢")
+    elif change_24h < -1.0:
+        return SignalResult("TOTAL1", 0.0, -1.0, round(total1_t, 2), label, "🔴")
+    return SignalResult("TOTAL1", 0.0, 0.0, round(total1_t, 2), label, "🟡")
+
+
+def _context_total2(total2_b: Optional[float], change_24h: Optional[float]) -> SignalResult:
+    """TOTAL2 (total ex-BTC) — Context indicator. Rising = bullish for alts."""
+    if total2_b is None or change_24h is None:
+        return SignalResult("TOTAL2", 0.0, 0.0, None, "N/A", "⚪")
+    label = f"${total2_b:.0f}B ({change_24h:+.1f}%/24h)"
+    if change_24h > 1.0:
+        return SignalResult("TOTAL2", 0.0, 1.0, round(total2_b, 0), label, "🟢")
+    elif change_24h < -1.0:
+        return SignalResult("TOTAL2", 0.0, -1.0, round(total2_b, 0), label, "🔴")
+    return SignalResult("TOTAL2", 0.0, 0.0, round(total2_b, 0), label, "🟡")
+
+
+def _context_others_d(others_d_val: Optional[float], change_pp: Optional[float]) -> SignalResult:
+    """Others.D (altcoin dominance ex-BTC/ETH) — Context indicator. Rising = bullish for alts."""
+    if others_d_val is None or change_pp is None:
+        return SignalResult("Others.D", 0.0, 0.0, None, "N/A", "⚪")
+    label = f"{others_d_val:.1f}% ({change_pp:+.2f}pp/24h)"
+    if change_pp > 0.3:
+        return SignalResult("Others.D", 0.0, 1.0, round(others_d_val, 1), label, "🟢")
+    elif change_pp < -0.3:
+        return SignalResult("Others.D", 0.0, -1.0, round(others_d_val, 1), label, "🔴")
+    return SignalResult("Others.D", 0.0, 0.0, round(others_d_val, 1), label, "🟡")
+
+
+def _context_stable_d(stable_d_val: Optional[float], change_pp: Optional[float]) -> SignalResult:
+    """STABLE.C.D (stablecoin dominance) — Context indicator. Rising = risk-off (bearish)."""
+    if stable_d_val is None or change_pp is None:
+        return SignalResult("STABLE.C.D", 0.0, 0.0, None, "N/A", "⚪")
+    if change_pp < -0.1:
+        label = f"{stable_d_val:.1f}% ({change_pp:+.2f}pp/24h, risk-on)"
+        return SignalResult("STABLE.C.D", 0.0, 1.0, round(stable_d_val, 1), label, "🟢")
+    elif change_pp > 0.1:
+        label = f"{stable_d_val:.1f}% ({change_pp:+.2f}pp/24h, risk-off)"
+        return SignalResult("STABLE.C.D", 0.0, -1.0, round(stable_d_val, 1), label, "🔴")
+    label = f"{stable_d_val:.1f}% ({change_pp:+.2f}pp/24h)"
+    return SignalResult("STABLE.C.D", 0.0, 0.0, round(stable_d_val, 1), label, "🟡")
 
 
 # =============================================================================
@@ -332,14 +398,20 @@ async def calculate_direction_bias() -> DirectionUpdate:
     btcdom_value = btcdom_change_24h = None
     usdt_d_value = usdt_d_change_24h = None
     total3_value_b = total3_change_24h = None
+    # Context indicators
+    total1_t = total1_change = None
+    total2_b = total2_change = None
+    others_d = others_d_change_pp = None
+    stable_d = stable_d_change_pp = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Parallel fetch: global stats + BTC ticker + ETH ticker + USDT ticker
-            global_resp, btc_ticker, eth_ticker, usdt_ticker = await asyncio.gather(
+            # Parallel fetch: global stats + BTC + ETH + USDT + USDC tickers
+            global_resp, btc_ticker, eth_ticker, usdt_ticker, usdc_ticker = await asyncio.gather(
                 client.get("https://api.coinpaprika.com/v1/global"),
                 client.get("https://api.coinpaprika.com/v1/tickers/btc-bitcoin"),
                 client.get("https://api.coinpaprika.com/v1/tickers/eth-ethereum"),
                 client.get("https://api.coinpaprika.com/v1/tickers/usdt-tether"),
+                client.get("https://api.coinpaprika.com/v1/tickers/usdc-usd-coin"),
                 return_exceptions=True,
             )
 
@@ -349,33 +421,94 @@ async def calculate_direction_bias() -> DirectionUpdate:
                 btcdom_value = gd.get("bitcoin_dominance_percentage", 0)
                 mc_change_24h = gd.get("market_cap_change_24h", 0)
 
-                # BTCDOM change: use BTC 24h % vs total market 24h % as proxy
+                # Extract BTC ticker data
                 btc_pct_change = 0
+                btc_mc = 0
                 if not isinstance(btc_ticker, Exception) and btc_ticker.status_code == 200:
-                    btc_pct_change = btc_ticker.json().get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
-                # If BTC outperforms market, dominance rises; if underperforms, falls
+                    btc_data = btc_ticker.json()
+                    btc_pct_change = btc_data.get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
+                    btc_mc = btc_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
+                if not btc_mc and btcdom_value:
+                    btc_mc = total_mc * (btcdom_value / 100)  # fallback
+
+                # BTCDOM change: BTC outperforms market → dominance rises
                 btcdom_change_24h = btc_pct_change - mc_change_24h
 
-                # USDT.D: USDT market cap / total market cap
+                # Extract ETH ticker data
+                eth_mc = 0
+                eth_pct_change = 0
+                if not isinstance(eth_ticker, Exception) and eth_ticker.status_code == 200:
+                    eth_data = eth_ticker.json()
+                    eth_mc = eth_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
+                    eth_pct_change = eth_data.get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
+
+                # Extract USDT ticker data
+                usdt_mc = 0
+                usdt_pct_change = 0
                 if not isinstance(usdt_ticker, Exception) and usdt_ticker.status_code == 200:
-                    usdt_mc = usdt_ticker.json().get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
-                    usdt_d_value = (usdt_mc / total_mc * 100) if total_mc else 0
+                    usdt_data = usdt_ticker.json()
+                    usdt_mc = usdt_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
+                    usdt_pct_change = usdt_data.get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
+                if total_mc:
+                    usdt_d_value = (usdt_mc / total_mc * 100)
                     # USDT.D change: when total MC rises, USDT.D falls (inverse)
                     usdt_d_change_24h = -mc_change_24h * 0.1 if mc_change_24h else 0
 
-                # TOTAL3: total MC minus BTC minus ETH
-                eth_mc = 0
-                if not isinstance(eth_ticker, Exception) and eth_ticker.status_code == 200:
-                    eth_mc = eth_ticker.json().get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
-                btc_mc = total_mc * (btcdom_value / 100) if btcdom_value else 0
-                total3_mc = total_mc - btc_mc - eth_mc
-                total3_value_b = total3_mc / 1e9 if total3_mc else 0
+                # Extract USDC ticker data (graceful degradation if unavailable)
+                usdc_mc = 0
+                usdc_pct_change = 0
+                if not isinstance(usdc_ticker, Exception) and usdc_ticker.status_code == 200:
+                    usdc_data = usdc_ticker.json()
+                    usdc_mc = usdc_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
+                    usdc_pct_change = usdc_data.get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
 
-                # TOTAL3 change: use ETH 24h change as alt market proxy
-                eth_pct_change = 0
-                if not isinstance(eth_ticker, Exception) and eth_ticker.status_code == 200:
-                    eth_pct_change = eth_ticker.json().get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
-                total3_change_24h = eth_pct_change  # alts tend to follow ETH
+                # TOTAL3: total MC minus BTC minus ETH
+                total3_mc = total_mc - btc_mc - eth_mc
+                total3_value_b = total3_mc / 1e9 if total3_mc > 0 else 0
+
+                # Derive 24h-ago values for accurate change computation
+                total_mc_24h_ago = total_mc / (1 + mc_change_24h / 100) if mc_change_24h else total_mc
+                btc_mc_24h_ago = btc_mc / (1 + btc_pct_change / 100) if btc_pct_change else btc_mc
+                eth_mc_24h_ago = eth_mc / (1 + eth_pct_change / 100) if eth_pct_change else eth_mc
+
+                # TOTAL3 change (exact computation instead of ETH proxy)
+                total3_mc_24h_ago = total_mc_24h_ago - btc_mc_24h_ago - eth_mc_24h_ago
+                if total3_mc_24h_ago > 0:
+                    total3_change_24h = ((total3_mc - total3_mc_24h_ago) / total3_mc_24h_ago) * 100
+                else:
+                    total3_change_24h = 0
+
+                # ---- Context indicators ----
+                # TOTAL1: total crypto market cap in trillions
+                if total_mc:
+                    total1_t = total_mc / 1e12
+                    total1_change = mc_change_24h
+
+                # TOTAL2: total ex-BTC in billions
+                total2_mc = total_mc - btc_mc
+                if total2_mc > 0:
+                    total2_b = total2_mc / 1e9
+                    total2_mc_24h_ago = total_mc_24h_ago - btc_mc_24h_ago
+                    if total2_mc_24h_ago > 0:
+                        total2_change = ((total2_mc - total2_mc_24h_ago) / total2_mc_24h_ago) * 100
+                    else:
+                        total2_change = 0
+
+                # Others.D: altcoin dominance ex-BTC/ETH (= TOTAL3 / TOTAL1 * 100)
+                if total_mc and total3_mc > 0:
+                    others_d = (total3_mc / total_mc) * 100
+                    others_d_24h_ago = (total3_mc_24h_ago / total_mc_24h_ago) * 100 if total_mc_24h_ago else 0
+                    others_d_change_pp = others_d - others_d_24h_ago
+
+                # STABLE.C.D: stablecoin dominance (USDT + USDC)
+                stables_mc = usdt_mc + usdc_mc
+                if total_mc and stables_mc > 0:
+                    stable_d = (stables_mc / total_mc) * 100
+                    usdt_mc_24h_ago = usdt_mc / (1 + usdt_pct_change / 100) if usdt_pct_change else usdt_mc
+                    usdc_mc_24h_ago = usdc_mc / (1 + usdc_pct_change / 100) if usdc_pct_change else usdc_mc
+                    stables_mc_24h_ago = usdt_mc_24h_ago + usdc_mc_24h_ago
+                    stable_d_24h_ago = (stables_mc_24h_ago / total_mc_24h_ago) * 100 if total_mc_24h_ago else 0
+                    stable_d_change_pp = stable_d - stable_d_24h_ago
     except Exception as e:
         logger.warning(f"CoinPaprika fetch failed: {e}")
 
@@ -400,6 +533,14 @@ async def calculate_direction_bias() -> DirectionUpdate:
         _score_total3(total3_change_24h, total3_value_b),
         _score_fear_greed(fg_value),
         _score_funding(funding_rate_pct),
+    ]
+
+    # ---- Context indicators (weight=0, informational) ----
+    context_signals = [
+        _context_total1(total1_t, total1_change),
+        _context_total2(total2_b, total2_change),
+        _context_others_d(others_d, others_d_change_pp),
+        _context_stable_d(stable_d, stable_d_change_pp),
     ]
 
     # ---- Composite score = weighted sum ----
@@ -453,6 +594,7 @@ async def calculate_direction_bias() -> DirectionUpdate:
         signals=signals,
         key_levels=key_levels,
         position_implications=position_impl,
+        context_signals=context_signals,
     )
 
 
