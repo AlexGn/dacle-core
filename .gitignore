@@ -104,6 +104,9 @@ yarn-error.log*
 # API cost tracking (runtime data)
 data/api_costs/
 
+# Conflict logs (daily append files, latest.json kept for reference)
+data/conflicts/????-??-??.json
+
 # Runtime caches (can be regenerated)
 data/cache/coingecko/
 data/cache/*.json
