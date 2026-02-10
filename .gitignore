@@ -147,6 +147,9 @@ notion_auth.json
 # TA Screenshot uploads (user uploads, runtime data)
 data/ta_uploads/
 
+# Runtime state files (updated by cron monitors, not source code)
+data/state/
+
 # Internal cache (runtime, regeneratable)
 src/data/cache/
 dashboard/feedback_v*.html
