@@ -207,8 +207,8 @@ class Autonomy(IntEnum):
 
 STALENESS_THRESHOLDS: Dict[str, Tuple[int, str]] = {
     # Health monitoring (hours)
-    "feedback_patterns": (48, "Patterns refresh daily via watchtower"),
-    "forward_validation": (168, "7 days — predictions mature over 30-45 days"),
+    "feedback_patterns": (168, "7 days — depends on David providing trade feedback"),
+    "forward_validation": (840, "35 days — predictions only happen when new TGEs appear"),
     "trade_log": (24, "MEXC sync runs daily at 07:00 UTC"),
 
     # Token staleness by state (hours)
