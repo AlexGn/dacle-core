@@ -14,13 +14,14 @@ Signals (all scored -1 to +1):
     6. Fear & Greed (10%)    — Sentiment extremes
     7. BTC Funding Rate (10%) — Derivatives positioning
 
-Data Sources (all existing, no new API keys):
+Data Sources (all free, no API keys):
     - Binance REST API (BTC price, klines, funding)
-    - CoinGecko /global (BTCDOM, TOTAL3, USDT.D)
+    - CoinPaprika /v1/global + /v1/tickers (BTCDOM, TOTAL3, USDT.D)
     - Alternative.me (Fear & Greed)
     - Local JSON files (key levels from Sherlock)
 """
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass, field, asdict
@@ -327,40 +328,56 @@ async def calculate_direction_bias() -> DirectionUpdate:
     except Exception as e:
         logger.warning(f"Binance BTC fetch failed: {e}")
 
-    # ---- Fetch CoinGecko global data ----
+    # ---- Fetch CoinPaprika global + ticker data ----
     btcdom_value = btcdom_change_24h = None
     usdt_d_value = usdt_d_change_24h = None
     total3_value_b = total3_change_24h = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            cg_resp = await client.get("https://api.coingecko.com/api/v3/global")
-            if cg_resp.status_code == 200:
-                gd = cg_resp.json().get("data", {})
-                mc_pct = gd.get("market_cap_percentage", {})
-                total_mc = gd.get("total_market_cap", {}).get("usd", 0)
+            # Parallel fetch: global stats + BTC ticker + ETH ticker + USDT ticker
+            global_resp, btc_ticker, eth_ticker, usdt_ticker = await asyncio.gather(
+                client.get("https://api.coinpaprika.com/v1/global"),
+                client.get("https://api.coinpaprika.com/v1/tickers/btc-bitcoin"),
+                client.get("https://api.coinpaprika.com/v1/tickers/eth-ethereum"),
+                client.get("https://api.coinpaprika.com/v1/tickers/usdt-tether"),
+                return_exceptions=True,
+            )
 
-                btcdom_value = mc_pct.get("btc", 0)
-                # CoinGecko gives overall market cap change, use as proxy for btcdom direction
-                btcdom_change_24h = gd.get("market_cap_change_percentage_24h_usd", 0)
+            if not isinstance(global_resp, Exception) and global_resp.status_code == 200:
+                gd = global_resp.json()
+                total_mc = gd.get("market_cap_usd", 0)
+                btcdom_value = gd.get("bitcoin_dominance_percentage", 0)
+                mc_change_24h = gd.get("market_cap_change_24h", 0)
 
-                # USDT.D approximation: stablecoin market cap / total
-                usdt_mc = mc_pct.get("usdt", 0)
-                usdt_d_value = usdt_mc
-                # CoinGecko doesn't give USDT.D 24h change directly;
-                # use market_cap_change as directional proxy (inverted)
-                usdt_d_change_24h = -gd.get("market_cap_change_percentage_24h_usd", 0) * 0.1
+                # BTCDOM change: use BTC 24h % vs total market 24h % as proxy
+                btc_pct_change = 0
+                if not isinstance(btc_ticker, Exception) and btc_ticker.status_code == 200:
+                    btc_pct_change = btc_ticker.json().get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
+                # If BTC outperforms market, dominance rises; if underperforms, falls
+                btcdom_change_24h = btc_pct_change - mc_change_24h
 
-                # TOTAL3
-                eth_dom = mc_pct.get("eth", 0)
+                # USDT.D: USDT market cap / total market cap
+                if not isinstance(usdt_ticker, Exception) and usdt_ticker.status_code == 200:
+                    usdt_mc = usdt_ticker.json().get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
+                    usdt_d_value = (usdt_mc / total_mc * 100) if total_mc else 0
+                    # USDT.D change: when total MC rises, USDT.D falls (inverse)
+                    usdt_d_change_24h = -mc_change_24h * 0.1 if mc_change_24h else 0
+
+                # TOTAL3: total MC minus BTC minus ETH
+                eth_mc = 0
+                if not isinstance(eth_ticker, Exception) and eth_ticker.status_code == 200:
+                    eth_mc = eth_ticker.json().get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
                 btc_mc = total_mc * (btcdom_value / 100) if btcdom_value else 0
-                eth_mc = total_mc * (eth_dom / 100) if eth_dom else 0
                 total3_mc = total_mc - btc_mc - eth_mc
                 total3_value_b = total3_mc / 1e9 if total3_mc else 0
 
-                # Total3 24h change (use total market change as proxy)
-                total3_change_24h = gd.get("market_cap_change_percentage_24h_usd", 0)
+                # TOTAL3 change: use ETH 24h change as alt market proxy
+                eth_pct_change = 0
+                if not isinstance(eth_ticker, Exception) and eth_ticker.status_code == 200:
+                    eth_pct_change = eth_ticker.json().get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
+                total3_change_24h = eth_pct_change  # alts tend to follow ETH
     except Exception as e:
-        logger.warning(f"CoinGecko fetch failed: {e}")
+        logger.warning(f"CoinPaprika fetch failed: {e}")
 
     # ---- Fetch Fear & Greed ----
     fg_value = None
