@@ -156,6 +156,12 @@ dashboard/feedback_v*.html
 config/webhook_config.json
 .worktrees/
 
+# Auto-generated playbook markdown (runtime, regeneratable)
+data/tokens/*/playbooks/auto_playbook_*.md
+
+# Reports directory (generated analysis, not source code)
+reports/
+
 # Prevent claude-mem from creating CLAUDE.md stubs everywhere (Session 382)
 # Only allow root CLAUDE.md (project changelog)
 **/CLAUDE.md
