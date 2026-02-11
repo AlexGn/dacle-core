@@ -33,8 +33,26 @@ class AnalysisCommands(commands.Cog):
         Analyze a token and generate a playbook.
         Usage: @Dacle Bot analyze <SYMBOL>
         """
-        # ACK immediately to show responsiveness
-        status_msg = await ctx.reply(f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)", mention_author=False)
+        # Check if we are in a text channel (not a thread/DM)
+        if isinstance(ctx.channel, discord.TextChannel):
+            try:
+                # Create a thread for this analysis
+                thread = await ctx.message.create_thread(
+                    name=f"Analysis: {symbol.upper()}",
+                    auto_archive_duration=1440 # 24 hours
+                )
+                # Reply INSIDE the new thread
+                status_msg = await thread.send(f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)")
+                
+                # Update context to point to the thread for subsequent replies
+                ctx.channel = thread
+            except Exception as e:
+                logger.warning(f"Failed to create thread: {e}")
+                # Fallback to main channel reply
+                status_msg = await ctx.reply(f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)", mention_author=False)
+        else:
+            # Already in a thread or DM, just reply
+            status_msg = await ctx.reply(f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)", mention_author=False)
 
         # Run analysis in background task
         asyncio.create_task(self._run_analysis_task(ctx, status_msg, symbol))
