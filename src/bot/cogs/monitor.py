@@ -8,7 +8,7 @@ Session 261: Together.ai is DEPRECATED - embedding features disabled.
 import re
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 from discord.ext import commands
@@ -76,6 +76,10 @@ class MessageMonitor(commands.Cog):
 
         # Message cache: {user_id: deque([(timestamp, content), ...])}
         self.message_cache: Dict[int, deque] = {}
+        # Thread setup cache: {thread_id: {"symbol": str, "direction": str, "entry": float, "sl": float, "target": float}}
+        self.thread_setups: Dict[int, Dict[str, Any]] = {}
+        # Track whether a final decision was posted for a thread
+        self.thread_decision_sent: Dict[int, bool] = {}
 
         logger.info("MessageMonitor cog initialized with conviction scoring")
 
@@ -295,6 +299,60 @@ If no crypto projects mentioned, return: []
             projects.append({"name": sym, "symbol": sym, "sentiment": direction})
         return projects
 
+    def _parse_trade_setup(self, content: str) -> Optional[Dict[str, Any]]:
+        """
+        Parse entry/SL/target and direction from a trade setup message.
+        Returns dict with entry, sl, target, direction if found.
+        """
+        text = content.strip()
+        if not text:
+            return None
+
+        upper = text.upper()
+        direction = None
+        if "SHORT" in upper:
+            direction = "SHORT"
+        elif "LONG" in upper:
+            direction = "LONG"
+
+        def _extract_first(patterns: List[str]) -> Optional[float]:
+            for pat in patterns:
+                m = re.search(pat, text, flags=re.IGNORECASE | re.MULTILINE)
+                if m:
+                    try:
+                        return float(m.group(1))
+                    except ValueError:
+                        continue
+            return None
+
+        entry_patterns = [
+            r"entry\s*:\s*(?:limit\s*)?\$?([0-9]*\.?[0-9]+)",
+            r"entry\s*point\s*:\s*(?:limit\s*)?\$?([0-9]*\.?[0-9]+)",
+        ]
+        sl_patterns = [
+            r"stop\s*loss\s*:\s*\$?([0-9]*\.?[0-9]+)",
+            r"\bsl\s*:\s*\$?([0-9]*\.?[0-9]+)",
+        ]
+        target_patterns = [
+            r"final\s*target\s*:\s*\$?([0-9]*\.?[0-9]+)",
+            r"target\s*:\s*(?:final\s*)?\$?([0-9]*\.?[0-9]+)",
+            r"\btp1\s*:\s*\$?([0-9]*\.?[0-9]+)",
+        ]
+
+        entry = _extract_first(entry_patterns)
+        sl = _extract_first(sl_patterns)
+        target = _extract_first(target_patterns)
+
+        if entry and sl and target and direction:
+            return {
+                "entry": entry,
+                "sl": sl,
+                "target": target,
+                "direction": direction,
+            }
+
+        return None
+
     def _is_trade_setup(self, content: str) -> bool:
         """
         Heuristic detection of a structured trade setup post.
@@ -307,6 +365,13 @@ If no crypto projects mentioned, return: []
         has_direction = "short" in text or "long" in text
         return has_symbol and has_entry and has_stop and has_target and has_direction
 
+    def _is_bqs_followup(self, content: str) -> bool:
+        """
+        Detects a follow-up BQS/TA summary message posted in the thread.
+        """
+        upper = content.upper()
+        return ("BREAKOUT QUALITY" in upper) or ("BQS" in upper)
+
     async def _store_mention(
         self,
         project_name: str,
@@ -315,6 +380,8 @@ If no crypto projects mentioned, return: []
         symbol: Optional[str] = None,
         trigger_channel: Optional[discord.abc.Messageable] = None,
         force_trigger: bool = False,
+        trade_setup: Optional[Dict[str, Any]] = None,
+        trigger_message: Optional[discord.Message] = None,
     ):
         """
         Store project mention in Supabase with conviction scoring
@@ -417,40 +484,117 @@ If no crypto projects mentioned, return: []
             # Session 334: Automatic Workflow Trigger for high-conviction mentions
             if (conviction_score.final_score >= 7.0 or force_trigger) and symbol:
                 async def run_and_report(target_channel: Optional[discord.abc.Messageable] = None):
-                    # Session 345: Deduplication - check if we already have a recent analysis
-                    # Only trigger if no existing analysis OR older than 12 hours
-                    from src.orchestration.trade_workflow import _get_token_dir
-                    import json
-                    from datetime import datetime, timezone
+                    # Session 345: Deduplication - skip only when NOT a structured trade setup
+                    if not trade_setup:
+                        from src.orchestration.trade_workflow import _get_token_dir
+                        import json
+                        from datetime import datetime, timezone
 
-                    token_dir = _get_token_dir(symbol)
-                    consolidated_path = token_dir / "consolidated.json"
-                    
-                    if consolidated_path.exists():
-                        try:
-                            with open(consolidated_path) as f:
-                                data = json.load(f)
-                                ts_str = data.get("analysis_timestamp")
-                                if ts_str:
-                                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-                                    age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-                                    if age_hours < 12:
-                                        logger.info(f"⏭️ Skipping redundant trigger for {symbol} (Analyzed {age_hours:.1f}h ago)")
-                                        if target_channel:
-                                            await target_channel.send(
-                                                f"ℹ️ **Recent Analysis Exists**: {symbol} was analyzed `{age_hours:.1f}h` ago. "
-                                                f"Check `#analysis-updates` for the candidate report."
+                        token_dir = _get_token_dir(symbol)
+                        consolidated_path = token_dir / "consolidated.json"
+                        
+                        if consolidated_path.exists():
+                            try:
+                                with open(consolidated_path) as f:
+                                    data = json.load(f)
+                                    ts_str = data.get("analysis_timestamp")
+                                    if ts_str:
+                                        ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                                        age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+                                        if age_hours < 12:
+                                            logger.info(f"⏭️ Skipping redundant trigger for {symbol} (Analyzed {age_hours:.1f}h ago)")
+                                            if target_channel:
+                                                await target_channel.send(
+                                                    f"ℹ️ **Recent Analysis Exists**: {symbol} was analyzed `{age_hours:.1f}h` ago. "
+                                                    f"Check `#analysis-updates` for the candidate report."
+                                                )
+                                            return
+                            except Exception as e:
+                                logger.warning(f"Failed to check staleness for {symbol}: {e}")
+
+                    loop = asyncio.get_event_loop()
+
+                    # If this is a structured trade setup, run execution pre-trade check
+                    if trade_setup:
+                        logger.info(f"🚀 Running pre-trade check for {symbol} from #trades setup...")
+
+                        def _call_pre_trade():
+                            import requests
+                            payload = {
+                                "token": symbol,
+                                "direction": trade_setup["direction"],
+                                "entry": trade_setup["entry"],
+                                "sl": trade_setup["sl"],
+                                "target": trade_setup["target"],
+                            }
+                            resp = requests.post(
+                                "http://localhost:8000/api/execution/pre-trade-check",
+                                json=payload,
+                                timeout=20,
+                            )
+                            return resp.status_code, resp.json()
+
+                        status_code, data = await loop.run_in_executor(None, _call_pre_trade)
+                        if status_code == 200 and isinstance(data, dict):
+                            formatted = data.get("data", {}).get("formatted_response")
+                            if formatted:
+                                final_target = None
+                                trades_channel_id = 1468948950412431598
+                                if isinstance(target_channel, discord.Thread):
+                                    final_target = target_channel
+                                elif (
+                                    target_channel
+                                    and getattr(target_channel, "name", "") == "trades"
+                                    or (getattr(target_channel, "id", None) == trades_channel_id)
+                                ):
+                                    # For #trades, reply in a thread if possible
+                                    if trigger_message:
+                                        try:
+                                            thread_name = f"{symbol} {trade_setup['direction']} setup"
+                                            final_target = await trigger_message.create_thread(
+                                                name=thread_name,
+                                                auto_archive_duration=1440,
                                             )
-                                        return
-                        except Exception as e:
-                            logger.warning(f"Failed to check staleness for {symbol}: {e}")
+                                        except Exception as e:
+                                            logger.warning(f"Failed to create thread for {symbol}: {e}")
+                                            final_target = target_channel
+                                    else:
+                                        final_target = target_channel
+
+                                if final_target:
+                                    # Cache setup for thread follow-up decision
+                                    if isinstance(final_target, discord.Thread):
+                                        self.thread_setups[final_target.id] = {
+                                            "symbol": symbol,
+                                            "direction": trade_setup["direction"],
+                                            "entry": trade_setup["entry"],
+                                            "sl": trade_setup["sl"],
+                                            "target": trade_setup["target"],
+                                        }
+                                        self.thread_decision_sent[final_target.id] = False
+                                    logger.info(f"📤 Sending pre-trade check summary for {symbol} to trades")
+                                    if len(formatted) <= 1900:
+                                        await final_target.send(formatted)
+                                    else:
+                                        # Split long responses safely by lines
+                                        chunk = []
+                                        total = 0
+                                        for line in formatted.splitlines():
+                                            if total + len(line) + 1 > 1900:
+                                                await final_target.send("\n".join(chunk))
+                                                chunk = [line]
+                                                total = len(line) + 1
+                                            else:
+                                                chunk.append(line)
+                                                total += len(line) + 1
+                                        if chunk:
+                                            await final_target.send("\n".join(chunk))
+                                    return
+                        logger.warning(f"Pre-trade check failed for {symbol} (status={status_code}); falling back to pipeline")
 
                     logger.info(f"🚀 Triggering full pipeline for {symbol}...")
-                    loop = asyncio.get_event_loop()
-                    
-                    # Run orchestrator in executor
                     result = await loop.run_in_executor(
-                        None, 
+                        None,
                         lambda: full_pipeline(symbol=symbol, force_refresh=True, notify_discord=False)
                     )
                     
@@ -595,9 +739,47 @@ If no crypto projects mentioned, return: []
             f"📨 Message from {researcher_name} in #{message.channel.name}: {message_content[:100]}"
         )
 
+        # If this is a follow-up message inside a thread, and we have a cached setup,
+        # produce a single final enter/skip decision (no repetition).
+        if isinstance(message.channel, discord.Thread):
+            thread_id = message.channel.id
+            if self._is_bqs_followup(message_content) and thread_id in self.thread_setups:
+                if not self.thread_decision_sent.get(thread_id, False):
+                    setup = self.thread_setups[thread_id]
+                    try:
+                        import requests
+                        payload = {
+                            "token": setup["symbol"],
+                            "direction": setup["direction"],
+                            "entry": setup["entry"],
+                            "sl": setup["sl"],
+                            "target": setup["target"],
+                        }
+                        resp = requests.post(
+                            "http://localhost:8000/api/execution/full-analysis",
+                            json=payload,
+                            timeout=20,
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json().get("data", {})
+                            approved = data.get("approved", False)
+                            signal = data.get("signal", "UNKNOWN")
+                            decision_line = (
+                                f"✅ **ENTER** — {signal}"
+                                if approved
+                                else f"⛔ **SKIP** — {signal}"
+                            )
+                            await message.channel.send(decision_line)
+                            self.thread_decision_sent[thread_id] = True
+                            return
+                        logger.warning(f"Full-analysis failed for thread {thread_id}: {resp.status_code}")
+                    except Exception as e:
+                        logger.warning(f"Full-analysis exception for thread {thread_id}: {e}")
+
         # Get aggregated context (current message + recent messages from same user)
         aggregated_content = self._get_recent_context(message.author.id, message_content)
-        force_trigger = is_trades_channel and self._is_trade_setup(aggregated_content)
+        trade_setup = self._parse_trade_setup(aggregated_content) if is_trades_channel else None
+        force_trigger = is_trades_channel and (trade_setup is not None or self._is_trade_setup(aggregated_content))
         if force_trigger and not researcher_name:
             researcher_name = "Community"
 
@@ -635,6 +817,8 @@ If no crypto projects mentioned, return: []
                     symbol=symbol,
                     trigger_channel=message.channel,
                     force_trigger=force_trigger,
+                    trade_setup=trade_setup,
+                    trigger_message=message,
                 )
 
         # No need to call process_commands in a listener
