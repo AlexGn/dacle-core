@@ -25,6 +25,11 @@ from src.knowledge.knowledge_base import KnowledgeBase
 from src.knowledge.supabase_client import get_knowledge_base
 from src.scoring.mention_conviction_scorer import MentionConvictionScorer
 from src.utils.logger import get_logger
+from src.orchestration.trade_workflow import full_pipeline
+import asyncio
+from src.bot.cogs.analysis_formatter import AnalysisFormatter
+from src.bot.cogs.analysis_views import TradeApprovalView
+from api.routers.macro import get_btc_regime_widget
 
 logger = get_logger(__name__)
 
@@ -247,6 +252,7 @@ If no crypto projects mentioned, return: []
         researcher_name: str,
         content: str,
         symbol: Optional[str] = None,
+        trigger_channel: Optional[discord.abc.Messageable] = None,
     ):
         """
         Store project mention in Supabase with conviction scoring
@@ -258,16 +264,26 @@ If no crypto projects mentioned, return: []
             symbol: Project symbol (optional)
         """
         try:
-            # Get or create project
-            project = self.kb.get_project_by_name(project_name)
+            # Session 345: Deduplicate by symbol first (more reliable), then by name
+            project = None
+            if symbol:
+                project = self.kb.get_project_by_symbol(symbol)
+            
             if not project:
-                logger.info(f"Creating new project: {project_name}")
+                project = self.kb.get_project_by_name(project_name)
+                
+            if not project:
+                logger.info(f"Creating new project: {project_name} ({symbol or 'NO SYMBOL'})")
                 project = self.kb.create_project(
                     name=project_name,
                     symbol=symbol,
                     data={"source": "discord"},
                     first_mentioned_at=datetime.now(),
                 )
+            elif symbol and not project.get("symbol"):
+                # Update existing project with symbol if missing
+                logger.info(f"Updating project {project_name} with symbol {symbol}")
+                self.kb.update_project(project["id"], {"symbol": symbol})
 
             # Get researcher
             researcher = self.kb.get_researcher_by_name(researcher_name)
@@ -322,6 +338,82 @@ If no crypto projects mentioned, return: []
                 f"✅ Stored mention: {project_name} by {researcher_name} "
                 f"(mention ID: {mention['id']}, score: {conviction_score.final_score}/10)"
             )
+
+            # Session 334: Automatic Workflow Trigger for high-conviction mentions
+            if conviction_score.final_score >= 7.0 and symbol:
+                async def run_and_report(target_channel: Optional[discord.abc.Messageable] = None):
+                    # Session 345: Deduplication - check if we already have a recent analysis
+                    # Only trigger if no existing analysis OR older than 12 hours
+                    from src.orchestration.trade_workflow import _get_token_dir
+                    import json
+                    from datetime import datetime, timezone
+
+                    token_dir = _get_token_dir(symbol)
+                    consolidated_path = token_dir / "consolidated.json"
+                    
+                    if consolidated_path.exists():
+                        try:
+                            with open(consolidated_path) as f:
+                                data = json.load(f)
+                                ts_str = data.get("analysis_timestamp")
+                                if ts_str:
+                                    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+                                    age_hours = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
+                                    if age_hours < 12:
+                                        logger.info(f"⏭️ Skipping redundant trigger for {symbol} (Analyzed {age_hours:.1f}h ago)")
+                                        if target_channel:
+                                            await target_channel.send(
+                                                f"ℹ️ **Recent Analysis Exists**: {symbol} was analyzed `{age_hours:.1f}h` ago. "
+                                                f"Check `#analysis-updates` for the candidate report."
+                                            )
+                                        return
+                        except Exception as e:
+                            logger.warning(f"Failed to check staleness for {symbol}: {e}")
+
+                    logger.info(f"🚀 Triggering full pipeline for {symbol}...")
+                    loop = asyncio.get_event_loop()
+                    
+                    # Run orchestrator in executor
+                    result = await loop.run_in_executor(
+                        None, 
+                        lambda: full_pipeline(symbol=symbol, force_refresh=True, notify_discord=False)
+                    )
+                    
+                    
+                    # Target channel determination:
+                    # 1. Use trigger channel if it's a thread (stays in thread)
+                    # 2. Otherwise fallback to #analysis-updates
+                    final_target = None
+                    if target_channel:
+                         logger.info(f"🔍 DEBUG: run_and_report target_channel type: {type(target_channel)}, ID: {target_channel.id}")
+
+                    if isinstance(target_channel, discord.Thread):
+                        final_target = target_channel
+                    else:
+                        from src.utils.config import get_discord_config
+                        discord_cfg = get_discord_config()
+                        # Fallback to known #analysis-updates ID if not in config
+                        analysis_channel_id = discord_cfg.analysis_channel_id or 1470403542253703369
+                        final_target = self.bot.get_channel(analysis_channel_id)
+
+                    if final_target:
+                        logger.info(f"📤 Sending rich candidate report for {symbol} to {final_target}")
+                        
+                        # Fetch macro data for the report
+                        try:
+                            macro = await get_btc_regime_widget()
+                        except Exception as e:
+                            logger.warning(f"Failed to fetch macro data for report: {e}")
+                            macro = None
+
+                        embed = AnalysisFormatter.format_candidate_embed(result, macro)
+                        view = TradeApprovalView(symbol, result.conviction_score)
+                        await final_target.send(embed=embed, view=view)
+                    else:
+                        logger.warning(f"❌ Could not find target channel for report")
+
+                # Launch as task
+                asyncio.create_task(run_and_report(trigger_channel))
 
             # Log conviction details for visibility
             if conviction_score.conviction_signals:
@@ -445,11 +537,13 @@ If no crypto projects mentioned, return: []
             symbol = project_info.get("symbol")
 
             if project_name:
+                logger.info(f"🔍 DEBUG: Trigger channel type: {type(message.channel)}, ID: {message.channel.id}")
                 await self._store_mention(
                     project_name=project_name,
                     researcher_name=researcher_name,
                     content=aggregated_content,  # Store full context
                     symbol=symbol,
+                    trigger_channel=message.channel,
                 )
 
         # Process commands after handling message

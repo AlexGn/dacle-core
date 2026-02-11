@@ -39,7 +39,8 @@ class DACLEBot(commands.Bot):
 
         # Initialize bot with command prefix
         super().__init__(
-            command_prefix="!dacle ",  # Commands start with !dacle
+            # Session 396: Support mentions for "analyze" command
+            command_prefix=commands.when_mentioned_or("!dacle "),
             intents=intents,
             help_command=None,  # We'll create custom help
         )
@@ -99,6 +100,13 @@ class DACLEBot(commands.Bot):
             logger.info("✅ Loaded briefing cog")
         except Exception as e:
             logger.error(f"❌ Failed to load briefing cog: {e}")
+
+        # Load Analysis commands (Python-native analyze command)
+        try:
+            await self.load_extension("src.bot.cogs.analysis_commands")
+            logger.info("✅ Loaded analysis_commands cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load analysis_commands cog: {e}")
 
         # Sync slash commands with Discord
         try:

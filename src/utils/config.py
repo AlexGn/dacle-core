@@ -189,12 +189,20 @@ class DiscordConfig:
 
     bot_token: str
     private_server_id: str
+    analysis_channel_id: Optional[int] = None
 
     @classmethod
     def from_env(cls) -> "DiscordConfig":
         """Load Discord config from environment variables"""
         token = os.getenv("DISCORD_BOT_TOKEN")
         server_id = os.getenv("DISCORD_PRIVATE_SERVER_ID")
+        channel_id = os.getenv("DISCORD_ANALYSIS_CHANNEL_ID")
+
+        # Convert to int if provided
+        try:
+            channel_id = int(channel_id) if channel_id else None
+        except (ValueError, TypeError):
+            channel_id = None
 
         # Discord is optional - allow None values if not configured
         # Raises error only if partially configured (one but not both)
@@ -203,7 +211,11 @@ class DiscordConfig:
         if server_id and not token:
             raise ValueError("DISCORD_PRIVATE_SERVER_ID set but DISCORD_BOT_TOKEN missing")
 
-        return cls(bot_token=token or "", private_server_id=server_id or "")
+        return cls(
+            bot_token=token or "",
+            private_server_id=server_id or "",
+            analysis_channel_id=channel_id
+        )
 
 
 @dataclass
