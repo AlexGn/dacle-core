@@ -122,9 +122,17 @@ class AnalysisFormatter:
         if macro_data:
             alignment = macro_data.get("macro_alignment", {})
             status = "✅ ALIGNED" if alignment.get("aligned") else "❌ MISALIGNED"
+            recommendation = alignment.get("recommendation") or "CHECK_MANUALLY"
+            regime_label = macro_data.get("regime_label") or macro_data.get("regime") or "UNKNOWN"
+            volatility = macro_data.get("volatility", {}) or {}
+            vol_class = volatility.get("classification") or "UNKNOWN"
             embed.add_field(
                 name="🌐 Macro (L088)",
-                value=f"Status: {status}\n`{alignment.get('recommendation', '')}`",
+                value=(
+                    f"• Regime: `{regime_label}`\n"
+                    f"• Volatility: `{vol_class}`\n"
+                    f"• L088: `{status}` — `{recommendation}`"
+                ),
                 inline=False
             )
         
