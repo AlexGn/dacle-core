@@ -128,10 +128,23 @@ class AnalysisCommands(commands.Cog):
             ok, missing = self._validate_required_fields(consolidated)
             if not ok:
                 missing_str = ", ".join(missing)
+                diagnostics = consolidated.get("refresh_diagnostics") or {}
+                warning = consolidated.get("data_quality_warning")
+                diag_lines = []
+                if warning:
+                    diag_lines.append(f"⚠️ {warning}")
+                if diagnostics.get("missing_critical_groups"):
+                    diag_lines.append(
+                        f"Missing critical groups: {', '.join(diagnostics['missing_critical_groups'])}"
+                    )
+                if diagnostics.get("completeness_pct") is not None:
+                    diag_lines.append(f"Completeness: {diagnostics['completeness_pct']}%")
+                diag_text = "\n" + "\n".join(diag_lines) if diag_lines else ""
                 await status_msg.edit(
                     content=(
                         f"❌ Analysis blocked: missing required data after refresh "
                         f"({missing_str}). Please refresh in dashboard and verify sources."
+                        f"{diag_text}"
                     )
                 )
                 return
