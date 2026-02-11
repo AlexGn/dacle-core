@@ -629,7 +629,17 @@ If no crypto projects mentioned, return: []
                             )
                             return resp.status_code, resp.json()
 
-                        status_code, data = await loop.run_in_executor(None, _call_pre_trade)
+                        try:
+                            status_code, data = await loop.run_in_executor(None, _call_pre_trade)
+                        except Exception as e:
+                            logger.warning(f"Pre-trade API unreachable for {symbol}: {e}")
+                            fallback_msg = (
+                                "⚠️ **Execution API unavailable** — unable to run pre‑trade check right now. "
+                                "Please retry in a few minutes or notify Alex."
+                            )
+                            if target_channel:
+                                await target_channel.send(fallback_msg)
+                            return
                         if status_code == 200 and isinstance(data, dict):
                             formatted = data.get("data", {}).get("formatted_response")
                             if formatted:
@@ -885,6 +895,10 @@ If no crypto projects mentioned, return: []
                         logger.warning(f"Full-analysis failed for thread {thread_id}: {resp.status_code}")
                     except Exception as e:
                         logger.warning(f"Full-analysis exception for thread {thread_id}: {e}")
+                        await message.channel.send(
+                            "⚠️ **Execution API unavailable** — unable to post final decision. "
+                            "Please retry in a few minutes or notify Alex."
+                        )
             elif self._is_bqs_followup(message_content):
                 if not self.thread_decision_sent.get(thread_id, False):
                     recovered = await self._recover_thread_setup(message.channel)
@@ -935,6 +949,10 @@ If no crypto projects mentioned, return: []
                             logger.warning(f"Full-analysis failed for recovered thread {thread_id}: {resp.status_code}")
                         except Exception as e:
                             logger.warning(f"Full-analysis exception for recovered thread {thread_id}: {e}")
+                            await message.channel.send(
+                                "⚠️ **Execution API unavailable** — unable to post final decision. "
+                                "Please retry in a few minutes or notify Alex."
+                            )
 
         # Get aggregated context (current message + recent messages from same user)
         aggregated_content = self._get_recent_context(message.author.id, message_content)
