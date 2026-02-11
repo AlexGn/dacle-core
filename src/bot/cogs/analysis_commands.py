@@ -11,7 +11,7 @@ from discord.ext import commands
 from typing import Optional
 
 from src.orchestration.trade_workflow import full_pipeline
-from src.bot.cogs.analysis_formatter import AnalysisFormatter
+from src.reporting.formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
 from api.routers.macro import get_btc_regime_widget
 
@@ -55,9 +55,11 @@ class AnalysisCommands(commands.Cog):
             status_msg = await ctx.reply(f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)", mention_author=False)
 
         # Run analysis in background task
-        asyncio.create_task(self._run_analysis_task(ctx, status_msg, symbol))
+        # Pass the channel explicitly (it might be the new thread or the original channel)
+        # Note: We use ctx.channel which we updated above if a thread was created
+        asyncio.create_task(self._run_analysis_task(ctx, status_msg, symbol, ctx.channel))
 
-    async def _run_analysis_task(self, ctx: commands.Context, status_msg: discord.Message, symbol: str):
+    async def _run_analysis_task(self, ctx: commands.Context, status_msg: discord.Message, symbol: str, target_channel: discord.abc.Messageable):
         """Background task for analysis"""
         try:
             logger.info(f"🚀 Starting on-demand analysis for {symbol} requested by {ctx.author}")
@@ -90,16 +92,29 @@ class AnalysisCommands(commands.Cog):
             embed = AnalysisFormatter.format_candidate_embed(result, macro)
             view = TradeApprovalView(symbol, result.conviction_score)
 
-            # Reply IN THE SAME THREAD (ctx.reply handles this automatically)
-            # We delete the status message and send the full report
-            await status_msg.delete()
-            await ctx.reply(embed=embed, view=view, mention_author=False)
+            # Delete the "Analyzing..." status message
+            try:
+                await status_msg.delete()
+            except discord.NotFound:
+                pass # Message already deleted or not found
+
+            # Send result to the target channel (thread or main channel)
+            # We use target_channel.send() instead of ctx.reply() to avoid 
+            # "Cannot reply to a message in a different channel" errors when in a thread
+            await target_channel.send(embed=embed, view=view)
             
-            logger.info(f"✅ Sent analysis report for {symbol} to #{ctx.channel.name}")
+            logger.info(f"✅ Sent analysis report for {symbol}")
 
         except Exception as e:
             logger.error(f"Error in analyze command: {e}", exc_info=True)
-            await status_msg.edit(content=f"❌ An error occurred: {str(e)}")
+            # Try to report error to the user if possible
+            try:
+                if status_msg:
+                    await status_msg.edit(content=f"❌ An error occurred: {str(e)}")
+                else:
+                    await target_channel.send(f"❌ An error occurred: {str(e)}")
+            except:
+                pass
 
 
 async def setup(bot: commands.Bot):
