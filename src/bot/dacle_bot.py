@@ -157,6 +157,34 @@ class DACLEBot(commands.Bot):
         # Pass the actual Supabase client for health checks
         self.loop.create_task(run_periodic_health_checks(kb.client, redis_client=None))
 
+    async def on_message(self, message: discord.Message):
+        """
+        Custom on_message handler to handle double spaces after mentions
+        and other formatting issues that break command parsing.
+        """
+        # Ignore bot messages
+        if message.author.bot:
+            return
+
+        # If the bot is mentioned, clean up extra spaces after the mention
+        if self.user.mentioned_in(message):
+            mention_str = f"<@{self.user.id}>"
+            mention_nick_str = f"<@!{self.user.id}>"
+            
+            content = message.content
+            if content.startswith(mention_str):
+                # Replace mention + any number of spaces with mention + single space
+                import re
+                content = re.sub(rf"^{re.escape(mention_str)}\s+", f"{mention_str} ", content)
+                message.content = content
+            elif content.startswith(mention_nick_str):
+                import re
+                content = re.sub(rf"^{re.escape(mention_nick_str)}\s+", f"{mention_nick_str} ", content)
+                message.content = content
+
+        # Process commands
+        await self.process_commands(message)
+
     async def on_error(self, event: str, *args, **kwargs):
         """Handle errors"""
         logger.error(f"Error in {event}", exc_info=True)

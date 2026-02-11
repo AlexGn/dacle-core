@@ -450,8 +450,6 @@ If no crypto projects mentioned, return: []
             logger.warning(
                 f"⚠️  Message NOT from private server (guild_id: {message.guild.id if message.guild else 'None'})"
             )
-            # Still process commands even if not from private server
-            await self.bot.process_commands(message)
             return
 
         logger.info(f"✅ Message is from private server, processing for mentions")
@@ -464,7 +462,6 @@ If no crypto projects mentioned, return: []
             logger.debug(
                 f"Ignoring forwarded message from {message.author.name} (no content accessible)"
             )
-            await self.bot.process_commands(message)
             return
 
         # Try to get referenced message content (for replies, not forwards)
@@ -506,7 +503,6 @@ If no crypto projects mentioned, return: []
 
         # Only process if from known researcher
         if not researcher_name:
-            await self.bot.process_commands(message)
             return
 
         logger.info(
@@ -528,7 +524,6 @@ If no crypto projects mentioned, return: []
 
         if not projects:
             logger.debug(f"No projects found in message(s) from {researcher_name}")
-            await self.bot.process_commands(message)
             return
 
         # Store each mention
@@ -546,8 +541,8 @@ If no crypto projects mentioned, return: []
                     trigger_channel=message.channel,
                 )
 
-        # Process commands after handling message
-        await self.bot.process_commands(message)
+        # No need to call process_commands in a listener
+        pass
 
 
 async def setup(bot: commands.Bot):
