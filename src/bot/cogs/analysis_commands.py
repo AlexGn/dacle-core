@@ -19,12 +19,14 @@ from discord.ext import commands
 from src.orchestration.trade_workflow import full_pipeline
 from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
+from src.utils.config import get_discord_config
 from api.routers.macro import get_btc_regime_widget
 
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
 API_BASE_URL = "http://localhost:8000"
+DEFAULT_ANALYSIS_CHANNEL_ID = 1470403542253703369
 
 REQUIRED_FIELDS = {
     "price": ("current_price", "price"),
@@ -85,6 +87,20 @@ class AnalysisCommands(commands.Cog):
                 missing.append(label)
         return (len(missing) == 0), missing
 
+    def _resolve_analysis_channel(self) -> Optional[discord.TextChannel]:
+        """Resolve canonical analysis-updates channel."""
+        channel_id = DEFAULT_ANALYSIS_CHANNEL_ID
+        try:
+            discord_cfg = get_discord_config()
+            if discord_cfg.analysis_channel_id:
+                channel_id = discord_cfg.analysis_channel_id
+        except Exception:
+            # Config may be unavailable in certain test contexts; use fallback.
+            pass
+
+        channel = self.bot.get_channel(channel_id)
+        return channel if isinstance(channel, discord.TextChannel) else None
+
     @commands.command(name="analyze")
     async def analyze(self, ctx: commands.Context, symbol: str):
         """
@@ -124,45 +140,66 @@ class AnalysisCommands(commands.Cog):
         Slash command version of analyze.
         Usage: /analyze <SYMBOL>
         """
-        channel = interaction.channel
+        symbol = symbol.upper()
+        invoke_channel = interaction.channel
+        analysis_channel = self._resolve_analysis_channel()
+        if analysis_channel is None:
+            analysis_channel = invoke_channel if isinstance(invoke_channel, discord.TextChannel) else None
 
-        if isinstance(channel, discord.TextChannel):
+        if analysis_channel is None:
             await interaction.response.send_message(
-                f"🔍 Analyzing **{symbol.upper()}**... (creating thread)",
-                ephemeral=False
+                "❌ Could not resolve analysis channel. Try again in `#analysis-updates`.",
+                ephemeral=True,
             )
-            status_msg = await interaction.original_response()
-            try:
-                thread = await status_msg.create_thread(
-                    name=f"Analysis: {symbol.upper()}",
-                    auto_archive_duration=1440
-                )
-                thread_status = await thread.send(
-                    f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)"
-                )
-                try:
-                    await status_msg.delete()
-                except discord.NotFound:
-                    pass
-                target_channel = thread
-                status_msg = thread_status
-            except Exception as e:
-                logger.warning(f"Failed to create thread for slash analyze: {e}")
-                target_channel = channel
-        else:
-            # Already in a thread or DM
-            await interaction.response.send_message(
-                f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)",
-                ephemeral=False
-            )
-            status_msg = await interaction.original_response()
-            target_channel = channel
+            return
 
-        asyncio.create_task(
-            self._run_analysis_task(interaction.user, status_msg, symbol, target_channel)
+        await interaction.response.send_message(
+            f"🔍 Analyzing **{symbol}**. I will post results in {analysis_channel.mention}.",
+            ephemeral=True,
         )
 
-    async def _run_analysis_task(self, requester: Optional[discord.abc.User], status_msg: discord.Message, symbol: str, target_channel: discord.abc.Messageable):
+        logger.info(
+            f"🔍 /analyze requested by {interaction.user} for {symbol}; "
+            f"target channel #{analysis_channel.name} ({analysis_channel.id})"
+        )
+
+        status_msg = await analysis_channel.send(
+            f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
+        )
+        target_channel: discord.abc.Messageable = analysis_channel
+
+        try:
+            thread = await status_msg.create_thread(
+                name=f"Analysis: {symbol}",
+                auto_archive_duration=1440,
+            )
+            thread_status = await thread.send(
+                f"🔍 Analyzing **{symbol}**... (this may take 10-20s)"
+            )
+            try:
+                await status_msg.delete()
+            except discord.NotFound:
+                pass
+            status_msg = thread_status
+            target_channel = thread
+        except Exception as e:
+            logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
+            target_channel = analysis_channel
+
+        asyncio.create_task(
+            self._run_analysis_task(
+                interaction.user, status_msg, symbol, target_channel, notify_channel=analysis_channel
+            )
+        )
+
+    async def _run_analysis_task(
+        self,
+        requester: Optional[discord.abc.User],
+        status_msg: discord.Message,
+        symbol: str,
+        target_channel: discord.abc.Messageable,
+        notify_channel: Optional[discord.abc.Messageable] = None,
+    ):
         """Background task for analysis"""
         try:
             requester_name = requester if requester else "unknown"
@@ -224,16 +261,16 @@ class AnalysisCommands(commands.Cog):
             embed = AnalysisFormatter.format_candidate_embed(result, macro)
             view = TradeApprovalView(symbol, result.conviction_score)
 
-            # Delete the "Analyzing..." status message
-            try:
-                await status_msg.delete()
-            except discord.NotFound:
-                pass # Message already deleted or not found
-
             # Send result to the target channel (thread or main channel)
             # We use target_channel.send() instead of ctx.reply() to avoid 
             # "Cannot reply to a message in a different channel" errors when in a thread
             await target_channel.send(embed=embed, view=view)
+
+            # Delete status only after successful delivery
+            try:
+                await status_msg.delete()
+            except discord.NotFound:
+                pass  # Message already deleted or not found
             
             logger.info(f"✅ Sent analysis report for {symbol}")
 
@@ -242,10 +279,12 @@ class AnalysisCommands(commands.Cog):
             # Try to report error to the user if possible
             try:
                 if status_msg:
-                    await status_msg.edit(content=f"❌ An error occurred: {str(e)}")
+                    await status_msg.edit(content=f"❌ An error occurred while analyzing **{symbol}**: {str(e)}")
+                elif notify_channel:
+                    await notify_channel.send(f"❌ Analysis failed for **{symbol}**: {str(e)}")
                 else:
                     await target_channel.send(f"❌ An error occurred: {str(e)}")
-            except:
+            except Exception:
                 pass
 
 
