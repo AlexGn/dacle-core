@@ -1,6 +1,6 @@
 [project]
 name = "dacle"
-version = "0.1.0"
+version = "1.0.0"
 description = "David's Automated Crypto Learning Engine - Second Brain Knowledge Management System"
 authors = [
     {name = "Alex", email = "alex@example.com"}
@@ -25,6 +25,7 @@ dependencies = [
     "pandas>=2.1.4",
     "python-dotenv>=1.0.0",
     "python-dateutil>=2.8.2",
+    "python-multipart>=0.0.9",
     "PyJWT>=2.10.1",
     "feedparser>=6.0.10",  # For Coinbase Blog RSS parsing
     "python-telegram-bot>=20.0",  # Telegram Entry Timer Bot
