@@ -39,12 +39,13 @@ class MessageMonitor(commands.Cog):
     Cog for monitoring Discord messages and extracting project mentions
     """
 
-    # Known researchers (from database seed data)
-    RESEARCHERS = {
+    # Known researchers (fallback when DB is unavailable)
+    DEFAULT_RESEARCHERS = {
         "austin": {"name": "Austin", "tier": 1},
         "phobia": {"name": "Phobia", "tier": 1},
         "sebastien": {"name": "Sebastien", "tier": 1},
         "seb": {"name": "Sebastien", "tier": 1},  # Alias
+        "davt97": {"name": "Davt97", "tier": 1},
     }
 
     # Message context settings
@@ -58,18 +59,46 @@ class MessageMonitor(commands.Cog):
         self.together = get_together_client() if TOGETHER_AVAILABLE and get_together_client else None
         self.kb = get_knowledge_base()
 
+        self.researchers = self._load_researchers()
+
         # Initialize conviction scorer with knowledge base
         knowledge_base = KnowledgeBase(supabase_client=self.kb, together_client=self.together)
+        tiers = {}
+        for info in self.researchers.values():
+            name = info.get("name")
+            if name and name not in tiers:
+                tiers[name] = int(info.get("tier", 1))
         self.conviction_scorer = MentionConvictionScorer(
             together_client=self.together,
             knowledge_base=knowledge_base,
-            researcher_tiers={"Austin": 1, "Phobia": 1, "Sebastien": 1},
+            researcher_tiers=tiers,
         )
 
         # Message cache: {user_id: deque([(timestamp, content), ...])}
         self.message_cache: Dict[int, deque] = {}
 
         logger.info("MessageMonitor cog initialized with conviction scoring")
+
+    def _load_researchers(self) -> Dict[str, Dict[str, str]]:
+        """
+        Load researchers from DB if available, otherwise fall back to defaults.
+        """
+        researchers = dict(self.DEFAULT_RESEARCHERS)
+        try:
+            db_researchers = self.kb.list_researchers()
+            for r in db_researchers:
+                name = (r.get("name") or "").strip()
+                if not name:
+                    continue
+                key = name.lower()
+                researchers[key] = {"name": name, "tier": 1}
+                discord_username = (r.get("discord_username") or "").strip()
+                if discord_username:
+                    researchers[discord_username.lower()] = {"name": name, "tier": 1}
+        except Exception as e:
+            logger.warning(f"Failed to load researchers from DB, using defaults: {e}")
+
+        return researchers
 
     def _cache_message(self, user_id: int, content: str):
         """
@@ -163,21 +192,21 @@ class MessageMonitor(commands.Cog):
         """
         # First check for hashtag in message (e.g., #austin, #phobia)
         content_lower = content.lower()
-        for key, info in self.RESEARCHERS.items():
+        for key, info in self.researchers.items():
             if f"#{key}" in content_lower:
                 logger.info(f"Detected researcher via hashtag: #{key} -> {info['name']}")
                 return info["name"]
 
         # Also check for @mention (e.g., @austin, @phobia)
         # Note: @ alone is enough, as Discord converts @austin to <@USER_ID> but user might type it
-        for key, info in self.RESEARCHERS.items():
+        for key, info in self.researchers.items():
             if f"@{key}" in content_lower:
                 logger.info(f"Detected researcher via @mention: @{key} -> {info['name']}")
                 return info["name"]
 
         # Then check username
         author_lower = author_name.lower()
-        for key, info in self.RESEARCHERS.items():
+        for key, info in self.researchers.items():
             if key in author_lower:
                 logger.info(f"Detected researcher via username: {author_name} -> {info['name']}")
                 return info["name"]
@@ -245,6 +274,26 @@ If no crypto projects mentioned, return: []
         except Exception as e:
             logger.error(f"Error extracting projects with AI: {e}")
             return []
+
+    def _extract_projects_with_regex(self, content: str) -> List[Dict[str, str]]:
+        """
+        Regex-based fallback for extracting symbols from trade messages.
+        Supports patterns like $DUSK, $DUSK/USDT, and infers direction.
+        """
+        projects = []
+        symbols = re.findall(r"\$([A-Z0-9]{2,10})(?:/USDT|/USD|/USDC)?", content.upper())
+        if not symbols:
+            return projects
+
+        direction = "neutral"
+        if "SHORT" in content.upper():
+            direction = "negative"
+        elif "LONG" in content.upper():
+            direction = "positive"
+
+        for sym in symbols:
+            projects.append({"name": sym, "symbol": sym, "sentiment": direction})
+        return projects
 
     async def _store_mention(
         self,
@@ -328,11 +377,12 @@ If no crypto projects mentioned, return: []
                 data=conviction_data,
             )
 
-            # Generate and store embedding for semantic search
-            embedding = self.together.generate_embedding(f"{project_name}: {content[:300]}")
-
-            # Update project with embedding
-            self.kb.update_project(project["id"], {"embedding": embedding})
+            # Generate and store embedding for semantic search (if available)
+            if self.together and hasattr(self.together, "generate_embedding"):
+                embedding = self.together.generate_embedding(f"{project_name}: {content[:300]}")
+                self.kb.update_project(project["id"], {"embedding": embedding})
+            else:
+                logger.debug("Skipping embedding generation (Together.ai not available)")
 
             logger.info(
                 f"✅ Stored mention: {project_name} by {researcher_name} "
@@ -520,7 +570,13 @@ If no crypto projects mentioned, return: []
             )
 
         # Extract projects using AI (from aggregated content)
-        projects = await self._extract_projects_with_ai(aggregated_content)
+        if self.together:
+            projects = await self._extract_projects_with_ai(aggregated_content)
+        else:
+            projects = self._extract_projects_with_regex(aggregated_content)
+
+        if not projects:
+            projects = self._extract_projects_with_regex(aggregated_content)
 
         if not projects:
             logger.debug(f"No projects found in message(s) from {researcher_name}")

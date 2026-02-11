@@ -52,7 +52,15 @@ class AnalysisFormatter:
         # Reasoning if available
         reasoning = getattr(result, 'reasoning', None)
         if reasoning:
-            description += f"\n> {reasoning}\n"
+            if isinstance(reasoning, list):
+                # Scorer returns list of flags — show top 5 as bullet points
+                for item in reasoning[:5]:
+                    description += f"\n> {item}"
+                if len(reasoning) > 5:
+                    description += f"\n> _...and {len(reasoning) - 5} more_"
+                description += "\n"
+            else:
+                description += f"\n> {reasoning}\n"
         
         embed = discord.Embed(
             title=title,
