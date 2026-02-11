@@ -27,7 +27,7 @@ from src.scoring.mention_conviction_scorer import MentionConvictionScorer
 from src.utils.logger import get_logger
 from src.orchestration.trade_workflow import full_pipeline
 import asyncio
-from src.reporting.formatter import AnalysisFormatter
+from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
 from api.routers.macro import get_btc_regime_widget
 
