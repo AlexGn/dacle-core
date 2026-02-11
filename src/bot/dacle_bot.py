@@ -123,23 +123,20 @@ class DACLEBot(commands.Bot):
             # Fast guild sync for private server (avoid global duplicates)
             guild = discord.Object(id=self.private_server_id)
 
-            # Mark all app commands as guild-only to prevent global duplicates
-            for cmd in self.tree.walk_commands():
-                guild_ids = getattr(cmd, "guild_ids", None)
-                if guild_ids is None:
-                    cmd.guild_ids = {self.private_server_id}
-                else:
-                    if not isinstance(guild_ids, set):
-                        guild_ids = set(guild_ids)
-                    guild_ids.add(self.private_server_id)
-                    cmd.guild_ids = guild_ids
+            # Capture current commands before clearing globals
+            current_commands = list(self.tree.get_commands())
+
+            # Clear global commands on Discord by syncing an empty global set
+            self.tree.clear_commands(guild=None)
+            cleared_global = await self.tree.sync()
+            logger.info(f"🧹 Cleared {len(cleared_global)} global slash command(s)")
+
+            # Re-add commands as guild-scoped only, then sync to guild
+            for cmd in current_commands:
+                self.tree.add_command(cmd, guild=guild)
 
             guild_synced = await self.tree.sync(guild=guild)
             logger.info(f"✅ Synced {len(guild_synced)} guild slash command(s)")
-
-            # Clear any lingering global commands (sync empty global set)
-            global_synced = await self.tree.sync()
-            logger.info(f"🧹 Synced {len(global_synced)} global slash command(s) (expected 0)")
         except Exception as e:
             logger.error(f"❌ Failed to sync commands: {e}")
 
