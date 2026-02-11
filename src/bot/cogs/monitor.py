@@ -451,6 +451,22 @@ If no crypto projects mentioned, return: []
 
         return " ".join(parts)
 
+    async def _recover_thread_setup(self, thread: discord.Thread) -> Optional[Dict[str, Any]]:
+        """
+        Attempt to reconstruct trade setup from recent thread history.
+        Useful if the bot restarted and in-memory cache is gone.
+        """
+        try:
+            async for msg in thread.history(limit=25, oldest_first=False):
+                if not msg or not msg.content:
+                    continue
+                setup = self._parse_trade_setup(msg.content)
+                if setup:
+                    return setup
+        except Exception as e:
+            logger.warning(f"Failed to recover thread setup for {thread.id}: {e}")
+        return None
+
     async def _store_mention(
         self,
         project_name: str,
@@ -869,6 +885,56 @@ If no crypto projects mentioned, return: []
                         logger.warning(f"Full-analysis failed for thread {thread_id}: {resp.status_code}")
                     except Exception as e:
                         logger.warning(f"Full-analysis exception for thread {thread_id}: {e}")
+            elif self._is_bqs_followup(message_content):
+                if not self.thread_decision_sent.get(thread_id, False):
+                    recovered = await self._recover_thread_setup(message.channel)
+                    if recovered:
+                        self.thread_setups[thread_id] = recovered
+                        self.thread_decision_sent[thread_id] = False
+                        # Re-run follow-up logic now that we recovered setup
+                        try:
+                            bq_summary = self._build_bq_summary(
+                                message_content,
+                                pre_trade_approved=recovered.get("pre_trade_approved"),
+                            )
+                            import requests
+                            payload = {
+                                "token": recovered["symbol"],
+                                "direction": recovered["direction"],
+                                "entry": recovered["entry"],
+                                "sl": recovered["sl"],
+                                "target": recovered["target"],
+                            }
+                            resp = requests.post(
+                                "http://localhost:8000/api/execution/full-analysis",
+                                json=payload,
+                                timeout=20,
+                            )
+                            if resp.status_code == 200:
+                                data = resp.json().get("data", {})
+                                approved = data.get("approved", False)
+                                signal = data.get("signal", "UNKNOWN")
+                                decision_line = (
+                                    f"✅ **ENTER** — {signal}"
+                                    if approved
+                                    else f"⛔ **SKIP** — {signal}"
+                                )
+                                combined = (
+                                    f"{bq_summary}\n\n{decision_line}"
+                                    if bq_summary
+                                    else decision_line
+                                )
+                                await message.channel.send(combined)
+                                self.thread_decision_sent[thread_id] = True
+                                return
+                            if bq_summary:
+                                await message.channel.send(
+                                    f"{bq_summary}\n\n⚠️ Final decision unavailable — API error."
+                                )
+                                self.thread_decision_sent[thread_id] = True
+                            logger.warning(f"Full-analysis failed for recovered thread {thread_id}: {resp.status_code}")
+                        except Exception as e:
+                            logger.warning(f"Full-analysis exception for recovered thread {thread_id}: {e}")
 
         # Get aggregated context (current message + recent messages from same user)
         aggregated_content = self._get_recent_context(message.author.id, message_content)
