@@ -104,6 +104,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load briefing cog: {e}")
 
+        # Load macro slash commands cog
+        try:
+            await self.load_extension("src.bot.cogs.macro_commands")
+            logger.info("✅ Loaded macro_commands cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load macro_commands cog: {e}")
+
         # Load Analysis commands (Python-native analyze command)
         try:
             await self.load_extension("src.bot.cogs.analysis_commands")
