@@ -11,7 +11,7 @@ from discord.ext import commands
 from typing import Optional
 
 from src.orchestration.trade_workflow import full_pipeline
-from src.reporting.formatter import AnalysisFormatter
+from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
 from api.routers.macro import get_btc_regime_widget
 
