@@ -21,13 +21,29 @@ class AnalysisFormatter:
         """
         Create a rich embed for a trade candidate.
         """
-        is_long = result.direction == "LONG"
-        color = AnalysisFormatter.COLOR_LONG if is_long else AnalysisFormatter.COLOR_SHORT
+        is_long = getattr(result, 'direction', None) == "LONG"
+        is_neutral = getattr(result, 'direction', None) == "NEUTRAL"
+        is_skip = getattr(result, 'decision', None) == "SKIP"
         
-        title = f"{'🚀' if is_long else '🔴'} Candidate Trade: {result.symbol} ({result.direction})"
+        if is_neutral:
+            color = AnalysisFormatter.COLOR_NEUTRAL
+            emoji = "⚪"
+        elif is_long:
+            color = AnalysisFormatter.COLOR_LONG
+            emoji = "🚀"
+        else:
+            color = AnalysisFormatter.COLOR_SHORT
+            emoji = "🔴"
+        
+        title = f"{emoji} Candidate Trade: {result.symbol} ({getattr(result, 'direction', 'UNKNOWN')})"
         
         description = f"**Conviction Score**: {result.conviction_score}/10\n"
         description += f"**Decision**: {result.decision}\n"
+        
+        # Add reasoning if available
+        reasoning = getattr(result, 'reasoning', None)
+        if reasoning:
+            description += f"\n**Reasoning**: {reasoning}\n"
         
         embed = discord.Embed(
             title=title,
@@ -44,27 +60,34 @@ class AnalysisFormatter:
         )
         
         # Playbook status
-        playbook_status = "✅ Generated" if result.playbook_generated else "❌ Missing"
+        playbook_status = "✅ Generated" if getattr(result, 'playbook_generated', False) else "❌ Missing"
         embed.add_field(
             name="📁 Playbook",
             value=playbook_status,
             inline=True
         )
-
-        # Levels (Entry/SL/TP)
-        def fmt(val):
-            return f"{val:.4f}" if isinstance(val, (int, float)) else "Unknown"
-
-        entry = fmt(getattr(result, 'entry_price', None))
-        sl = fmt(getattr(result, 'stop_loss', None))
-        tp = fmt(getattr(result, 'take_profit_1', None))
-        rr = f"{result.rr_ratio:.2f}" if isinstance(getattr(result, 'rr_ratio', None), (int, float)) else "Unknown"
         
-        embed.add_field(
-            name="📉 Trade Levels",
-            value=f"• Entry: `{entry}`\n• Stop Loss: `{sl}`\n• Take Profit: `{tp}`\n• R:R Ratio: `{rr}`",
-            inline=False
-        )
+        # Levels (Entry/SL/TP) - Only show if NOT a skip
+        if not is_skip:
+            def fmt(val):
+                return f"{val:.4f}" if isinstance(val, (int, float)) else "Unknown"
+
+            entry = fmt(getattr(result, 'entry_price', None))
+            sl = fmt(getattr(result, 'stop_loss', None))
+            tp = fmt(getattr(result, 'take_profit_1', None))
+            rr = f"{result.rr_ratio:.2f}" if isinstance(getattr(result, 'rr_ratio', None), (int, float)) else "Unknown"
+            
+            embed.add_field(
+                name="📉 Trade Levels",
+                value=f"• Entry: `{entry}`\n• Stop Loss: `{sl}`\n• Take Profit: `{tp}`\n• R:R Ratio: `{rr}`",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="📉 Trade Levels",
+                value="*No levels generated for skipped trade*",
+                inline=False
+            )
 
         # Macro Alignment (L088)
         if macro_data:
