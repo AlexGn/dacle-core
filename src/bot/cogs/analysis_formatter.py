@@ -128,8 +128,11 @@ class AnalysisFormatter:
                 inline=False
             )
         
-        # Trade Levels (Only for non-skips)
-        if not is_skip:
+        # Trade Levels (Only for non-skips and if we have any valid values)
+        has_sl = isinstance(getattr(result, 'stop_loss', None), (int, float))
+        has_tp = isinstance(getattr(result, 'take_profit_1', None), (int, float))
+        has_rr = isinstance(getattr(result, 'rr_ratio', None), (int, float))
+        if not is_skip and (has_sl or has_tp or has_rr):
             sl = f"${result.stop_loss:.4f}" if isinstance(getattr(result, 'stop_loss', None), (int, float)) else "Unknown"
             tp = f"${result.take_profit_1:.4f}" if isinstance(getattr(result, 'take_profit_1', None), (int, float)) else "Unknown"
             rr = f"{result.rr_ratio:.2f}" if isinstance(getattr(result, 'rr_ratio', None), (int, float)) else "Unknown"
