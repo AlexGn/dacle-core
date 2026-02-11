@@ -372,6 +372,85 @@ If no crypto projects mentioned, return: []
         upper = content.upper()
         return ("BREAKOUT QUALITY" in upper) or ("BQS" in upper)
 
+    def _parse_bq_breakdown(self, content: str) -> Dict[str, Any]:
+        """
+        Parse a BQ/TA breakdown message for summary stats.
+        Returns dict with overall score, grade, and component scores when present.
+        """
+        text = content
+        parsed: Dict[str, Any] = {"components": {}}
+
+        overall_match = re.search(
+            r"breakout\s+quality\s*:?[\s\r\n]*([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if overall_match:
+            parsed["overall_score"] = float(overall_match.group(1))
+            parsed["overall_max"] = float(overall_match.group(2))
+
+        grade_match = re.search(r"\(([A-C][+-]?)\)", text)
+        if grade_match:
+            parsed["grade"] = grade_match.group(1)
+
+        component_patterns = {
+            "Technical Quality": r"technical\s+quality\s*:?[\s\r\n]*([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)",
+            "POC Alignment": r"poc\s+alignment\s*:?[\s\r\n]*([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)",
+            "Timing Precision": r"timing\s+precision\s*:?[\s\r\n]*([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)",
+            "Risk Management": r"risk\s+management\s*:?[\s\r\n]*([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)",
+            "Macro Context": r"macro\s+context\s*:?[\s\r\n]*([0-9]+(?:\.[0-9]+)?)\s*/\s*([0-9]+(?:\.[0-9]+)?)",
+        }
+
+        for label, pattern in component_patterns.items():
+            m = re.search(pattern, text, flags=re.IGNORECASE)
+            if m:
+                try:
+                    parsed["components"][label] = (float(m.group(1)), float(m.group(2)))
+                except ValueError:
+                    continue
+
+        return parsed
+
+    def _build_bq_summary(self, content: str, pre_trade_approved: Optional[bool]) -> str:
+        """
+        Build a concise BQ summary for the thread follow-up.
+        """
+        parsed = self._parse_bq_breakdown(content)
+        if not parsed.get("overall_score") and not parsed.get("components"):
+            return ""
+
+        parts = ["Thanks for the detailed BQ breakdown."]
+
+        overall_score = parsed.get("overall_score")
+        overall_max = parsed.get("overall_max")
+        grade = parsed.get("grade")
+        if overall_score is not None and overall_max is not None:
+            overall_text = f"Overall score is {overall_score:.2f}/{overall_max:.0f}"
+            if grade:
+                overall_text += f" ({grade})"
+            parts.append(overall_text + ".")
+
+        components = parsed.get("components", {})
+        if components:
+            comp_text = []
+            for label in [
+                "Technical Quality",
+                "Timing Precision",
+                "POC Alignment",
+                "Risk Management",
+                "Macro Context",
+            ]:
+                if label in components:
+                    score, max_score = components[label]
+                    comp_text.append(f"{label} {score:.1f}/{max_score:.0f}")
+            if comp_text:
+                parts.append("Key components: " + ", ".join(comp_text) + ".")
+
+        if pre_trade_approved is True:
+            parts.append("This adds to the earlier pre‑trade approval and reinforces the setup.")
+
+        return " ".join(parts)
+
     async def _store_mention(
         self,
         project_name: str,
@@ -570,6 +649,7 @@ If no crypto projects mentioned, return: []
                                             "entry": trade_setup["entry"],
                                             "sl": trade_setup["sl"],
                                             "target": trade_setup["target"],
+                                            "pre_trade_approved": data.get("data", {}).get("approved", False),
                                         }
                                         self.thread_decision_sent[final_target.id] = False
                                     logger.info(f"📤 Sending pre-trade check summary for {symbol} to trades")
@@ -747,6 +827,10 @@ If no crypto projects mentioned, return: []
                 if not self.thread_decision_sent.get(thread_id, False):
                     setup = self.thread_setups[thread_id]
                     try:
+                        bq_summary = self._build_bq_summary(
+                            message_content,
+                            pre_trade_approved=setup.get("pre_trade_approved"),
+                        )
                         import requests
                         payload = {
                             "token": setup["symbol"],
@@ -769,9 +853,19 @@ If no crypto projects mentioned, return: []
                                 if approved
                                 else f"⛔ **SKIP** — {signal}"
                             )
-                            await message.channel.send(decision_line)
+                            combined = (
+                                f"{bq_summary}\n\n{decision_line}"
+                                if bq_summary
+                                else decision_line
+                            )
+                            await message.channel.send(combined)
                             self.thread_decision_sent[thread_id] = True
                             return
+                        if bq_summary:
+                            await message.channel.send(
+                                f"{bq_summary}\n\n⚠️ Final decision unavailable — API error."
+                            )
+                            self.thread_decision_sent[thread_id] = True
                         logger.warning(f"Full-analysis failed for thread {thread_id}: {resp.status_code}")
                     except Exception as e:
                         logger.warning(f"Full-analysis exception for thread {thread_id}: {e}")
