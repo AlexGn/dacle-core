@@ -5,10 +5,15 @@ Session 396: Replaces OpenClaw "analyze" command which lacked thread awareness.
 """
 
 import asyncio
+import json
 import logging
+import time
+from pathlib import Path
+from typing import Tuple, Dict, Any
+
 import discord
+import requests
 from discord.ext import commands
-from typing import Optional
 
 from src.orchestration.trade_workflow import full_pipeline
 from src.bot.cogs.analysis_formatter import AnalysisFormatter
@@ -16,6 +21,16 @@ from src.bot.cogs.analysis_views import TradeApprovalView
 from api.routers.macro import get_btc_regime_widget
 
 logger = logging.getLogger(__name__)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
+API_BASE_URL = "http://localhost:8000"
+
+REQUIRED_FIELDS = {
+    "price": ("current_price", "price"),
+    "fdv": ("fdv", "fully_diluted_valuation"),
+    "market_cap": ("market_cap",),
+    "float_percent": ("float_percent", "float_pct"),
+}
 
 
 class AnalysisCommands(commands.Cog):
@@ -26,6 +41,48 @@ class AnalysisCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         logger.info("AnalysisCommands cog initialized")
+
+    def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
+        """Trigger token refetch and wait for completion."""
+        url = f"{API_BASE_URL}/api/tokens/{symbol}/refetch"
+        resp = requests.post(url, params={"force": "true", "auto_analyze": "false"}, timeout=15)
+        resp.raise_for_status()
+        payload = resp.json()
+        task_id = payload.get("task_id")
+        if not task_id:
+            raise RuntimeError("Refetch did not return a task_id")
+
+        status_url = f"{API_BASE_URL}/api/tokens/research/{task_id}"
+        start = time.time()
+        while True:
+            status_resp = requests.get(status_url, timeout=15)
+            if status_resp.status_code == 404:
+                time.sleep(2)
+                continue
+            status_resp.raise_for_status()
+            status_payload = status_resp.json()
+            status = status_payload.get("status")
+            if status in {"completed", "completed_with_warnings"}:
+                return status_payload
+            if status in {"failed", "skipped"}:
+                raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Refetch failed")
+            if time.time() - start > 300:
+                raise TimeoutError("Refetch timed out after 300s")
+            time.sleep(2)
+
+    def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
+        consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
+        if not consolidated_path.exists():
+            raise FileNotFoundError(f"No consolidated.json found for {symbol}")
+        with open(consolidated_path) as f:
+            return json.load(f)
+
+    def _validate_required_fields(self, data: Dict[str, Any]) -> Tuple[bool, list[str]]:
+        missing = []
+        for label, keys in REQUIRED_FIELDS.items():
+            if not any(data.get(key) is not None for key in keys):
+                missing.append(label)
+        return (len(missing) == 0), missing
 
     @commands.command(name="analyze")
     async def analyze(self, ctx: commands.Context, symbol: str):
@@ -63,7 +120,22 @@ class AnalysisCommands(commands.Cog):
         """Background task for analysis"""
         try:
             logger.info(f"🚀 Starting on-demand analysis for {symbol} requested by {ctx.author}")
-            
+
+            # Force refetch and validate required data (no embed if missing)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: self._refresh_token_data(symbol))
+            consolidated = await loop.run_in_executor(None, lambda: self._load_consolidated(symbol))
+            ok, missing = self._validate_required_fields(consolidated)
+            if not ok:
+                missing_str = ", ".join(missing)
+                await status_msg.edit(
+                    content=(
+                        f"❌ Analysis blocked: missing required data after refresh "
+                        f"({missing_str}). Please refresh in dashboard and verify sources."
+                    )
+                )
+                return
+
             # Run the full pipeline
             # Note: We run in executor to avoid blocking the bot's event loop
             loop = asyncio.get_event_loop()
@@ -71,7 +143,7 @@ class AnalysisCommands(commands.Cog):
                 None, 
                 lambda: full_pipeline(
                     symbol=symbol, 
-                    force_refresh=True,  # Always refresh like OpenClaw did
+                    force_refresh=False,  # Refresh is handled above
                     force_playbook=True, # Always generate playbook
                     notify_discord=False # We handle notification manually
                 )

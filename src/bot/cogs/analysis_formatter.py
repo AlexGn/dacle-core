@@ -80,6 +80,24 @@ class AnalysisFormatter:
         mc = fmt_m(getattr(result, 'market_cap', None))
         ratio = f"{result.fdv_mc_ratio:.1f}x" if isinstance(getattr(result, 'fdv_mc_ratio', None), (int, float)) else "Unknown"
         float_pct = f"{result.float_pct:.0f}%" if isinstance(getattr(result, 'float_pct', None), (int, float)) else "Unknown"
+
+        # VC formatting
+        investor_tier = getattr(result, 'investor_tier', None) or getattr(result, 'vc_tier_classification', None)
+        vc_present = getattr(result, 'vc_present', None)
+        tier_1_vc_count = getattr(result, 'tier_1_vc_count', None)
+        vc_parts = []
+        if isinstance(investor_tier, str) and investor_tier:
+            vc_parts.append(investor_tier)
+        if isinstance(tier_1_vc_count, int):
+            vc_parts.append(f"Tier-1 x{tier_1_vc_count}")
+        if vc_present is False:
+            vc_fmt = "None"
+        elif vc_parts:
+            vc_fmt = ", ".join(vc_parts)
+        elif vc_present is True:
+            vc_fmt = "Present"
+        else:
+            vc_fmt = "Unknown"
         
         # Price and 24h change
         # Try to get price from entry_price which we now populate with current_price if it's a skip
@@ -90,7 +108,7 @@ class AnalysisFormatter:
         
         key_data = (
             f"• FDV: `{fdv}` | MC: `{mc}` | FDV/MC: `{ratio}`\n"
-            f"• Float: `{float_pct}` | VC: `Unknown`\n"
+            f"• Float: `{float_pct}` | VC: `{vc_fmt}`\n"
             f"• Price: `{price_fmt}` (24h: `{change_fmt}`)"
         )
         
