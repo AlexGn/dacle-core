@@ -131,6 +131,11 @@ class DACLEBot(commands.Bot):
             cleared_global = await self.tree.sync()
             logger.info(f"🧹 Cleared {len(cleared_global)} global slash command(s)")
 
+            # Clear guild commands to avoid duplicate entries (guild + global residue)
+            self.tree.clear_commands(guild=guild)
+            cleared_guild = await self.tree.sync(guild=guild)
+            logger.info(f"🧹 Cleared {len(cleared_guild)} guild slash command(s)")
+
             # Re-add commands as guild-scoped only, then sync to guild
             for cmd in current_commands:
                 self.tree.add_command(cmd, guild=guild)
