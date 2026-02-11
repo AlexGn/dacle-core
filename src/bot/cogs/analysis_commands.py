@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Tuple, Dict, Any
 
 import discord
+from discord import app_commands
 import requests
 from discord.ext import commands
 
@@ -114,12 +115,58 @@ class AnalysisCommands(commands.Cog):
         # Run analysis in background task
         # Pass the channel explicitly (it might be the new thread or the original channel)
         # Note: We use ctx.channel which we updated above if a thread was created
-        asyncio.create_task(self._run_analysis_task(ctx, status_msg, symbol, ctx.channel))
+        asyncio.create_task(self._run_analysis_task(ctx.author, status_msg, symbol, ctx.channel))
 
-    async def _run_analysis_task(self, ctx: commands.Context, status_msg: discord.Message, symbol: str, target_channel: discord.abc.Messageable):
+    @app_commands.command(name="analyze", description="Analyze a token and generate a playbook")
+    @app_commands.describe(symbol="Token symbol (e.g., ZRO, ZAMA, RIVER)")
+    async def analyze_slash(self, interaction: discord.Interaction, symbol: str):
+        """
+        Slash command version of analyze.
+        Usage: /analyze <SYMBOL>
+        """
+        channel = interaction.channel
+
+        if isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message(
+                f"🔍 Analyzing **{symbol.upper()}**... (creating thread)",
+                ephemeral=False
+            )
+            status_msg = await interaction.original_response()
+            try:
+                thread = await status_msg.create_thread(
+                    name=f"Analysis: {symbol.upper()}",
+                    auto_archive_duration=1440
+                )
+                thread_status = await thread.send(
+                    f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)"
+                )
+                try:
+                    await status_msg.delete()
+                except discord.NotFound:
+                    pass
+                target_channel = thread
+                status_msg = thread_status
+            except Exception as e:
+                logger.warning(f"Failed to create thread for slash analyze: {e}")
+                target_channel = channel
+        else:
+            # Already in a thread or DM
+            await interaction.response.send_message(
+                f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)",
+                ephemeral=False
+            )
+            status_msg = await interaction.original_response()
+            target_channel = channel
+
+        asyncio.create_task(
+            self._run_analysis_task(interaction.user, status_msg, symbol, target_channel)
+        )
+
+    async def _run_analysis_task(self, requester: Optional[discord.abc.User], status_msg: discord.Message, symbol: str, target_channel: discord.abc.Messageable):
         """Background task for analysis"""
         try:
-            logger.info(f"🚀 Starting on-demand analysis for {symbol} requested by {ctx.author}")
+            requester_name = requester if requester else "unknown"
+            logger.info(f"🚀 Starting on-demand analysis for {symbol} requested by {requester_name}")
 
             # Force refetch and validate required data (no embed if missing)
             loop = asyncio.get_event_loop()
