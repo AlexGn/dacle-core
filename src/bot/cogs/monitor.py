@@ -295,6 +295,18 @@ If no crypto projects mentioned, return: []
             projects.append({"name": sym, "symbol": sym, "sentiment": direction})
         return projects
 
+    def _is_trade_setup(self, content: str) -> bool:
+        """
+        Heuristic detection of a structured trade setup post.
+        """
+        text = content.lower()
+        has_symbol = bool(re.search(r"\$[a-z0-9]{2,10}", text))
+        has_entry = "entry" in text
+        has_stop = "stop" in text and ("loss" in text or "sl" in text)
+        has_target = "target" in text or "tp" in text
+        has_direction = "short" in text or "long" in text
+        return has_symbol and has_entry and has_stop and has_target and has_direction
+
     async def _store_mention(
         self,
         project_name: str,
@@ -302,6 +314,7 @@ If no crypto projects mentioned, return: []
         content: str,
         symbol: Optional[str] = None,
         trigger_channel: Optional[discord.abc.Messageable] = None,
+        force_trigger: bool = False,
     ):
         """
         Store project mention in Supabase with conviction scoring
@@ -337,8 +350,20 @@ If no crypto projects mentioned, return: []
             # Get researcher
             researcher = self.kb.get_researcher_by_name(researcher_name)
             if not researcher:
-                logger.warning(f"Researcher not found: {researcher_name}")
-                return
+                if force_trigger:
+                    try:
+                        researcher = self.kb.create_researcher(
+                            name=researcher_name,
+                            discord_username=researcher_name,
+                            data={"source": "discord_auto"},
+                        )
+                        logger.info(f"Created researcher on the fly: {researcher_name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to create researcher {researcher_name}: {e}")
+                        return
+                else:
+                    logger.warning(f"Researcher not found: {researcher_name}")
+                    return
 
             # Calculate conviction score using AI + knowledge base
             logger.info(f"🤖 Calculating conviction score for {project_name}...")
@@ -390,7 +415,7 @@ If no crypto projects mentioned, return: []
             )
 
             # Session 334: Automatic Workflow Trigger for high-conviction mentions
-            if conviction_score.final_score >= 7.0 and symbol:
+            if (conviction_score.final_score >= 7.0 or force_trigger) and symbol:
                 async def run_and_report(target_channel: Optional[discord.abc.Messageable] = None):
                     # Session 345: Deduplication - check if we already have a recent analysis
                     # Only trigger if no existing analysis OR older than 12 hours
@@ -437,7 +462,14 @@ If no crypto projects mentioned, return: []
                     if target_channel:
                          logger.info(f"🔍 DEBUG: run_and_report target_channel type: {type(target_channel)}, ID: {target_channel.id}")
 
+                    trades_channel_id = 1468948950412431598
                     if isinstance(target_channel, discord.Thread):
+                        final_target = target_channel
+                    elif (
+                        target_channel
+                        and getattr(target_channel, "name", "") == "trades"
+                        or (getattr(target_channel, "id", None) == trades_channel_id)
+                    ):
                         final_target = target_channel
                     else:
                         from src.utils.config import get_discord_config
@@ -551,8 +583,12 @@ If no crypto projects mentioned, return: []
         # Detect researcher (check both username and content - use extracted content)
         researcher_name = self._detect_researcher(message.author.name, message_content)
 
-        # Only process if from known researcher
-        if not researcher_name:
+        # Allow structured trade setups in #trades even if researcher is unknown
+        trades_channel_id = 1468948950412431598
+        is_trades_channel = (
+            getattr(message.channel, "name", "") == "trades" or message.channel.id == trades_channel_id
+        )
+        if not researcher_name and not is_trades_channel:
             return
 
         logger.info(
@@ -561,6 +597,9 @@ If no crypto projects mentioned, return: []
 
         # Get aggregated context (current message + recent messages from same user)
         aggregated_content = self._get_recent_context(message.author.id, message_content)
+        force_trigger = is_trades_channel and self._is_trade_setup(aggregated_content)
+        if force_trigger and not researcher_name:
+            researcher_name = "Community"
 
         # Log if we're using context from multiple messages
         if aggregated_content != message_content:
@@ -595,6 +634,7 @@ If no crypto projects mentioned, return: []
                     content=aggregated_content,  # Store full context
                     symbol=symbol,
                     trigger_channel=message.channel,
+                    force_trigger=force_trigger,
                 )
 
         # No need to call process_commands in a listener
