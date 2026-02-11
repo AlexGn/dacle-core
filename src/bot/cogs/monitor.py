@@ -961,6 +961,14 @@ If no crypto projects mentioned, return: []
         if force_trigger and not researcher_name:
             researcher_name = "Community"
 
+        # For structured #trades posts, force a single canonical symbol to avoid
+        # false positives from copied transcripts/usernames (e.g., "Davt97").
+        trade_symbol = None
+        if is_trades_channel and force_trigger:
+            m = re.search(r"\$([A-Z0-9]{2,10})(?:/USDT|/USD|/USDC)?", aggregated_content.upper())
+            if m:
+                trade_symbol = m.group(1)
+
         # Log if we're using context from multiple messages
         if aggregated_content != message_content:
             logger.info(
@@ -968,14 +976,22 @@ If no crypto projects mentioned, return: []
                 f"(length: {len(aggregated_content)} chars)"
             )
 
-        # Extract projects using AI (from aggregated content)
-        if self.together:
-            projects = await self._extract_projects_with_ai(aggregated_content)
+        if trade_symbol:
+            direction = "neutral"
+            if "SHORT" in aggregated_content.upper():
+                direction = "negative"
+            elif "LONG" in aggregated_content.upper():
+                direction = "positive"
+            projects = [{"name": trade_symbol, "symbol": trade_symbol, "sentiment": direction}]
         else:
-            projects = self._extract_projects_with_regex(aggregated_content)
+            # Extract projects using AI (from aggregated content)
+            if self.together:
+                projects = await self._extract_projects_with_ai(aggregated_content)
+            else:
+                projects = self._extract_projects_with_regex(aggregated_content)
 
-        if not projects:
-            projects = self._extract_projects_with_regex(aggregated_content)
+            if not projects:
+                projects = self._extract_projects_with_regex(aggregated_content)
 
         if not projects:
             logger.debug(f"No projects found in message(s) from {researcher_name}")
