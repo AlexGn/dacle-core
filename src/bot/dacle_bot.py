@@ -171,9 +171,9 @@ def run_bot():
     logger.info("Starting DACLE Discord Bot...")
 
     # Start health check HTTP server (HIGH-REL-001)
-    health_server = HealthCheckServer(host="0.0.0.0", port=8080)
+    health_server = HealthCheckServer(host="0.0.0.0", port=8081)
     health_server.start()
-    logger.info("Health check server started on http://0.0.0.0:8080")
+    logger.info("Health check server started on http://0.0.0.0:8081")
 
     try:
         # Create bot instance (will load config in __init__)
