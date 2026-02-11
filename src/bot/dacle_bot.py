@@ -113,15 +113,16 @@ class DACLEBot(commands.Bot):
 
         # Sync slash commands with Discord
         try:
-            # Global sync (may take time to propagate)
-            synced = await self.tree.sync()
-            logger.info(f"✅ Synced {len(synced)} global slash command(s)")
-
-            # Fast guild sync for private server
+            # Fast guild sync for private server (avoid global duplicates)
             guild = discord.Object(id=self.private_server_id)
             self.tree.copy_global_to(guild=guild)
             guild_synced = await self.tree.sync(guild=guild)
             logger.info(f"✅ Synced {len(guild_synced)} guild slash command(s)")
+
+            # Remove global commands to prevent duplicate /analyze entries
+            self.tree.clear_commands(guild=None)
+            global_cleared = await self.tree.sync()
+            logger.info(f"🧹 Cleared {len(global_cleared)} global slash command(s)")
         except Exception as e:
             logger.error(f"❌ Failed to sync commands: {e}")
 
