@@ -9,7 +9,7 @@ import json
 import logging
 import time
 from pathlib import Path
-from typing import Tuple, Dict, Any, Optional
+from typing import Tuple, Dict, Any, Optional, List
 
 import discord
 from discord import app_commands
@@ -26,6 +26,7 @@ from api.routers.macro import get_btc_regime_widget
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
+DISAMBIGUATION_PATH = PROJECT_ROOT / "data" / "bot" / "token_disambiguation.json"
 def _get_api_base_url() -> str:
     """Resolve API base URL at call time (after load_config)."""
     return os.getenv("DACLE_API_URL", "http://localhost:8000")
@@ -39,6 +40,55 @@ REQUIRED_FIELDS = {
 }
 
 
+class TokenDisambiguationView(discord.ui.View):
+    def __init__(self, options: List[Dict[str, Any]], requester: Optional[discord.abc.User]):
+        super().__init__(timeout=120)
+        self.options = options
+        self.requester_id = requester.id if requester else None
+        self.selection: Optional[Dict[str, Any]] = None
+
+        for idx, option in enumerate(options):
+            label = f"{idx + 1}. {option.get('name') or 'Unknown'}"
+            if len(label) > 80:
+                label = label[:77] + "..."
+            button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
+            button.callback = self._make_callback(idx)
+            self.add_item(button)
+
+        cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
+        cancel_button.callback = self._cancel
+        self.add_item(cancel_button)
+
+    def _make_callback(self, idx: int):
+        async def _callback(interaction: discord.Interaction):
+            if self.requester_id and interaction.user.id != self.requester_id:
+                await interaction.response.send_message(
+                    "Only the requester can select a token for this analysis.",
+                    ephemeral=True,
+                )
+                return
+            self.selection = self.options[idx]
+            for child in self.children:
+                child.disabled = True
+            await interaction.response.edit_message(view=self)
+            self.stop()
+
+        return _callback
+
+    async def _cancel(self, interaction: discord.Interaction):
+        if self.requester_id and interaction.user.id != self.requester_id:
+            await interaction.response.send_message(
+                "Only the requester can cancel this analysis.",
+                ephemeral=True,
+            )
+            return
+        self.selection = None
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self)
+        self.stop()
+
+
 class AnalysisCommands(commands.Cog):
     """
     Cog for on-demand analysis commands
@@ -47,6 +97,73 @@ class AnalysisCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         logger.info("AnalysisCommands cog initialized")
+
+    def _load_disambiguation_cache(self) -> Dict[str, Dict[str, Any]]:
+        if not DISAMBIGUATION_PATH.exists():
+            return {}
+        try:
+            with open(DISAMBIGUATION_PATH, "r") as f:
+                payload = json.load(f)
+                return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_disambiguation_cache(self, cache: Dict[str, Dict[str, Any]]) -> None:
+        DISAMBIGUATION_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = DISAMBIGUATION_PATH.with_suffix(".tmp")
+        with open(tmp_path, "w") as f:
+            json.dump(cache, f, indent=2)
+        os.replace(tmp_path, DISAMBIGUATION_PATH)
+
+    def _get_cached_disambiguation(self, symbol: str) -> Optional[Dict[str, Any]]:
+        cache = self._load_disambiguation_cache()
+        return cache.get(symbol.upper())
+
+    def _cache_disambiguation(self, symbol: str, selection: Dict[str, Any]) -> None:
+        cache = self._load_disambiguation_cache()
+        cache[symbol.upper()] = {
+            "symbol": selection.get("symbol"),
+            "name": selection.get("name"),
+            "external_id": selection.get("external_id") or selection.get("coingecko_id"),
+            "source": selection.get("source"),
+        }
+        self._write_disambiguation_cache(cache)
+
+    def _search_token(self, symbol: str) -> List[Dict[str, Any]]:
+        api_base = _get_api_base_url()
+        url = f"{api_base}/api/tokens/search"
+        resp = requests.post(url, json={"symbol": symbol.upper()}, timeout=15)
+        resp.raise_for_status()
+        payload = resp.json() or {}
+        return payload.get("matches") or []
+
+    def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
+        api_base = _get_api_base_url()
+        url = f"{api_base}/api/tokens/research"
+        resp = requests.post(url, json={"symbol": symbol.upper(), "name": name}, timeout=20)
+        resp.raise_for_status()
+        payload = resp.json()
+        task_id = payload.get("task_id")
+        if not task_id:
+            raise RuntimeError("Research did not return a task_id")
+
+        status_url = f"{api_base}/api/tokens/research/{task_id}"
+        start = time.time()
+        while True:
+            status_resp = requests.get(status_url, timeout=15)
+            if status_resp.status_code == 404:
+                time.sleep(2)
+                continue
+            status_resp.raise_for_status()
+            status_payload = status_resp.json()
+            status = status_payload.get("status")
+            if status in {"completed", "completed_with_warnings"}:
+                return status_payload
+            if status in {"failed", "skipped"}:
+                raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
+            if time.time() - start > 300:
+                raise TimeoutError("Research timed out after 300s")
+            time.sleep(2)
 
     def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
         """Trigger token refetch and wait for completion."""
@@ -59,7 +176,7 @@ class AnalysisCommands(commands.Cog):
         if not task_id:
             raise RuntimeError("Refetch did not return a task_id")
 
-        status_url = f"{API_BASE_URL}/api/tokens/research/{task_id}"
+        status_url = f"{api_base}/api/tokens/research/{task_id}"
         start = time.time()
         while True:
             status_resp = requests.get(status_url, timeout=15)
@@ -111,6 +228,67 @@ class AnalysisCommands(commands.Cog):
         channel = self.bot.get_channel(channel_id)
         return channel if isinstance(channel, discord.TextChannel) else None
 
+    async def _maybe_disambiguate(
+        self,
+        symbol: str,
+        requester: Optional[discord.abc.User],
+        target_channel: discord.abc.Messageable,
+    ) -> Optional[Tuple[str, Optional[str]]]:
+        cached = self._get_cached_disambiguation(symbol)
+        if cached and cached.get("name"):
+            return cached.get("symbol") or symbol, cached.get("name")
+
+        loop = asyncio.get_event_loop()
+        matches = await loop.run_in_executor(None, lambda: self._search_token(symbol))
+        if not matches:
+            return symbol, None
+        if len(matches) == 1:
+            match = matches[0]
+            if match.get("name"):
+                self._cache_disambiguation(symbol, match)
+            return match.get("symbol") or symbol, match.get("name")
+
+        selection = await self._prompt_disambiguation(matches, requester, target_channel, symbol)
+        if not selection:
+            return None
+        self._cache_disambiguation(symbol, selection)
+        return selection.get("symbol") or symbol, selection.get("name")
+
+    async def _prompt_disambiguation(
+        self,
+        matches: List[Dict[str, Any]],
+        requester: Optional[discord.abc.User],
+        target_channel: discord.abc.Messageable,
+        symbol: str,
+    ) -> Optional[Dict[str, Any]]:
+        max_options = min(5, len(matches))
+        shortlist = matches[:max_options]
+        lines = []
+        for idx, match in enumerate(shortlist, start=1):
+            name = match.get("name") or "Unknown"
+            src = match.get("source") or "unknown"
+            mc = match.get("market_cap")
+            mc_text = f"${mc:,.0f}" if isinstance(mc, (int, float)) else "n/a"
+            lines.append(f"{idx}. {name} ({src}, MC {mc_text})")
+        prompt = (
+            f"Multiple matches found for **{symbol.upper()}**. Select the correct token:\n"
+            + "\n".join(lines)
+        )
+        view = TokenDisambiguationView(shortlist, requester)
+        prompt_msg = await target_channel.send(content=prompt, view=view)
+        await view.wait()
+        if not view.selection:
+            await prompt_msg.edit(content="⏳ Disambiguation timed out. Please retry the command.", view=None)
+            return None
+        await prompt_msg.edit(
+            content=(
+                f"✅ Selected **{view.selection.get('name')}** ({view.selection.get('symbol')}). "
+                "Continuing analysis..."
+            ),
+            view=None,
+        )
+        return view.selection
+
     @commands.command(name="analyze")
     async def analyze(self, ctx: commands.Context, symbol: str):
         """
@@ -126,22 +304,33 @@ class AnalysisCommands(commands.Cog):
                     auto_archive_duration=1440 # 24 hours
                 )
                 # Reply INSIDE the new thread
-                status_msg = await thread.send(f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)")
+                status_msg = await thread.send(f"🔍 Resolving **{symbol.upper()}**...")
                 
                 # Update context to point to the thread for subsequent replies
                 ctx.channel = thread
             except Exception as e:
                 logger.warning(f"Failed to create thread: {e}")
                 # Fallback to main channel reply
-                status_msg = await ctx.reply(f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)", mention_author=False)
+                status_msg = await ctx.reply(f"🔍 Resolving **{symbol.upper()}**...", mention_author=False)
         else:
             # Already in a thread or DM, just reply
-            status_msg = await ctx.reply(f"🔍 Analyzing **{symbol.upper()}**... (this may take 10-20s)", mention_author=False)
+            status_msg = await ctx.reply(f"🔍 Resolving **{symbol.upper()}**...", mention_author=False)
+
+        resolved = await self._maybe_disambiguate(symbol, ctx.author, ctx.channel)
+        if not resolved:
+            await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
+            return
+        resolved_symbol, resolved_name = resolved
+        await status_msg.edit(
+            content=f"🔍 Analyzing **{resolved_symbol.upper()}**... (this may take 10-20s)"
+        )
 
         # Run analysis in background task
         # Pass the channel explicitly (it might be the new thread or the original channel)
         # Note: We use ctx.channel which we updated above if a thread was created
-        asyncio.create_task(self._run_analysis_task(ctx.author, status_msg, symbol, ctx.channel))
+        asyncio.create_task(
+            self._run_analysis_task(ctx.author, status_msg, resolved_symbol, ctx.channel, resolved_name=resolved_name)
+        )
 
     @app_commands.command(name="analyze", description="Analyze a token and generate a playbook")
     @app_commands.describe(symbol="Token symbol (e.g., ZRO, ZAMA, RIVER)")
@@ -196,9 +385,23 @@ class AnalysisCommands(commands.Cog):
             logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
             target_channel = analysis_channel
 
+        resolved = await self._maybe_disambiguate(symbol, interaction.user, target_channel)
+        if not resolved:
+            await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
+            return
+        resolved_symbol, resolved_name = resolved
+        await status_msg.edit(
+            content=f"🔍 Analyzing **{resolved_symbol}**... (this may take 10-20s)"
+        )
+
         asyncio.create_task(
             self._run_analysis_task(
-                interaction.user, status_msg, symbol, target_channel, notify_channel=analysis_channel
+                interaction.user,
+                status_msg,
+                resolved_symbol,
+                target_channel,
+                notify_channel=analysis_channel,
+                resolved_name=resolved_name,
             )
         )
 
@@ -209,6 +412,7 @@ class AnalysisCommands(commands.Cog):
         symbol: str,
         target_channel: discord.abc.Messageable,
         notify_channel: Optional[discord.abc.Messageable] = None,
+        resolved_name: Optional[str] = None,
     ):
         """Background task for analysis"""
         try:
@@ -217,7 +421,10 @@ class AnalysisCommands(commands.Cog):
 
             # Force refetch and validate required data (no embed if missing)
             loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, lambda: self._refresh_token_data(symbol))
+            if resolved_name:
+                await loop.run_in_executor(None, lambda: self._research_token_data(symbol, resolved_name))
+            else:
+                await loop.run_in_executor(None, lambda: self._refresh_token_data(symbol))
             consolidated = await loop.run_in_executor(None, lambda: self._load_consolidated(symbol))
             ok, missing = self._validate_required_fields(consolidated)
             if not ok:
