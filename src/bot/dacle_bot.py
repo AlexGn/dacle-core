@@ -187,8 +187,11 @@ class DACLEBot(commands.Bot):
         try:
             self.tree.copy_global_to(guild=guild)
             logger.info(f"🔄 Syncing guild slash commands in background to {guild.id}...")
-            synced = await self.tree.sync(guild=guild)
+            import asyncio
+            synced = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=300)
             logger.info(f"✅ Synced {len(synced)} guild slash command(s) in background")
+        except asyncio.TimeoutError:
+            logger.error("❌ Timed out while syncing slash commands in background (5 min limit)")
         except Exception as e:
             logger.error(f"❌ Failed to sync commands in background: {e}")
 
