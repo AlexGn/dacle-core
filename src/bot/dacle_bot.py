@@ -125,6 +125,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load trade_router cog: {e}")
 
+        # Load Scout Commands (Self-Evolution Audit)
+        try:
+            await self.load_extension("src.bot.cogs.scout_commands")
+            logger.info("✅ Loaded scout_commands cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load scout_commands cog: {e}")
+
         # Sync slash commands with Discord
         try:
             # Fast guild sync for private server (avoid global duplicates)
