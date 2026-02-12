@@ -442,13 +442,28 @@ class MessageMonitor(commands.Cog):
         Attempt to reconstruct trade setup from recent thread history.
         Useful if the bot restarted and in-memory cache is gone.
         """
+        token_from_thread = None
+        try:
+            m_name = re.search(r"([A-Z0-9]{2,10})", (thread.name or "").upper())
+            if m_name:
+                token_from_thread = m_name.group(1)
+        except Exception:
+            token_from_thread = None
+
         try:
             async for msg in thread.history(limit=25, oldest_first=False):
                 if not msg or not msg.content:
                     continue
                 setup = self._parse_trade_setup(msg.content)
                 if setup:
-                    return setup
+                    m_symbol = re.search(
+                        r"\$([A-Z0-9]{2,10})(?:/USDT|/USD|/USDC)?",
+                        msg.content.upper(),
+                    )
+                    symbol = m_symbol.group(1) if m_symbol else token_from_thread
+                    if symbol:
+                        setup["symbol"] = symbol
+                        return setup
         except Exception as e:
             logger.warning(f"Failed to recover thread setup for {thread.id}: {e}")
         return None
