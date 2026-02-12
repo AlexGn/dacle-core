@@ -142,20 +142,22 @@ class DACLEBot(commands.Bot):
 
             # Clear global commands on Discord by syncing an empty global set
             self.tree.clear_commands(guild=None)
-            cleared_global = await self.tree.sync()
+            cleared_global = await asyncio.wait_for(self.tree.sync(), timeout=30)
             logger.info(f"🧹 Cleared {len(cleared_global)} global slash command(s)")
 
             # Clear guild commands to avoid duplicate entries (guild + global residue)
             self.tree.clear_commands(guild=guild)
-            cleared_guild = await self.tree.sync(guild=guild)
+            cleared_guild = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=30)
             logger.info(f"🧹 Cleared {len(cleared_guild)} guild slash command(s)")
 
             # Re-add commands as guild-scoped only, then sync to guild
             for cmd in current_commands:
                 self.tree.add_command(cmd, guild=guild)
 
-            guild_synced = await self.tree.sync(guild=guild)
+            guild_synced = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=30)
             logger.info(f"✅ Synced {len(guild_synced)} guild slash command(s)")
+        except asyncio.TimeoutError:
+            logger.error("❌ Timed out while syncing slash commands")
         except Exception as e:
             logger.error(f"❌ Failed to sync commands: {e}")
 
