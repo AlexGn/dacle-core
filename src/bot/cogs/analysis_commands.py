@@ -14,6 +14,7 @@ from typing import Tuple, Dict, Any, Optional
 import discord
 from discord import app_commands
 import requests
+import os
 from discord.ext import commands
 
 from src.orchestration.trade_workflow import full_pipeline
@@ -25,7 +26,7 @@ from api.routers.macro import get_btc_regime_widget
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
-API_BASE_URL = "http://localhost:8000"
+API_BASE_URL = os.getenv("DACLE_API_URL", "http://localhost:8000")
 DEFAULT_ANALYSIS_CHANNEL_ID = 1470403542253703369
 
 REQUIRED_FIELDS = {

@@ -29,9 +29,53 @@ from src.orchestration.trade_workflow import full_pipeline
 import asyncio
 from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
+from src.agent.reasoning.evolver import CapabilityEvolver
 from api.routers.macro import get_btc_regime_widget
 
 logger = get_logger(__name__)
+
+
+class EvolutionApprovalView(discord.ui.View):
+    """View for approving autonomous capability evolution."""
+
+    def __init__(self, spec: Dict[str, Any]):
+        super().__init__(timeout=3600)  # 1 hour timeout
+        self.spec = spec
+
+    @discord.ui.button(label="Approve Evolution", style=discord.ButtonStyle.green, emoji="✅")
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        
+        try:
+            from src.agent.reasoning.evolver import CapabilityEvolver
+            from src.agent.reasoning.deployer import SandboxDeployer
+            import os
+            
+            evolver = CapabilityEvolver()
+            scaffold = evolver.scaffold_capability(self.spec)
+            
+            project_root = str(Path(__file__).parent.parent.parent.parent)
+            deployer = SandboxDeployer(project_root)
+            
+            # Deploy
+            res = deployer.deploy(scaffold)
+            
+            if res["status"] == "SUCCESS":
+                msg = (
+                    f"✅ **EVOLUTION COMPLETE**\n\n"
+                    f"I have successfully built and deployed `{self.spec['name']}`.\n\n"
+                    f"**Steps taken:**\n" + "\n".join(f"• {s}" for s in res["steps"]) + "\n\n"
+                    f"Tests passed! The new tool is now live in my sandbox. You can try asking about it now."
+                )
+            else:
+                msg = f"❌ **EVOLUTION FAILED**: {res.get('status')}\n\n```\n{res.get('test_output', 'Unknown error')[:500]}\n```"
+                
+            await interaction.followup.send(msg)
+            self.stop()
+            
+        except Exception as e:
+            logger.error(f"Evolution failed: {e}", exc_info=True)
+            await interaction.followup.send(f"❌ Critical evolution error: {str(e)}")
 
 
 class MessageMonitor(commands.Cog):
@@ -615,6 +659,7 @@ If no crypto projects mentioned, return: []
 
                         def _call_pre_trade():
                             import requests
+                            import os
                             payload = {
                                 "token": symbol,
                                 "direction": trade_setup["direction"],
@@ -622,8 +667,9 @@ If no crypto projects mentioned, return: []
                                 "sl": trade_setup["sl"],
                                 "target": trade_setup["target"],
                             }
+                            api_base = os.getenv("DACLE_API_URL", "http://localhost:8000")
                             resp = requests.post(
-                                "http://localhost:8000/api/execution/pre-trade-check",
+                                f"{api_base}/api/execution/pre-trade-check",
                                 json=payload,
                                 timeout=20,
                             )
@@ -858,6 +904,7 @@ If no crypto projects mentioned, return: []
                             pre_trade_approved=setup.get("pre_trade_approved"),
                         )
                         import requests
+                        import os
                         payload = {
                             "token": setup["symbol"],
                             "direction": setup["direction"],
@@ -865,8 +912,9 @@ If no crypto projects mentioned, return: []
                             "sl": setup["sl"],
                             "target": setup["target"],
                         }
+                        api_base = os.getenv("DACLE_API_URL", "http://localhost:8000")
                         resp = requests.post(
-                            "http://localhost:8000/api/execution/full-analysis",
+                            f"{api_base}/api/execution/full-analysis",
                             json=payload,
                             timeout=20,
                         )
@@ -912,6 +960,7 @@ If no crypto projects mentioned, return: []
                                 pre_trade_approved=recovered.get("pre_trade_approved"),
                             )
                             import requests
+                            import os
                             payload = {
                                 "token": recovered["symbol"],
                                 "direction": recovered["direction"],
@@ -919,8 +968,9 @@ If no crypto projects mentioned, return: []
                                 "sl": recovered["sl"],
                                 "target": recovered["target"],
                             }
+                            api_base = os.getenv("DACLE_API_URL", "http://localhost:8000")
                             resp = requests.post(
-                                "http://localhost:8000/api/execution/full-analysis",
+                                f"{api_base}/api/execution/full-analysis",
                                 json=payload,
                                 timeout=20,
                             )
@@ -995,6 +1045,20 @@ If no crypto projects mentioned, return: []
 
         if not projects:
             logger.debug(f"No projects found in message(s) from {researcher_name}")
+            
+            # Tier 6: Proactive Gap Detection (only if bot is mentioned)
+            if self.bot.user.mentioned_in(message):
+                try:
+                    evolver = CapabilityEvolver()
+                    gap = evolver.analyze_gap(message_content)
+                    
+                    if gap["status"] == "NEW_CAPABILITY_NEEDED":
+                        spec = evolver.generate_spec(gap)
+                        proposal = evolver.propose_upgrade(spec)
+                        view = EvolutionApprovalView(spec)
+                        await message.reply(proposal, view=view)
+                except Exception as e:
+                    logger.error(f"Gap detection failed: {e}")
             return
 
         # Store each mention
