@@ -4,6 +4,7 @@ Main bot implementation for monitoring Discord messages and tracking project men
 """
 
 import sys
+import asyncio
 from pathlib import Path
 from typing import Optional
 
