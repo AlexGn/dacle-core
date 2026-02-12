@@ -234,15 +234,17 @@ class AnalysisCommands(commands.Cog):
         requester: Optional[discord.abc.User],
         target_channel: discord.abc.Messageable,
     ) -> Optional[Tuple[str, Optional[str]]]:
-        cached = self._get_cached_disambiguation(symbol)
-        if cached and cached.get("name"):
-            return cached.get("symbol") or symbol, cached.get("name")
+        force_prompt = len(symbol) <= 2
+        if not force_prompt:
+            cached = self._get_cached_disambiguation(symbol)
+            if cached and cached.get("name"):
+                return cached.get("symbol") or symbol, cached.get("name")
 
         loop = asyncio.get_event_loop()
         matches = await loop.run_in_executor(None, lambda: self._search_token(symbol))
         if not matches:
             return symbol, None
-        if len(matches) == 1:
+        if len(matches) == 1 and not force_prompt:
             match = matches[0]
             if match.get("name"):
                 self._cache_disambiguation(symbol, match)
