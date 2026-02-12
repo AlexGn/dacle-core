@@ -161,16 +161,8 @@ class DACLEBot(commands.Bot):
         private_server = self.get_guild(self.private_server_id)
         if private_server:
             logger.info(f"✅ Found private server: {private_server.name}")
-            try:
-                # Copy global commands into this guild and sync now that guild is available
-                self.tree.copy_global_to(guild=private_server)
-                logger.info(f"🔄 Syncing guild slash commands in on_ready to {private_server.id}...")
-                synced = await asyncio.wait_for(self.tree.sync(guild=private_server), timeout=60)
-                logger.info(f"✅ Synced {len(synced)} guild slash command(s) in on_ready")
-            except asyncio.TimeoutError:
-                logger.error("❌ Timed out while syncing slash commands in on_ready")
-            except Exception as e:
-                logger.error(f"❌ Failed to sync commands in on_ready: {e}")
+            # Sync slash commands in the background to avoid blocking on_ready
+            self.loop.create_task(self._sync_guild_commands(private_server))
 
             # List all channels the bot can see
             logger.info(f"📋 Channels in {private_server.name}:")
@@ -189,6 +181,18 @@ class DACLEBot(commands.Bot):
         await self.change_presence(
             activity=discord.Activity(type=discord.ActivityType.watching, name="crypto signals 📊")
         )
+
+    async def _sync_guild_commands(self, guild: discord.Guild) -> None:
+        """Sync slash commands to the given guild without blocking on_ready."""
+        try:
+            self.tree.copy_global_to(guild=guild)
+            logger.info(f"🔄 Syncing guild slash commands in background to {guild.id}...")
+            synced = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=60)
+            logger.info(f"✅ Synced {len(synced)} guild slash command(s) in background")
+        except asyncio.TimeoutError:
+            logger.error("❌ Timed out while syncing slash commands in background")
+        except Exception as e:
+            logger.error(f"❌ Failed to sync commands in background: {e}")
 
         # Start periodic health checks for database and Redis
         logger.info("Starting periodic health checks...")
