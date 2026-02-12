@@ -146,6 +146,9 @@ class DACLEBot(commands.Bot):
             else:
                 logger.warning("⚠️ No app commands registered before sync")
 
+            # Ensure global commands are copied to the guild before syncing
+            self.tree.copy_global_to(guild=guild)
+
             logger.info("🔄 Syncing guild slash commands...")
             guild_synced = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=60)
             logger.info(f"✅ Synced {len(guild_synced)} guild slash command(s)")
