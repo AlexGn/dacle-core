@@ -2,7 +2,7 @@
 LLM/Web Fetchers Module
 
 Consolidates LLM-powered web content extraction:
-- LLMWebFetch: Multi-provider (OpenAI, Together, Anthropic)
+- LLMWebFetch: Multi-provider (OpenAI, Anthropic)
 - Perplexity: Real-time web search with citations
 - Claude: High-quality web content analysis
 
@@ -56,7 +56,6 @@ class LLMWebFetch:
 
     Providers:
     - openai: GPT-4o-mini (recommended, best cost/quality)
-    - together: Llama 3.1 70B (cheapest)
     - anthropic: Claude 3.5 Sonnet (highest quality)
 
     Usage:
@@ -72,7 +71,7 @@ class LLMWebFetch:
         Initialize LLM WebFetch.
 
         Args:
-            provider: 'openai' (recommended), 'together' (cheap), or 'anthropic'
+            provider: 'openai' (recommended) or 'anthropic'
         """
         from src.data.fetchers.llm_webfetch import LLMWebFetch as _LLMWebFetch
         self._impl = _LLMWebFetch(provider=provider)

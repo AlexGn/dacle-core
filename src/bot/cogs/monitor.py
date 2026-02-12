@@ -1,8 +1,6 @@
 """
 Message Monitor Cog
 Monitors Discord messages for crypto project mentions and stores them in Supabase
-
-Session 261: Together.ai is DEPRECATED - embedding features disabled.
 """
 
 import re
@@ -12,14 +10,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import discord
 from discord.ext import commands
-
-# Session 261: Together.ai DEPRECATED - make import optional
-try:
-    from src.ai.together_client import get_together_client
-    TOGETHER_AVAILABLE = True
-except ImportError:
-    get_together_client = None  # type: ignore
-    TOGETHER_AVAILABLE = False
 
 from src.knowledge.knowledge_base import KnowledgeBase
 from src.knowledge.supabase_client import get_knowledge_base
@@ -50,6 +40,7 @@ class EvolutionApprovalView(discord.ui.View):
             from src.agent.reasoning.evolver import CapabilityEvolver
             from src.agent.reasoning.deployer import SandboxDeployer
             import os
+            from pathlib import Path
             
             evolver = CapabilityEvolver()
             scaffold = evolver.scaffold_capability(self.spec)
@@ -99,21 +90,18 @@ class MessageMonitor(commands.Cog):
     def __init__(self, bot: commands.Bot):
         """Initialize the monitor cog"""
         self.bot = bot
-        # Session 261: Together.ai deprecated - make optional
-        self.together = get_together_client() if TOGETHER_AVAILABLE and get_together_client else None
         self.kb = get_knowledge_base()
 
         self.researchers = self._load_researchers()
 
         # Initialize conviction scorer with knowledge base
-        knowledge_base = KnowledgeBase(supabase_client=self.kb, together_client=self.together)
+        knowledge_base = KnowledgeBase(supabase_client=self.kb)
         tiers = {}
         for info in self.researchers.values():
             name = info.get("name")
             if name and name not in tiers:
                 tiers[name] = int(info.get("tier", 1))
         self.conviction_scorer = MentionConvictionScorer(
-            together_client=self.together,
             knowledge_base=knowledge_base,
             researcher_tiers=tiers,
         )
@@ -277,55 +265,9 @@ class MessageMonitor(commands.Cog):
             return match.group(1)
         return None
 
-    async def _extract_projects_with_ai(self, content: str) -> List[Dict[str, str]]:
-        """
-        Use Together.ai LLM to extract project mentions from message
-
-        Args:
-            content: Message content
-
-        Returns:
-            List of dicts with 'name', 'symbol', 'sentiment'
-        """
-        try:
-            prompt = f"""Extract cryptocurrency project mentions from this message.
-Return ONLY valid JSON array with this exact format:
-[{{"name": "Project Name", "symbol": "SYMBOL", "sentiment": "positive/neutral/negative"}}]
-
-Message: {content}
-
-If no crypto projects mentioned, return: []
-"""
-
-            messages = [
-                {
-                    "role": "system",
-                    "content": "You are a crypto project extractor. Return only valid JSON arrays.",
-                },
-                {"role": "user", "content": prompt},
-            ]
-
-            response = self.together.chat_completion(messages, temperature=0.3, max_tokens=300)
-
-            # Parse JSON response
-            import json
-
-            projects = json.loads(response.strip())
-
-            # Validate it's a list
-            if isinstance(projects, list):
-                return projects
-            else:
-                logger.warning(f"AI returned non-list: {response}")
-                return []
-
-        except Exception as e:
-            logger.error(f"Error extracting projects with AI: {e}")
-            return []
-
     def _extract_projects_with_regex(self, content: str) -> List[Dict[str, str]]:
         """
-        Regex-based fallback for extracting symbols from trade messages.
+        Regex-based extraction of symbols from trade messages.
         Supports patterns like $DUSK, $DUSK/USDT, and infers direction.
         """
         projects = []
@@ -532,7 +474,7 @@ If no crypto projects mentioned, return: []
             symbol: Project symbol (optional)
         """
         try:
-            # Session 345: Deduplicate by symbol first (more reliable), then by name
+            # Deduplicate by symbol first (more reliable), then by name
             project = None
             if symbol:
                 project = self.kb.get_project_by_symbol(symbol)
@@ -571,7 +513,7 @@ If no crypto projects mentioned, return: []
                     logger.warning(f"Researcher not found: {researcher_name}")
                     return
 
-            # Calculate conviction score using AI + knowledge base
+            # Calculate conviction score using knowledge base
             logger.info(f"🤖 Calculating conviction score for {project_name}...")
             conviction_score = self.conviction_scorer.score_mention(
                 message_text=content,
@@ -608,22 +550,15 @@ If no crypto projects mentioned, return: []
                 data=conviction_data,
             )
 
-            # Generate and store embedding for semantic search (if available)
-            if self.together and hasattr(self.together, "generate_embedding"):
-                embedding = self.together.generate_embedding(f"{project_name}: {content[:300]}")
-                self.kb.update_project(project["id"], {"embedding": embedding})
-            else:
-                logger.debug("Skipping embedding generation (Together.ai not available)")
-
             logger.info(
                 f"✅ Stored mention: {project_name} by {researcher_name} "
                 f"(mention ID: {mention['id']}, score: {conviction_score.final_score}/10)"
             )
 
-            # Session 334: Automatic Workflow Trigger for high-conviction mentions
+            # Automatic Workflow Trigger for high-conviction mentions
             if (conviction_score.final_score >= 7.0 or force_trigger) and symbol:
                 async def run_and_report(target_channel: Optional[discord.abc.Messageable] = None):
-                    # Session 345: Deduplication - skip only when NOT a structured trade setup
+                    # Deduplication - skip only when NOT a structured trade setup
                     if not trade_setup:
                         from src.orchestration.trade_workflow import _get_token_dir
                         import json
@@ -659,7 +594,6 @@ If no crypto projects mentioned, return: []
 
                         def _call_pre_trade():
                             import requests
-                            import os
                             payload = {
                                 "token": symbol,
                                 "direction": trade_setup["direction"],
@@ -667,9 +601,8 @@ If no crypto projects mentioned, return: []
                                 "sl": trade_setup["sl"],
                                 "target": trade_setup["target"],
                             }
-                            api_base = os.getenv("DACLE_API_URL", "http://localhost:8000")
                             resp = requests.post(
-                                f"{api_base}/api/execution/pre-trade-check",
+                                "http://localhost:8000/api/execution/pre-trade-check",
                                 json=payload,
                                 timeout=20,
                             )
@@ -904,7 +837,6 @@ If no crypto projects mentioned, return: []
                             pre_trade_approved=setup.get("pre_trade_approved"),
                         )
                         import requests
-                        import os
                         payload = {
                             "token": setup["symbol"],
                             "direction": setup["direction"],
@@ -912,9 +844,8 @@ If no crypto projects mentioned, return: []
                             "sl": setup["sl"],
                             "target": setup["target"],
                         }
-                        api_base = os.getenv("DACLE_API_URL", "http://localhost:8000")
                         resp = requests.post(
-                            f"{api_base}/api/execution/full-analysis",
+                            "http://localhost:8000/api/execution/full-analysis",
                             json=payload,
                             timeout=20,
                         )
@@ -960,7 +891,6 @@ If no crypto projects mentioned, return: []
                                 pre_trade_approved=recovered.get("pre_trade_approved"),
                             )
                             import requests
-                            import os
                             payload = {
                                 "token": recovered["symbol"],
                                 "direction": recovered["direction"],
@@ -968,9 +898,8 @@ If no crypto projects mentioned, return: []
                                 "sl": recovered["sl"],
                                 "target": recovered["target"],
                             }
-                            api_base = os.getenv("DACLE_API_URL", "http://localhost:8000")
                             resp = requests.post(
-                                f"{api_base}/api/execution/full-analysis",
+                                "http://localhost:8000/api/execution/full-analysis",
                                 json=payload,
                                 timeout=20,
                             )
@@ -1034,14 +963,8 @@ If no crypto projects mentioned, return: []
                 direction = "positive"
             projects = [{"name": trade_symbol, "symbol": trade_symbol, "sentiment": direction}]
         else:
-            # Extract projects using AI (from aggregated content)
-            if self.together:
-                projects = await self._extract_projects_with_ai(aggregated_content)
-            else:
-                projects = self._extract_projects_with_regex(aggregated_content)
-
-            if not projects:
-                projects = self._extract_projects_with_regex(aggregated_content)
+            # Extract projects using regex (Together.ai removed)
+            projects = self._extract_projects_with_regex(aggregated_content)
 
         if not projects:
             logger.debug(f"No projects found in message(s) from {researcher_name}")

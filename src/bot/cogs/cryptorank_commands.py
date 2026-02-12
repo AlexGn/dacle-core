@@ -12,16 +12,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-# Together is optional - only needed for LLM extraction
-try:
-    from together import Together
-except ImportError:
-    Together = None  # type: ignore
-
 from src.integrations.cryptorank.scanner import TGEScanner
 from src.integrations.cryptorank.unlock_monitor import UnlockMonitor
 from src.knowledge.supabase_client import get_knowledge_base
-from src.utils.config import get_together_config
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +26,9 @@ class CryptoRankCommands(commands.Cog):
         self.bot = bot
         self.kb = get_knowledge_base()
 
-        # Initialize Together client for LLM extraction (optional)
-        self.together_client = None
-        if Together is not None:
-            try:
-                together_config = get_together_config()
-                self.together_client = Together(api_key=together_config.api_key)
-            except Exception as e:
-                logger.warning(f"Together client not available: {e}")
-
-        # Initialize scanners
-        self.tge_scanner = TGEScanner(self.kb, self.together_client)
-        self.unlock_monitor = UnlockMonitor(self.kb, self.together_client)
+        # Initialize scanners (LLM extraction disabled)
+        self.tge_scanner = TGEScanner(self.kb)
+        self.unlock_monitor = UnlockMonitor(self.kb)
 
     @app_commands.command(
         name="scan-tges", description="Scan CryptoRank for upcoming TGE/ICO/IDO events"

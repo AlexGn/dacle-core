@@ -219,31 +219,6 @@ class DiscordConfig:
 
 
 @dataclass
-class TogetherConfig:
-    """Together.ai API configuration"""
-
-    api_key: str
-    model: str
-    embedding_model: str
-
-    @classmethod
-    def from_env(cls) -> "TogetherConfig":
-        """Load Together.ai config from environment variables"""
-        api_key = os.getenv("TOGETHER_API_KEY")
-
-        if not api_key:
-            raise ValueError("TOGETHER_API_KEY not set in environment")
-
-        # Default models - can be overridden in .env
-        model = os.getenv("TOGETHER_MODEL", "meta-llama/Llama-3.3-70B-Instruct-Turbo")
-        embedding_model = os.getenv(
-            "TOGETHER_EMBEDDING_MODEL", "togethercomputer/m2-bert-80M-8k-retrieval"
-        )
-
-        return cls(api_key=api_key, model=model, embedding_model=embedding_model)
-
-
-@dataclass
 class RedisConfig:
     """Redis connection configuration"""
 
@@ -300,7 +275,6 @@ class AppConfig:
     log_level: str
     supabase: SupabaseConfig
     discord: DiscordConfig
-    together: Optional[TogetherConfig]
     redis: RedisConfig
     perplexity: Optional[PerplexityConfig]
     openai: Optional[OpenAIConfig]
@@ -328,7 +302,6 @@ class AppConfig:
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             supabase=SupabaseConfig.from_env(),
             discord=DiscordConfig.from_env(),
-            together=together_config,
             redis=RedisConfig.from_env(),
             perplexity=perplexity_config,
             openai=openai_config,
@@ -424,11 +397,6 @@ def get_supabase_config() -> SupabaseConfig:
 def get_discord_config() -> DiscordConfig:
     """Get Discord configuration"""
     return get_config().discord
-
-
-def get_together_config() -> TogetherConfig:
-    """Get Together.ai configuration"""
-    return get_config().together
 
 
 def get_redis_config() -> RedisConfig:
