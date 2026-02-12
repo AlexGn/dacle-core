@@ -23,6 +23,9 @@ Uses existing analysis modules:
 Session 353: Initial implementation (feature/computed-ta branch)
 """
 import logging
+import os
+import hashlib
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -37,7 +40,7 @@ logger = logging.getLogger(__name__)
 # OHLCV data fetching
 # ---------------------------------------------------------------------------
 
-def _fetch_ohlcv(
+def _fetch_ohlcv_binance(
     symbol: str,
     timeframe: str = "4h",
     limit: int = 200,
@@ -45,8 +48,7 @@ def _fetch_ohlcv(
     """
     Fetch OHLCV candles via CCXT.
 
-    Tries perpetual first (what David trades), then spot, then Blofin.
-    Blofin fallback catches tokens listed there but not on Binance.
+    Tries perpetual first (what David trades), then spot.
     Returns list of [timestamp, open, high, low, close, volume].
     """
     exchange = ccxt.binance({"enableRateLimit": True, "timeout": 15000})
@@ -71,12 +73,20 @@ def _fetch_ohlcv(
             logger.warning(f"{pair} not available: {e}")
             continue
 
-    # Session 383: Blofin fallback for tokens not on Binance
+    logger.warning(f"No Binance OHLCV data found for {symbol}")
+    return []
+
+
+def _fetch_ohlcv_blofin(
+    symbol: str,
+    timeframe: str = "4h",
+    limit: int = 200,
+) -> list[list]:
+    """Fetch OHLCV from Blofin public data."""
     try:
         from src.data.fetchers.blofin_fetcher import BlofinFetcher
     except ImportError:
         logger.debug("BlofinFetcher not available — skipping Blofin OHLCV fallback")
-        logger.warning(f"No OHLCV data found for {symbol}")
         return []
 
     try:
@@ -85,14 +95,201 @@ def _fetch_ohlcv(
         if ohlcv and len(ohlcv) > 0:
             return ohlcv
     except Exception as e:
-        logger.warning(f"Blofin OHLCV fallback failed for {symbol}: {e}")
-
-    logger.warning(f"No OHLCV data found for {symbol}")
+        logger.warning(f"Blofin OHLCV fetch failed for {symbol}: {e}")
     return []
 
 
 # Backward compatibility alias
-_fetch_ohlcv_binance = _fetch_ohlcv
+_fetch_ohlcv = _fetch_ohlcv_binance
+
+
+def _timeframe_to_ms(timeframe: str) -> int:
+    """Convert CCXT timeframe to milliseconds."""
+    tf = (timeframe or "4h").strip().lower()
+    mapping = {
+        "1m": 60_000,
+        "3m": 180_000,
+        "5m": 300_000,
+        "15m": 900_000,
+        "30m": 1_800_000,
+        "1h": 3_600_000,
+        "2h": 7_200_000,
+        "4h": 14_400_000,
+        "6h": 21_600_000,
+        "8h": 28_800_000,
+        "12h": 43_200_000,
+        "1d": 86_400_000,
+    }
+    return mapping.get(tf, 14_400_000)
+
+
+def _get_quality_staleness_multiplier() -> float:
+    """Read staleness multiplier from env with safe default."""
+    raw = os.getenv("QUICK_TA_MAX_CANDLE_STALENESS_MULTIPLIER", "2")
+    try:
+        value = float(raw)
+        return value if value > 0 else 2.0
+    except (TypeError, ValueError):
+        return 2.0
+
+
+def _collect_ohlcv_quality_flags(ohlcv: list[list], timeframe: str) -> list[str]:
+    """
+    Return quality flags for OHLCV shape/timestamps/sanity.
+    Empty list means quality checks passed.
+    """
+    flags: list[str] = []
+    if not ohlcv:
+        return ["empty_ohlcv"]
+
+    if len(ohlcv) < 20:
+        flags.append("insufficient_candles")
+
+    prev_ts = None
+    expected_interval = _timeframe_to_ms(timeframe)
+    for row in ohlcv:
+        if not isinstance(row, list) or len(row) < 6:
+            flags.append("invalid_candle_shape")
+            break
+        ts, o, h, l, c = row[:5]
+        if prev_ts is not None and ts <= prev_ts:
+            flags.append("non_monotonic_timestamps")
+            break
+        prev_ts = ts
+        try:
+            if not (float(l) <= float(o) <= float(h) and float(l) <= float(c) <= float(h)):
+                flags.append("ohlc_sanity_failed")
+                break
+        except (TypeError, ValueError):
+            flags.append("ohlc_parse_failed")
+            break
+
+    if len(ohlcv) >= 2:
+        diffs = [ohlcv[i][0] - ohlcv[i - 1][0] for i in range(1, len(ohlcv))]
+        # Allow modest jitter from exchange APIs
+        if any(abs(diff - expected_interval) > (expected_interval * 0.25) for diff in diffs[-10:]):
+            flags.append("interval_mismatch")
+
+    last_ts = ohlcv[-1][0]
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    stale_threshold = int(expected_interval * _get_quality_staleness_multiplier())
+    if now_ms - last_ts > stale_threshold:
+        flags.append("stale_last_candle")
+
+    return flags
+
+
+def _should_use_blofin_first(symbol: str) -> bool:
+    """
+    Determine if this request should use Blofin as primary.
+    Uses policy + deterministic symbol-level canary percentage.
+    """
+    policy = os.getenv("QUICK_TA_SOURCE_POLICY", "binance_first").strip().lower()
+    if policy != "blofin_first":
+        return False
+
+    canary_raw = os.getenv("QUICK_TA_BLOFIN_CANARY_PCT", "0")
+    try:
+        canary_pct = max(0, min(100, int(canary_raw)))
+    except (TypeError, ValueError):
+        canary_pct = 0
+
+    if canary_pct >= 100:
+        return True
+    if canary_pct <= 0:
+        return False
+
+    bucket = int(hashlib.sha1(symbol.upper().encode("utf-8")).hexdigest()[:8], 16) % 100
+    return bucket < canary_pct
+
+
+def select_ohlcv_source(
+    symbol: str,
+    timeframe: str = "4h",
+    limit: int = 200,
+) -> tuple[list[list], str, Optional[str], list[str]]:
+    """
+    Select OHLCV source with quality-gated fallback.
+
+    Returns:
+        (ohlcv, source, fallback_reason, quality_flags)
+    """
+    use_blofin_first = _should_use_blofin_first(symbol)
+    if not use_blofin_first:
+        # Backward-compatible behavior: Binance primary, Blofin fallback.
+        # Keep this permissive to avoid changing legacy computed TA behavior.
+        started = time.perf_counter()
+        binance_candles = _fetch_ohlcv_binance(symbol, timeframe, limit)
+        primary_ms = round((time.perf_counter() - started) * 1000)
+        if binance_candles:
+            logger.info(
+                f"quick_ta_ohlcv_source symbol={symbol.upper()} timeframe={timeframe} "
+                f"source=binance fallback=false candles={len(binance_candles)} latency_ms={primary_ms}"
+            )
+            return binance_candles, "binance", None, []
+
+        started = time.perf_counter()
+        blofin_candles = _fetch_ohlcv_blofin(symbol, timeframe, limit)
+        secondary_ms = round((time.perf_counter() - started) * 1000)
+        if blofin_candles:
+            reason = "binance_fetch_failed"
+            logger.warning(
+                f"quick_ta_ohlcv_source symbol={symbol.upper()} timeframe={timeframe} "
+                f"source=blofin fallback=true fallback_reason={reason} "
+                f"candles={len(blofin_candles)} latency_ms={secondary_ms}"
+            )
+            return blofin_candles, "blofin", reason, []
+
+        logger.warning(
+            f"quick_ta_ohlcv_source symbol={symbol.upper()} timeframe={timeframe} "
+            f"source=none fallback=true fallback_reason=binance_fetch_failed quality_flags=empty_ohlcv"
+        )
+        return [], "none", "binance_fetch_failed", ["empty_ohlcv"]
+
+    primary_name = "blofin" if use_blofin_first else "binance"
+    secondary_name = "binance" if use_blofin_first else "blofin"
+
+    fetchers = {
+        "binance": _fetch_ohlcv_binance,
+        "blofin": _fetch_ohlcv_blofin,
+    }
+
+    def _try_source(name: str) -> tuple[list[list], list[str], int]:
+        started = time.perf_counter()
+        candles = fetchers[name](symbol, timeframe, limit)
+        elapsed_ms = round((time.perf_counter() - started) * 1000)
+        return candles, _collect_ohlcv_quality_flags(candles, timeframe), elapsed_ms
+
+    primary_candles, primary_flags, primary_ms = _try_source(primary_name)
+    if primary_candles and not primary_flags:
+        logger.info(
+            f"quick_ta_ohlcv_source symbol={symbol.upper()} timeframe={timeframe} "
+            f"source={primary_name} fallback=false candles={len(primary_candles)} latency_ms={primary_ms}"
+        )
+        return primary_candles, primary_name, None, []
+
+    fallback_reason = (
+        f"{primary_name}_quality_failed:{','.join(primary_flags)}"
+        if primary_flags else
+        f"{primary_name}_fetch_failed"
+    )
+
+    secondary_candles, secondary_flags, secondary_ms = _try_source(secondary_name)
+    if secondary_candles and not secondary_flags:
+        logger.warning(
+            f"quick_ta_ohlcv_source symbol={symbol.upper()} timeframe={timeframe} "
+            f"source={secondary_name} fallback=true fallback_reason={fallback_reason} "
+            f"candles={len(secondary_candles)} latency_ms={secondary_ms}"
+        )
+        return secondary_candles, secondary_name, fallback_reason, secondary_flags
+
+    combined_flags = primary_flags + secondary_flags
+    logger.warning(
+        f"quick_ta_ohlcv_source symbol={symbol.upper()} timeframe={timeframe} "
+        f"source=none fallback=true fallback_reason={fallback_reason} "
+        f"quality_flags={','.join(combined_flags) if combined_flags else 'none'}"
+    )
+    return [], "none", fallback_reason, combined_flags
 
 
 def _ohlcv_to_dicts(ohlcv: list[list]) -> list[dict]:
@@ -2165,6 +2362,7 @@ def build_computed_ta(
     dca: Optional[float] = None,
     timeframe: str = "4h",
     token_age_hours: Optional[float] = None,
+    preloaded_ohlcv: Optional[list[list]] = None,
 ) -> TAExtractionResult:
     """
     Build a TAExtractionResult from real market data.
@@ -2200,7 +2398,11 @@ def build_computed_ta(
     # ------------------------------------------------------------------
     # Step 1: Fetch OHLCV data
     # ------------------------------------------------------------------
-    ohlcv = _fetch_ohlcv(token_symbol, timeframe, limit=200)
+    ohlcv = preloaded_ohlcv if preloaded_ohlcv is not None else select_ohlcv_source(
+        token_symbol,
+        timeframe=timeframe,
+        limit=200,
+    )[0]
     if not ohlcv or len(ohlcv) < 20:
         logger.warning(f"Insufficient OHLCV data for {token_symbol}, returning minimal result")
         return TAExtractionResult(

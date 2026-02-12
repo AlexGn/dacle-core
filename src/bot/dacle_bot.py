@@ -29,8 +29,11 @@ from src.bot.utils.memory_guard import (
     should_skip_sync,
 )
 
-# Load configuration explicitly at startup
-load_config()
+# Load configuration explicitly at startup if not already loaded
+try:
+    load_config()
+except RuntimeError:
+    pass
 
 # Logger will be initialized in run_bot() after config is loaded
 logger = None
@@ -373,21 +376,33 @@ class DACLEBot(commands.Bot):
                 content = re.sub(rf"^{re.escape(mention_nick_str)}\s+", f"{mention_nick_str} ", content)
                 message.content = content
 
-            known_text_commands = {"analyze", "ping", "sync"}
+            known_text_commands = {"analyze", "ping", "sync", "status", "audit"}
             if mention_command not in known_text_commands:
                 query_text = self._strip_leading_mention(message.content)
-                agent_result = await self._query_agent_endpoint(
-                    query=query_text,
-                    user_id=message.author.id,
-                    channel_id=message.channel.id,
-                    message_id=message.id,
-                )
+                
+                # Session 408.3: Show typing indicator while AI reflects
+                async with message.channel.typing():
+                    agent_result = await self._query_agent_endpoint(
+                        query=query_text,
+                        user_id=message.author.id,
+                        channel_id=message.channel.id,
+                        message_id=message.id,
+                    )
                 
                 trace_id = agent_result.get("trace_id", f"msg-{message.id}")
                 
                 if "answer" in agent_result:
                     answer = str(agent_result["answer"]).strip()
-                    await message.channel.send(f"{answer}\n\nTrace: `{trace_id}`")
+                    msg = await message.channel.send(f"{answer}\n\nTrace: `{trace_id}`")
+                    
+                    # Add feedback reactions for AI syntheses
+                    if "intent:ai_synthesis" in agent_result.get("actions_taken", []):
+                        try:
+                            await msg.add_reaction("👍")
+                            await msg.add_reaction("👎")
+                        except Exception:
+                            pass
+
                     logger.info(
                         f"Mention handled by agent endpoint | trace={trace_id} "
                         f"user_id={message.author.id} status=success"
@@ -417,6 +432,51 @@ class DACLEBot(commands.Bot):
     async def status(self, ctx: commands.Context):
         """Check if the bot is alive"""
         await ctx.send(f"✅ DACLE Bot is online and responsive!\n- Latency: {round(self.latency * 1000)}ms\n- Guilds: {len(self.guilds)}")
+
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        """Handle thumbs up/down feedback on AI responses."""
+        if payload.user_id == self.user.id:
+            return
+
+        if str(payload.emoji) not in ("👍", "👎"):
+            return
+
+        # Check if the message was from the bot and had a trace ID
+        channel = self.get_channel(payload.channel_id)
+        if not channel:
+            return
+            
+        try:
+            message = await channel.fetch_message(payload.message_id)
+            if message.author.id != self.user.id:
+                return
+
+            # Extract trace ID using regex
+            match = re.search(r"Trace: `(trace-[a-z0-9\-]+)`", message.content)
+            if not match:
+                return
+
+            trace_id = match.group(1)
+            is_positive = str(payload.emoji) == "👍"
+
+            # Call backend to record feedback
+            url = f"{self._get_api_url()}/api/agent/feedback"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                headers = {}
+                api_key = os.getenv("DACLE_API_KEY")
+                if api_key:
+                    headers["X-API-Key"] = api_key
+                    
+                await client.post(
+                    url, 
+                    json={"trace_id": trace_id, "is_positive": is_positive},
+                    headers=headers
+                )
+                
+            logger.info(f"Recorded Discord feedback for {trace_id}: {payload.emoji}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to process reaction feedback: {e}")
 
 
 def run_bot():

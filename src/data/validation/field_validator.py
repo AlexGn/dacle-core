@@ -1195,7 +1195,7 @@ def check_conviction_data_status(token: str, data: Dict) -> Dict:
 
     # Generate warnings
     if pipeline_status in ["REJECTED", "UNKNOWN", None]:
-        status["warning"] = "CONVICTION_NOT_RUN: Run 'python3 scripts/analyze.py {} ' to generate conviction scores".format(token)
+        status["warning"] = "CONVICTION_NOT_RUN: Run 'python3 scripts/analysis/analyze.py {} ' to generate conviction scores".format(token)
         status["is_stale"] = True
     elif conviction_score == 0 and recommendation == "REJECTED":
         status["warning"] = "CONVICTION_STALE: consolidated.json has placeholder values. Re-run analysis."
