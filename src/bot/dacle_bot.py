@@ -133,34 +133,14 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load scout_commands cog: {e}")
 
-        # Sync slash commands with Discord
-        try:
-            # Fast guild sync for private server (avoid global duplicates)
-            guild = discord.Object(id=self.private_server_id)
-
-            app_commands = list(self.tree.get_commands())
-            logger.info(f"🔎 App commands discovered: {len(app_commands)}")
-            if app_commands:
-                names = ", ".join(cmd.name for cmd in app_commands)
-                logger.info(f"🔎 App command names: {names}")
-            else:
-                logger.warning("⚠️ No app commands registered before sync")
-
-            # Ensure global commands are copied to the guild before syncing
-            self.tree.copy_global_to(guild=guild)
-
-            logger.info(f"🔄 Syncing guild slash commands to {self.private_server_id}...")
-            guild_synced = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=60)
-            logger.info(f"✅ Synced {len(guild_synced)} guild slash command(s)")
-            if len(guild_synced) == 0:
-                # Fallback to global sync (may take time to appear)
-                logger.warning("⚠️ Guild sync returned 0 commands; attempting global sync as fallback")
-                global_synced = await asyncio.wait_for(self.tree.sync(), timeout=60)
-                logger.info(f"✅ Synced {len(global_synced)} global slash command(s)")
-        except asyncio.TimeoutError:
-            logger.error("❌ Timed out while syncing slash commands")
-        except Exception as e:
-            logger.error(f"❌ Failed to sync commands: {e}")
+        # Log app commands discovered (sync happens on_ready when guild is available)
+        app_commands = list(self.tree.get_commands())
+        logger.info(f"🔎 App commands discovered: {len(app_commands)}")
+        if app_commands:
+            names = ", ".join(cmd.name for cmd in app_commands)
+            logger.info(f"🔎 App command names: {names}")
+        else:
+            logger.warning("⚠️ No app commands registered before sync")
 
         logger.info("Setup complete")
 
@@ -181,6 +161,16 @@ class DACLEBot(commands.Bot):
         private_server = self.get_guild(self.private_server_id)
         if private_server:
             logger.info(f"✅ Found private server: {private_server.name}")
+            try:
+                # Copy global commands into this guild and sync now that guild is available
+                self.tree.copy_global_to(guild=private_server)
+                logger.info(f"🔄 Syncing guild slash commands in on_ready to {private_server.id}...")
+                synced = await asyncio.wait_for(self.tree.sync(guild=private_server), timeout=60)
+                logger.info(f"✅ Synced {len(synced)} guild slash command(s) in on_ready")
+            except asyncio.TimeoutError:
+                logger.error("❌ Timed out while syncing slash commands in on_ready")
+            except Exception as e:
+                logger.error(f"❌ Failed to sync commands in on_ready: {e}")
 
             # List all channels the bot can see
             logger.info(f"📋 Channels in {private_server.name}:")
