@@ -1048,6 +1048,14 @@ If no crypto projects mentioned, return: []
             
             # Tier 6: Proactive Gap Detection (only if bot is mentioned)
             if self.bot.user.mentioned_in(message):
+                # Clean mention from content for analysis
+                clean_content = message_content.replace(f"<@{self.bot.user.id}>", "").replace(f"<@!{self.bot.user.id}>", "").strip().lower()
+                
+                # Blacklist common commands and greetings
+                blacklist = ["sync", "help", "hello", "hi", "hey", "what up", "status", "test"]
+                if any(word == clean_content or clean_content.startswith(f"{word} ") for word in blacklist):
+                    return
+
                 try:
                     evolver = CapabilityEvolver()
                     gap = evolver.analyze_gap(message_content)
