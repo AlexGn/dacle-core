@@ -67,14 +67,11 @@ class SystemDoctor:
         from src.monitoring.heartbeat_discord import post_to_discord
         import asyncio
         
-        msg = "🩺 **System Doctor Update**
+        msg = """🩺 **System Doctor Update**
 
 I detected and resolved the following issues:
-"
-        msg += "
-".join([f"• {a}" for a in actions])
-        msg += "
-
-_Everything is back to normal._"
+"""
+        msg += "\n".join([f"• {a}" for a in actions])
+        msg += "\n\n_Everything is back to normal._"
         
         asyncio.create_task(post_to_discord("focus", msg))
