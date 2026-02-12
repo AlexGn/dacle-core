@@ -971,17 +971,20 @@ class MessageMonitor(commands.Cog):
             
             # Tier 6: Proactive Gap Detection (only if bot is mentioned)
             if self.bot.user.mentioned_in(message):
-                # Clean mention from content for analysis
+                # Clean mention and "Bot" noise from content
                 clean_content = message_content.replace(f"<@{self.bot.user.id}>", "").replace(f"<@!{self.bot.user.id}>", "").strip().lower()
+                clean_content = clean_content.replace("bot", "").strip()
                 
-                # Blacklist common commands and greetings
-                blacklist = ["sync", "help", "hello", "hi", "hey", "what up", "status", "test"]
-                if any(word == clean_content or clean_content.startswith(f"{word} ") for word in blacklist):
+                # Hard Guard: Ignore short messages or common greetings/commands
+                blacklist = ["sync", "help", "hello", "hi", "hey", "what up", "status", "test", "analyze"]
+                is_blacklisted = any(word in clean_content for word in blacklist)
+                
+                if len(clean_content) < 10 or is_blacklisted:
                     return
 
                 try:
                     evolver = CapabilityEvolver()
-                    gap = evolver.analyze_gap(message_content)
+                    gap = evolver.analyze_gap(clean_content)
                     
                     if gap["status"] == "NEW_CAPABILITY_NEEDED":
                         spec = evolver.generate_spec(gap)
