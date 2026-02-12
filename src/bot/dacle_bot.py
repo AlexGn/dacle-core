@@ -161,8 +161,6 @@ class DACLEBot(commands.Bot):
         private_server = self.get_guild(self.private_server_id)
         if private_server:
             logger.info(f"✅ Found private server: {private_server.name}")
-            # Sync slash commands in the background to avoid blocking on_ready
-            self.loop.create_task(self._sync_guild_commands(private_server))
 
             # List all channels the bot can see
             logger.info(f"📋 Channels in {private_server.name}:")
@@ -212,6 +210,18 @@ class DACLEBot(commands.Bot):
 
         # If the bot is mentioned, clean up extra spaces after the mention
         if self.user.mentioned_in(message):
+            if "sync" in message.content.lower():
+                private_server = self.get_guild(self.private_server_id)
+                if private_server:
+                    await message.channel.send("🔄 Manual command sync triggered...")
+                    try:
+                        self.tree.copy_global_to(guild=private_server)
+                        synced = await self.tree.sync(guild=private_server)
+                        await message.channel.send(f"✅ Synced {len(synced)} commands to this server.")
+                    except Exception as e:
+                        await message.channel.send(f"❌ Sync failed: {e}")
+                return
+
             mention_str = f"<@{self.user.id}>"
             mention_nick_str = f"<@!{self.user.id}>"
             
