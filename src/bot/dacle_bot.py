@@ -5,6 +5,7 @@ Main bot implementation for monitoring Discord messages and tracking project men
 
 import sys
 import asyncio
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -225,6 +226,19 @@ class DACLEBot(commands.Bot):
                         logger.error(f"Failed to send Telegram memory alert: {e}")
             await asyncio.sleep(60)
 
+    def _get_owner_id(self) -> Optional[int]:
+        owner_id = os.getenv("DISCORD_OWNER_ID")
+        if not owner_id:
+            return None
+        try:
+            return int(owner_id)
+        except ValueError:
+            return None
+
+    def _is_owner(self, user_id: int) -> bool:
+        owner_id = self._get_owner_id()
+        return owner_id is not None and user_id == owner_id
+
     async def _sync_guild_commands(self, guild: discord.Guild) -> None:
         """Sync slash commands to the given guild without blocking on_ready."""
         try:
@@ -253,6 +267,17 @@ class DACLEBot(commands.Bot):
 
         # If the bot is mentioned, clean up extra spaces after the mention
         if self.user.mentioned_in(message):
+            if "sync" in message.content.lower() and self._is_owner(message.author.id):
+                private_server = self.get_guild(self.private_server_id)
+                if private_server:
+                    await message.channel.send("🔄 Owner sync triggered...")
+                    try:
+                        await self._sync_guild_commands(private_server)
+                        await message.channel.send("✅ Sync complete.")
+                    except Exception as e:
+                        await message.channel.send(f"❌ Sync failed: {e}")
+                return
+
             mention_str = f"<@{self.user.id}>"
             mention_nick_str = f"<@!{self.user.id}>"
             
