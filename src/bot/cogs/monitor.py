@@ -4,6 +4,7 @@ Monitors Discord messages for crypto project mentions and stores them in Supabas
 """
 
 import re
+import os
 from collections import deque
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -112,6 +113,10 @@ class MessageMonitor(commands.Cog):
         self.thread_setups: Dict[int, Dict[str, Any]] = {}
         # Track whether a final decision was posted for a thread
         self.thread_decision_sent: Dict[int, bool] = {}
+        # Node trade-router is canonical for BQ thread follow-ups; keep this off by default
+        self.enable_thread_bq_followup = (
+            os.getenv("ENABLE_MONITOR_THREAD_BQ_FOLLOWUP", "false").strip().lower() == "true"
+        )
 
         logger.info("MessageMonitor cog initialized with conviction scoring")
 
@@ -841,7 +846,7 @@ class MessageMonitor(commands.Cog):
 
         # If this is a follow-up message inside a thread, and we have a cached setup,
         # produce a single final enter/skip decision (no repetition).
-        if isinstance(message.channel, discord.Thread):
+        if self.enable_thread_bq_followup and isinstance(message.channel, discord.Thread):
             thread_id = message.channel.id
             if self._is_bqs_followup(message_content) and thread_id in self.thread_setups:
                 if not self.thread_decision_sent.get(thread_id, False):
