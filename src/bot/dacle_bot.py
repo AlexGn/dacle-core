@@ -7,6 +7,8 @@ import sys
 import asyncio
 import os
 import time
+import re
+import httpx
 from pathlib import Path
 from typing import Optional
 
@@ -133,12 +135,16 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load sync_commands cog: {e}")
 
-        # Load Trade Router (Deterministic parsing)
+        # Load basic health commands (ping)
         try:
-            await self.load_extension("src.bot.cogs.trade_router")
-            logger.info("✅ Loaded trade_router cog")
+            await self.load_extension("src.bot.cogs.health_commands")
+            logger.info("✅ Loaded health_commands cog")
         except Exception as e:
-            logger.error(f"❌ Failed to load trade_router cog: {e}")
+            logger.error(f"❌ Failed to load health_commands cog: {e}")
+
+        # NOTE: Trade Router (Deterministic parsing) is handled by Node.js service
+        # deploy/openclaw/trade-router/index.js to ensure Session 408 reliability.
+        # Python cog src.bot.cogs.trade_router is disabled to prevent double-posting.
 
         # Load Scout Commands (Self-Evolution Audit)
         try:
@@ -239,6 +245,76 @@ class DACLEBot(commands.Bot):
         owner_id = self._get_owner_id()
         return owner_id is not None and user_id == owner_id
 
+    def _strip_leading_mention(self, content: str) -> str:
+        if not self.user:
+            return content.strip()
+        pattern = rf"^\s*<@!?{self.user.id}>\s*"
+        return re.sub(pattern, "", content, count=1).strip()
+
+    def _extract_mention_command(self, content: str) -> Optional[str]:
+        stripped = self._strip_leading_mention(content)
+        if not stripped:
+            return None
+        return stripped.split()[0].lower()
+
+    @staticmethod
+    def _get_api_url() -> str:
+        return os.getenv("DACLE_API_URL", "http://localhost:8000").rstrip("/")
+
+    async def _query_agent_endpoint(
+        self,
+        query: str,
+        user_id: int,
+        channel_id: int,
+        message_id: int,
+    ) -> dict:
+        """
+        Call /api/agent/query for non-command mention messages.
+        Returns dict with 'answer' or 'error' message.
+        """
+        url = f"{self._get_api_url()}/api/agent/query"
+        payload = {
+            "query": query,
+            "user_id": user_id,
+            "channel_id": channel_id,
+            "message_id": message_id,
+        }
+        
+        headers = {}
+        api_key = os.getenv("DACLE_API_KEY")
+        if api_key:
+            headers["X-API-Key"] = api_key
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, dict) and data.get("answer"):
+                        return data
+                    return {"error": "Gateway returned 200 but no answer was found."}
+                
+                if resp.status_code == 429:
+                    return {"error": "AI Rate Limit reached. Please try again in a few minutes."}
+                
+                if resp.status_code == 500:
+                    try:
+                        err_detail = resp.json().get("detail", "Internal Server Error")
+                        return {"error": f"Gateway Error (500): {err_detail}"}
+                    except:
+                        return {"error": "Gateway Error (500): The AI service crashed or is offline."}
+                
+                return {"error": f"Gateway returned error code {resp.status_code}."}
+
+        except httpx.ConnectError:
+            return {"error": "Could not connect to DACLE Gateway. Is the API service running?"}
+        except httpx.TimeoutException:
+            return {"error": "Gateway timeout. The AI is taking too long to respond."}
+        except Exception as e:
+            logger.warning(f"Agent query failed for message {message_id}: {e}")
+            return {"error": f"Unexpected gateway error: {str(e)}"}
+
     async def _sync_guild_commands(self, guild: discord.Guild) -> None:
         """Sync slash commands to the given guild without blocking on_ready."""
         try:
@@ -267,6 +343,8 @@ class DACLEBot(commands.Bot):
 
         # If the bot is mentioned, clean up extra spaces after the mention
         if self.user.mentioned_in(message):
+            mention_command = self._extract_mention_command(message.content)
+
             if "sync" in message.content.lower() and self._is_owner(message.author.id):
                 private_server = self.get_guild(self.private_server_id)
                 if private_server:
@@ -277,6 +355,11 @@ class DACLEBot(commands.Bot):
                     except Exception as e:
                         await message.channel.send(f"❌ Sync failed: {e}")
                 return
+            if "sync" in message.content.lower():
+                await message.channel.send(
+                    "❌ Sync is owner-only. Use `/ping` or `/market` to validate bot responsiveness."
+                )
+                return
 
             mention_str = f"<@{self.user.id}>"
             mention_nick_str = f"<@!{self.user.id}>"
@@ -284,13 +367,44 @@ class DACLEBot(commands.Bot):
             content = message.content
             if content.startswith(mention_str):
                 # Replace mention + any number of spaces with mention + single space
-                import re
                 content = re.sub(rf"^{re.escape(mention_str)}\s+", f"{mention_str} ", content)
                 message.content = content
             elif content.startswith(mention_nick_str):
-                import re
                 content = re.sub(rf"^{re.escape(mention_nick_str)}\s+", f"{mention_nick_str} ", content)
                 message.content = content
+
+            known_text_commands = {"analyze", "ping", "sync"}
+            if mention_command not in known_text_commands:
+                query_text = self._strip_leading_mention(message.content)
+                agent_result = await self._query_agent_endpoint(
+                    query=query_text,
+                    user_id=message.author.id,
+                    channel_id=message.channel.id,
+                    message_id=message.id,
+                )
+                
+                trace_id = agent_result.get("trace_id", f"msg-{message.id}")
+                
+                if "answer" in agent_result:
+                    answer = str(agent_result["answer"]).strip()
+                    await message.channel.send(f"{answer}\n\nTrace: `{trace_id}`")
+                    logger.info(
+                        f"Mention handled by agent endpoint | trace={trace_id} "
+                        f"user_id={message.author.id} status=success"
+                    )
+                else:
+                    error_msg = agent_result.get("error", "Unknown error")
+                    await message.channel.send(
+                        f"❌ **AI Unavailable**: {error_msg}\n\n"
+                        "Note: I can still help with deterministic commands. "
+                        "Use `/ping`, `/market`, or `/analyze <symbol>`. "
+                        f"Trace: `{trace_id}`"
+                    )
+                    logger.warning(
+                        f"Mention agent failure | trace={trace_id} "
+                        f"error={error_msg} user_id={message.author.id}"
+                    )
+                return
 
         # Process commands
         await self.process_commands(message)
@@ -298,6 +412,11 @@ class DACLEBot(commands.Bot):
     async def on_error(self, event: str, *args, **kwargs):
         """Handle errors"""
         logger.error(f"Error in {event}", exc_info=True)
+
+    @commands.command(name="status")
+    async def status(self, ctx: commands.Context):
+        """Check if the bot is alive"""
+        await ctx.send(f"✅ DACLE Bot is online and responsive!\n- Latency: {round(self.latency * 1000)}ms\n- Guilds: {len(self.guilds)}")
 
 
 def run_bot():
