@@ -190,19 +190,28 @@ class DiscordConfig:
     bot_token: str
     private_server_id: str
     analysis_channel_id: Optional[int] = None
+    trades_channel_id: Optional[int] = None
+    macro_channel_id: Optional[int] = None
+    focus_channel_id: Optional[int] = None
 
     @classmethod
     def from_env(cls) -> "DiscordConfig":
         """Load Discord config from environment variables"""
         token = os.getenv("DISCORD_BOT_TOKEN")
         server_id = os.getenv("DISCORD_PRIVATE_SERVER_ID")
-        channel_id = os.getenv("DISCORD_ANALYSIS_CHANNEL_ID")
+        
+        def _to_int(env_key: str, default: Optional[int] = None) -> Optional[int]:
+            val = os.getenv(env_key)
+            try:
+                return int(val) if val else default
+            except (ValueError, TypeError):
+                return default
 
-        # Convert to int if provided
-        try:
-            channel_id = int(channel_id) if channel_id else None
-        except (ValueError, TypeError):
-            channel_id = None
+        # Canonical channel IDs (Session 408+)
+        analysis_id = _to_int("DISCORD_ANALYSIS_CHANNEL_ID", 1470403542253703369)
+        trades_id = _to_int("DISCORD_TRADES_CHANNEL_ID", 1468948950412431598)
+        macro_id = _to_int("DISCORD_MACRO_CHANNEL_ID", 1470361576237306058)
+        focus_id = _to_int("DISCORD_FOCUS_CHANNEL_ID", 1470789144736174326)
 
         # Discord is optional - allow None values if not configured
         # Raises error only if partially configured (one but not both)
@@ -214,7 +223,10 @@ class DiscordConfig:
         return cls(
             bot_token=token or "",
             private_server_id=server_id or "",
-            analysis_channel_id=channel_id
+            analysis_channel_id=analysis_id,
+            trades_channel_id=trades_id,
+            macro_channel_id=macro_id,
+            focus_channel_id=focus_id,
         )
 
 
@@ -282,11 +294,6 @@ class AppConfig:
     @classmethod
     def from_env(cls) -> "AppConfig":
         """Load complete app config from environment variables"""
-        # Make Together.ai optional since it's no longer used
-        together_config = None
-        if os.getenv("TOGETHER_API_KEY"):
-            together_config = TogetherConfig.from_env()
-
         # Make Perplexity optional (Session 79C)
         perplexity_config = None
         if os.getenv("PERPLEXITY_API_KEY"):
