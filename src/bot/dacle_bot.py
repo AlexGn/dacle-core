@@ -5,6 +5,7 @@ Main bot implementation for monitoring Discord messages and tracking project men
 
 import sys
 import asyncio
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +20,11 @@ from src.knowledge.supabase_client import get_knowledge_base
 from src.monitoring.health import HealthCheckServer, get_health_status, run_periodic_health_checks
 from src.utils.config import get_discord_config, load_config
 from src.utils.logger import get_logger
+from src.bot.utils.memory_guard import (
+    get_mem_available_mb,
+    get_memory_alert_mb,
+    should_skip_sync,
+)
 
 # Load configuration explicitly at startup
 load_config()
@@ -119,6 +125,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load analysis_commands cog: {e}")
 
+        # Load Sync commands (owner-only slash sync)
+        try:
+            await self.load_extension("src.bot.cogs.sync_commands")
+            logger.info("✅ Loaded sync_commands cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load sync_commands cog: {e}")
+
         # Load Trade Router (Deterministic parsing)
         try:
             await self.load_extension("src.bot.cogs.trade_router")
@@ -161,6 +174,10 @@ class DACLEBot(commands.Bot):
         private_server = self.get_guild(self.private_server_id)
         if private_server:
             logger.info(f"✅ Found private server: {private_server.name}")
+            # Sync slash commands in the background to avoid blocking on_ready
+            self.loop.create_task(self._sync_guild_commands(private_server))
+            # Start memory watchdog in background
+            self.loop.create_task(self._memory_watchdog())
 
             # List all channels the bot can see
             logger.info(f"📋 Channels in {private_server.name}:")
@@ -180,24 +197,50 @@ class DACLEBot(commands.Bot):
             activity=discord.Activity(type=discord.ActivityType.watching, name="crypto signals 📊")
         )
 
-    async def _sync_guild_commands(self, guild: discord.Guild) -> None:
-        """Sync slash commands to the given guild without blocking on_ready."""
-        try:
-            self.tree.copy_global_to(guild=guild)
-            logger.info(f"🔄 Syncing guild slash commands in background to {guild.id}...")
-            import asyncio
-            synced = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=300)
-            logger.info(f"✅ Synced {len(synced)} guild slash command(s) in background")
-        except asyncio.TimeoutError:
-            logger.error("❌ Timed out while syncing slash commands in background (5 min limit)")
-        except Exception as e:
-            logger.error(f"❌ Failed to sync commands in background: {e}")
-
         # Start periodic health checks for database and Redis
         logger.info("Starting periodic health checks...")
         kb = get_knowledge_base()
-        # Pass the actual Supabase client for health checks
         self.loop.create_task(run_periodic_health_checks(kb.client, redis_client=None))
+
+    async def _memory_watchdog(self) -> None:
+        """Periodic memory watchdog with optional Telegram alert."""
+        last_alert_ts = 0.0
+        alert_cooldown = 15 * 60  # 15 minutes
+        alert_threshold = get_memory_alert_mb()
+        while not self.is_closed():
+            mem_available_mb = get_mem_available_mb()
+            if mem_available_mb is not None and mem_available_mb < alert_threshold:
+                now = time.time()
+                if now - last_alert_ts > alert_cooldown:
+                    last_alert_ts = now
+                    msg = (
+                        f"🚨 DACLE Bot low memory: {mem_available_mb}MB available "
+                        f"(threshold {alert_threshold}MB)."
+                    )
+                    logger.warning(msg)
+                    try:
+                        from src.alerts.telegram_notifier import send_telegram_message
+                        send_telegram_message(msg)
+                    except Exception as e:
+                        logger.error(f"Failed to send Telegram memory alert: {e}")
+            await asyncio.sleep(60)
+
+    async def _sync_guild_commands(self, guild: discord.Guild) -> None:
+        """Sync slash commands to the given guild without blocking on_ready."""
+        try:
+            mem_available_mb = get_mem_available_mb()
+            if should_skip_sync(mem_available_mb):
+                logger.warning(
+                    "⚠️ Skipping slash command sync due to low memory "
+                    f"({mem_available_mb}MB available)"
+                )
+                return
+            self.tree.copy_global_to(guild=guild)
+            logger.info(f"🔄 Syncing guild slash commands in background to {guild.id}...")
+            synced = await self.tree.sync(guild=guild)
+            logger.info(f"✅ Synced {len(synced)} guild slash command(s) in background")
+        except Exception as e:
+            logger.error(f"❌ Failed to sync commands in background: {e}")
 
     async def on_message(self, message: discord.Message):
         """
@@ -210,18 +253,6 @@ class DACLEBot(commands.Bot):
 
         # If the bot is mentioned, clean up extra spaces after the mention
         if self.user.mentioned_in(message):
-            if "sync" in message.content.lower():
-                private_server = self.get_guild(self.private_server_id)
-                if private_server:
-                    await message.channel.send("🔄 Manual command sync triggered...")
-                    try:
-                        self.tree.copy_global_to(guild=private_server)
-                        synced = await self.tree.sync(guild=private_server)
-                        await message.channel.send(f"✅ Synced {len(synced)} commands to this server.")
-                    except Exception as e:
-                        await message.channel.send(f"❌ Sync failed: {e}")
-                return
-
             mention_str = f"<@{self.user.id}>"
             mention_nick_str = f"<@!{self.user.id}>"
             
