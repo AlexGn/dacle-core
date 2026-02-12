@@ -118,6 +118,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load analysis_commands cog: {e}")
 
+        # Load Trade Router (Deterministic parsing)
+        try:
+            await self.load_extension("src.bot.cogs.trade_router")
+            logger.info("✅ Loaded trade_router cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load trade_router cog: {e}")
+
         # Sync slash commands with Discord
         try:
             # Fast guild sync for private server (avoid global duplicates)

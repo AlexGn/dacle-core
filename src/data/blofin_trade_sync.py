@@ -617,6 +617,11 @@ class BlofinTradeSync:
                     trade_log["trades"].append(dacle_trade)
                     synced_ids.add(blofin_order_id)
                     metrics = dacle_trade.get("metrics", {})
+                    
+                    # Session 402: Silent Analysis Trigger
+                    if not dacle_trade.get("entry", {}).get("conviction_score"):
+                        self._trigger_silent_analysis(token, dacle_trade.get("trade_type"))
+
                     results["new_trades"].append({
                         "trade_id": trade_id,
                         "token": token,
@@ -979,6 +984,31 @@ class BlofinTradeSync:
 
         except Exception as e:
             logger.warning(f"Forward validation sync failed: {e}")
+
+    def _trigger_silent_analysis(self, token: str, direction: str) -> None:
+        """Trigger background analysis for manual trades."""
+        import subprocess
+        import sys
+        logger.info(f"🚀 Triggering Silent Analysis for {token} ({direction})...")
+        
+        cmd = [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts" / "analyze.py"),
+            token,
+            "--direction", direction,
+            "--force"
+        ]
+        
+        try:
+            subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT)}
+            )
+            logger.info(f"  → Silent Analysis launched for {token}")
+        except Exception as e:
+            logger.error(f"Failed to launch silent analysis: {e}")
 
 
 def sync_blofin_trades(
