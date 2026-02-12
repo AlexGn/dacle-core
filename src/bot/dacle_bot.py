@@ -149,9 +149,14 @@ class DACLEBot(commands.Bot):
             # Ensure global commands are copied to the guild before syncing
             self.tree.copy_global_to(guild=guild)
 
-            logger.info("🔄 Syncing guild slash commands...")
+            logger.info(f"🔄 Syncing guild slash commands to {self.private_server_id}...")
             guild_synced = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=60)
             logger.info(f"✅ Synced {len(guild_synced)} guild slash command(s)")
+            if len(guild_synced) == 0:
+                # Fallback to global sync (may take time to appear)
+                logger.warning("⚠️ Guild sync returned 0 commands; attempting global sync as fallback")
+                global_synced = await asyncio.wait_for(self.tree.sync(), timeout=60)
+                logger.info(f"✅ Synced {len(global_synced)} global slash command(s)")
         except asyncio.TimeoutError:
             logger.error("❌ Timed out while syncing slash commands")
         except Exception as e:
@@ -163,6 +168,11 @@ class DACLEBot(commands.Bot):
         """Called when the bot has successfully connected to Discord"""
         logger.info(f"✅ Bot connected as {self.user} (ID: {self.user.id})")
         logger.info(f"📡 Connected to {len(self.guilds)} guild(s)")
+        try:
+            guild_ids = ", ".join(str(guild.id) for guild in self.guilds)
+            logger.info(f"📡 Guild IDs: {guild_ids}")
+        except Exception:
+            pass
 
         # Mark bot as ready for health checks (HIGH-REL-001)
         get_health_status().set_bot_ready(True)
