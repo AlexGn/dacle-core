@@ -77,8 +77,14 @@ class AnalysisCommands(commands.Cog):
         consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
         if not consolidated_path.exists():
             raise FileNotFoundError(f"No consolidated.json found for {symbol}")
-        with open(consolidated_path) as f:
-            return json.load(f)
+        try:
+            with open(consolidated_path) as f:
+                return json.load(f)
+        except PermissionError as e:
+            raise PermissionError(
+                f"Permission denied reading {consolidated_path}. "
+                "Fix ownership/permissions for data/tokens."
+            ) from e
 
     def _validate_required_fields(self, data: Dict[str, Any]) -> Tuple[bool, list[str]]:
         missing = []
@@ -278,12 +284,18 @@ class AnalysisCommands(commands.Cog):
             logger.error(f"Error in analyze command: {e}", exc_info=True)
             # Try to report error to the user if possible
             try:
+                err_text = str(e)
+                if "Permission denied" in err_text and "consolidated.json" in err_text:
+                    err_text = (
+                        "Permission denied reading consolidated.json. "
+                        "Please fix data folder ownership (clawd) and retry."
+                    )
                 if status_msg:
-                    await status_msg.edit(content=f"❌ An error occurred while analyzing **{symbol}**: {str(e)}")
+                    await status_msg.edit(content=f"❌ An error occurred while analyzing **{symbol}**: {err_text}")
                 elif notify_channel:
-                    await notify_channel.send(f"❌ Analysis failed for **{symbol}**: {str(e)}")
+                    await notify_channel.send(f"❌ Analysis failed for **{symbol}**: {err_text}")
                 else:
-                    await target_channel.send(f"❌ An error occurred: {str(e)}")
+                    await target_channel.send(f"❌ An error occurred: {err_text}")
             except Exception:
                 pass
 
