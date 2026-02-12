@@ -26,7 +26,9 @@ from api.routers.macro import get_btc_regime_widget
 logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
-API_BASE_URL = os.getenv("DACLE_API_URL", "http://localhost:8000")
+def _get_api_base_url() -> str:
+    """Resolve API base URL at call time (after load_config)."""
+    return os.getenv("DACLE_API_URL", "http://localhost:8000")
 DEFAULT_ANALYSIS_CHANNEL_ID = 1470403542253703369
 
 REQUIRED_FIELDS = {
@@ -48,7 +50,8 @@ class AnalysisCommands(commands.Cog):
 
     def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
         """Trigger token refetch and wait for completion."""
-        url = f"{API_BASE_URL}/api/tokens/{symbol}/refetch"
+        api_base = _get_api_base_url()
+        url = f"{api_base}/api/tokens/{symbol}/refetch"
         resp = requests.post(url, params={"force": "true", "auto_analyze": "false"}, timeout=15)
         resp.raise_for_status()
         payload = resp.json()
