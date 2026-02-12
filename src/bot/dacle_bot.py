@@ -138,6 +138,14 @@ class DACLEBot(commands.Bot):
             # Fast guild sync for private server (avoid global duplicates)
             guild = discord.Object(id=self.private_server_id)
 
+            app_commands = list(self.tree.get_commands())
+            logger.info(f"🔎 App commands discovered: {len(app_commands)}")
+            if app_commands:
+                names = ", ".join(cmd.name for cmd in app_commands)
+                logger.info(f"🔎 App command names: {names}")
+            else:
+                logger.warning("⚠️ No app commands registered before sync")
+
             logger.info("🔄 Syncing guild slash commands...")
             guild_synced = await asyncio.wait_for(self.tree.sync(guild=guild), timeout=60)
             logger.info(f"✅ Synced {len(guild_synced)} guild slash command(s)")
