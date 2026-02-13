@@ -89,10 +89,9 @@ def _load_trade_log() -> Dict[str, Any]:
 
 def _save_trade_log(data: Dict[str, Any]) -> None:
     """Save trade log to disk."""
-    TRADE_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    from src.utils.atomic_write import atomic_json_write
     data["last_updated"] = datetime.now(timezone.utc).isoformat()
-    with open(TRADE_LOG_PATH, "w") as f:
-        json.dump(data, f, indent=2)
+    atomic_json_write(TRADE_LOG_PATH, data)
 
 
 def _load_sync_state() -> Dict[str, Any]:
