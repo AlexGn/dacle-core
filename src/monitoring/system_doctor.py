@@ -72,11 +72,44 @@ class SystemDoctor:
 
         for name, is_running in found.items():
             if not is_running:
-                # We can't easily auto-restart from here without sudo/systemd integration
-                # but we can alert via the health system
-                actions.append(f"CRITICAL: {name} is not running.")
+                # Session 415: Auto-restart critical services
+                service_map = {
+                    "API (uvicorn)": "dacle-api.service",
+                    "Bot (dacle-bot)": "dacle-bot.service"
+                }
+                
+                service_name = service_map.get(name)
+                if service_name:
+                    logger.warning(f"SystemDoctor: Attempting to restart {service_name}...")
+                    if self._restart_service(service_name):
+                        actions.append(f"RESTARTED: {name} (was not running).")
+                    else:
+                        actions.append(f"FAILED RESTART: {name} is down.")
+                else:
+                    actions.append(f"CRITICAL: {name} is not running (no service mapping).")
                 
         return actions
+
+    def _restart_service(self, service_name: str) -> bool:
+        """Execute systemctl restart for a service (requires sudo)."""
+        import subprocess
+        try:
+            # We use sudo because the API usually runs as a restricted user (clawd)
+            # but needs permission to restart its own service.
+            result = subprocess.run(
+                ["sudo", "systemctl", "restart", service_name],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info(f"SystemDoctor: Successfully restarted {service_name}")
+            return True
+        except subprocess.CalledProcessError as e:
+            logger.error(f"SystemDoctor: Failed to restart {service_name}: {e.stderr}")
+            return False
+        except Exception as e:
+            logger.error(f"SystemDoctor: Unexpected error restarting {service_name}: {e}")
+            return False
 
     async def _heal_stale_locks(self) -> list[str]:
         """Find and remove refresh locks that have been held for > 15 mins."""
