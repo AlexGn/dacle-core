@@ -288,35 +288,40 @@ class DACLEBot(commands.Bot):
         if api_key:
             headers["X-API-Key"] = api_key
 
-        try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
-                resp = await client.post(url, json=payload, headers=headers)
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, dict) and data.get("answer"):
-                        return data
-                    return {"error": "Gateway returned 200 but no answer was found."}
-                
-                if resp.status_code == 429:
-                    return {"error": "AI Rate Limit reached. Please try again in a few minutes."}
-                
-                if resp.status_code == 500:
-                    try:
-                        err_detail = resp.json().get("detail", "Internal Server Error")
-                        return {"error": f"Gateway Error (500): {err_detail}"}
-                    except:
-                        return {"error": "Gateway Error (500): The AI service crashed or is offline."}
-                
-                return {"error": f"Gateway returned error code {resp.status_code}."}
+        max_attempts = 3
+        for attempt in range(1, max_attempts + 1):
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.post(url, json=payload, headers=headers)
 
-        except httpx.ConnectError:
-            return {"error": "Could not connect to DACLE Gateway. Is the API service running?"}
-        except httpx.TimeoutException:
-            return {"error": "Gateway timeout. The AI is taking too long to respond."}
-        except Exception as e:
-            logger.warning(f"Agent query failed for message {message_id}: {e}")
-            return {"error": f"Unexpected gateway error: {str(e)}"}
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, dict) and data.get("answer"):
+                            return data
+                        return {"error": "Gateway returned 200 but no answer was found."}
+
+                    if resp.status_code == 429:
+                        return {"error": "AI rate limit reached upstream. Please retry in a few minutes."}
+
+                    if resp.status_code == 500:
+                        try:
+                            err_detail = resp.json().get("detail", "Internal Server Error")
+                            return {"error": f"Gateway Error (500): {err_detail}"}
+                        except Exception:
+                            return {"error": "Gateway Error (500): The AI service crashed or is offline."}
+
+                    return {"error": f"Gateway returned error code {resp.status_code}."}
+
+            except (httpx.ConnectError, httpx.TimeoutException) as e:
+                if attempt < max_attempts:
+                    await asyncio.sleep(0.6 * attempt)
+                    continue
+                if isinstance(e, httpx.ConnectError):
+                    return {"error": "Could not connect to DACLE Gateway (API may be restarting). Please retry in a few seconds."}
+                return {"error": "Gateway timeout. The AI is taking too long to respond."}
+            except Exception as e:
+                logger.warning(f"Agent query failed for message {message_id}: {e}")
+                return {"error": f"Unexpected gateway error: {str(e)}"}
 
     async def _sync_guild_commands(self, guild: discord.Guild) -> None:
         """Sync slash commands to the given guild without blocking on_ready."""
