@@ -8,7 +8,7 @@ Provides:
 - /briefing-unsubscribe - Unsubscribe from daily briefing
 """
 
-import logging
+from src.utils.logger import get_logger
 from datetime import datetime, time
 from typing import Optional
 
@@ -25,7 +25,7 @@ from src.knowledge.supabase_client import get_knowledge_base
 from src.tge.alert_generator import TGEAlertGenerator
 from src.utils.config import SupabaseConfig
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class BriefingCog(commands.Cog):

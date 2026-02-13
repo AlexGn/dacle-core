@@ -1,4 +1,4 @@
-import logging
+from src.utils.logger import get_logger
 import re
 import aiohttp
 import discord
@@ -6,7 +6,7 @@ from discord.ext import commands
 import os
 from typing import Optional, Dict, Any
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Patterns ported from deploy/openclaw/trade-router/index.js
 SYMBOL_PATTERN = re.compile(r"\$([A-Z0-9]{2,10})|([A-Z0-9]{2,10})(?=\/(?:USDT|USD|USDC))", re.IGNORECASE)

@@ -4,7 +4,7 @@ Whales Market OTC Discord Commands
 Slash commands for scanning pre-market OTC data and analyzing TGE opportunities.
 """
 
-import logging
+from src.utils.logger import get_logger
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -15,7 +15,7 @@ from discord.ext import commands
 from src.integrations.whalesmarket.scanner import WhalesMarketScanner
 from src.knowledge.supabase_client import get_knowledge_base
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class OTCCommands(commands.Cog):

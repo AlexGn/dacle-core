@@ -6,7 +6,7 @@ Session 396: Replaces OpenClaw "analyze" command which lacked thread awareness.
 
 import asyncio
 import json
-import logging
+from src.utils.logger import get_logger
 import time
 from pathlib import Path
 from typing import Tuple, Dict, Any, Optional, List
@@ -23,7 +23,7 @@ from src.bot.cogs.analysis_views import TradeApprovalView
 from src.utils.config import get_discord_config
 from api.routers.macro import get_btc_regime_widget
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
 DISAMBIGUATION_PATH = PROJECT_ROOT / "data" / "bot" / "token_disambiguation.json"
@@ -437,26 +437,42 @@ class AnalysisCommands(commands.Cog):
             logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
             target_channel = analysis_channel
 
-        resolved = await self._maybe_disambiguate(symbol, interaction.user, target_channel)
-        if not resolved:
-            await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
-            return
-        resolved_symbol, resolved_name = resolved
-        await status_msg.edit(
-            content=f"🔍 Analyzing **{resolved_symbol}**... (this may take 10-20s)"
-        )
-
-        asyncio.create_task(
-            self._run_analysis_task(
-                interaction.user,
-                status_msg,
-                resolved_symbol,
-                target_channel,
-                notify_channel=analysis_channel,
-                resolved_name=resolved_name,
-                request_id=request_id,
+        try:
+            resolved = await self._maybe_disambiguate(symbol, interaction.user, target_channel)
+            if not resolved:
+                await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
+                return
+            resolved_symbol, resolved_name = resolved
+            await status_msg.edit(
+                content=f"🔍 Analyzing **{resolved_symbol}**... (this may take 10-20s)"
             )
-        )
+
+            asyncio.create_task(
+                self._run_analysis_task(
+                    interaction.user,
+                    status_msg,
+                    resolved_symbol,
+                    target_channel,
+                    notify_channel=analysis_channel,
+                    resolved_name=resolved_name,
+                    request_id=request_id,
+                )
+            )
+        except Exception as e:
+            logger.error(
+                "ANALYZE_SLASH_ERROR "
+                f"request_id={request_id} "
+                f"symbol={symbol} "
+                f"reason=slash_setup_exception "
+                f"error={e}",
+                exc_info=True,
+            )
+            try:
+                await status_msg.edit(
+                    content=f"❌ Analysis failed for **{symbol}**: {e}"
+                )
+            except Exception:
+                pass
 
     async def _run_analysis_task(
         self,

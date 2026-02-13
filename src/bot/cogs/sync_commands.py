@@ -3,14 +3,14 @@ Owner-only slash command to sync guild commands.
 """
 
 import os
-import logging
+from src.utils.logger import get_logger
 from typing import Optional
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SyncCommands(commands.Cog):

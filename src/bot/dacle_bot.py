@@ -166,6 +166,23 @@ class DACLEBot(commands.Bot):
         else:
             logger.warning("⚠️ No app commands registered before sync")
 
+        # Register global app_command error handler for visibility
+        @self.tree.error
+        async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+            logger.error(
+                f"APP_COMMAND_ERROR command={interaction.command.name if interaction.command else 'unknown'} "
+                f"user={interaction.user} error={error}",
+                exc_info=error,
+            )
+            try:
+                msg = f"An error occurred: {error}"
+                if interaction.response.is_done():
+                    await interaction.followup.send(msg, ephemeral=True)
+                else:
+                    await interaction.response.send_message(msg, ephemeral=True)
+            except Exception:
+                pass
+
         logger.info("Setup complete")
 
     async def on_ready(self):

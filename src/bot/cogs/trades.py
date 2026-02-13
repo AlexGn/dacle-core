@@ -8,7 +8,7 @@ Discord slash commands for logging trades:
 - /trades-stats - Show performance metrics
 """
 
-import logging
+from src.utils.logger import get_logger
 from typing import Optional
 
 import discord
@@ -21,7 +21,7 @@ from src.briefing.daily_briefing import DailyBriefingGenerator
 from src.knowledge.supabase_client import get_knowledge_base
 from src.knowledge.trade_logger import TradeLogger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TradeCommands(commands.Cog):

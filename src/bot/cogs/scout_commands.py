@@ -1,10 +1,10 @@
-import logging
+from src.utils.logger import get_logger
 import discord
 from discord import app_commands
 from discord.ext import commands
 from src.agent.reasoning.evolver import CapabilityEvolver
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class ScoutCommands(commands.Cog):
     """

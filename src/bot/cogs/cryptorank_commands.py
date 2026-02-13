@@ -4,7 +4,7 @@ CryptoRank Discord Commands
 Slash commands for scanning TGEs and token unlocks from CryptoRank.
 """
 
-import logging
+from src.utils.logger import get_logger
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -16,7 +16,7 @@ from src.integrations.cryptorank.scanner import TGEScanner
 from src.integrations.cryptorank.unlock_monitor import UnlockMonitor
 from src.knowledge.supabase_client import get_knowledge_base
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class CryptoRankCommands(commands.Cog):
