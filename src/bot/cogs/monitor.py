@@ -294,6 +294,17 @@ class MessageMonitor(commands.Cog):
             projects.append({"name": sym, "symbol": sym, "sentiment": direction})
         return projects
 
+    def _extract_trade_symbol(self, content: str) -> Optional[str]:
+        """
+        Extract canonical trade symbol from structured #trades content.
+        Requires at least one alphabetic character to avoid price tokens like $19.7.
+        """
+        m = re.search(
+            r"\$((?=[A-Z0-9]{2,10}\b)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{2,10})(?:/USDT|/USD|/USDC)?",
+            content.upper(),
+        )
+        return m.group(1) if m else None
+
     def _parse_trade_setup(self, content: str) -> Optional[Dict[str, Any]]:
         """
         Parse entry/SL/target and direction from a trade setup message.
@@ -968,9 +979,7 @@ class MessageMonitor(commands.Cog):
         # false positives from copied transcripts/usernames (e.g., "Davt97").
         trade_symbol = None
         if is_trades_channel and force_trigger:
-            m = re.search(r"\$([A-Z0-9]{2,10})(?:/USDT|/USD|/USDC)?", aggregated_content.upper())
-            if m:
-                trade_symbol = m.group(1)
+            trade_symbol = self._extract_trade_symbol(aggregated_content)
 
         # Log if we're using context from multiple messages
         if aggregated_content != message_content:
