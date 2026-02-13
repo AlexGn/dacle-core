@@ -183,7 +183,12 @@ async def get_btc_macro_context(force_refresh: bool = False) -> dict:
         # Update Redis cache
         if cache and cache.client:
             try:
-                cache.set(BTC_CACHE_KEY, btc_data, ttl=BTC_CACHE_TTL, namespace=BTC_CACHE_NAMESPACE)
+                cache.set(
+                    BTC_CACHE_KEY,
+                    btc_data,
+                    ttl_seconds=BTC_CACHE_TTL,
+                    namespace=BTC_CACHE_NAMESPACE,
+                )
                 logger.debug("BTC context cached to Redis")
             except Exception as e:
                 logger.warning(f"Redis cache write failed: {e}")
