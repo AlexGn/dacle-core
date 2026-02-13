@@ -303,30 +303,51 @@ def check_infrastructure_health(
         return None
 
     alerts = health_data.get("alerts", [])
-    alert_summary = "; ".join(alerts) if alerts else "no details"
+    arch_alerts = [a for a in alerts if "Architectural integrity violated" in a]
+    non_arch_alerts = [a for a in alerts if "Architectural integrity violated" not in a]
+    alert_summary = "; ".join(non_arch_alerts) if non_arch_alerts else "no details"
     severity = "critical" if status == "CRITICAL" else "warning"
-    channel = "focus"
 
-    # Route architectural hygiene noise to logs when it's the only degraded
-    # signal and runtime-critical systems are otherwise healthy.
-    subsystems = health_data.get("subsystems", {}) or {}
-    non_healthy = {
-        name: info
-        for name, info in subsystems.items()
-        if info.get("status") in ("DEGRADED", "CRITICAL")
-    }
-    arch_only_degraded = (
-        status == "DEGRADED"
-        and non_healthy
-        and set(non_healthy.keys()) == {"architectural_guardian"}
-    )
-    if arch_only_degraded:
-        channel = "logs"
-        severity = "info"
+    # Architectural noise is routed separately to logs.
+    # If only architectural guardian is degraded, do not post infra alert to focus.
+    if status == "DEGRADED" and arch_alerts and not non_arch_alerts:
+        return None
 
     return HeartbeatAlert(
         check_name="infrastructure_health",
-        channel=channel,
+        channel="focus",
         message=f"[SYSTEM] Status: {status} — {alert_summary}",
+        severity=severity,
+    )
+
+
+def check_architectural_guardian_health(
+    health_data: dict,
+) -> Optional[HeartbeatAlert]:
+    """
+    Route architectural guardian degradation to logs channel.
+
+    This keeps structural/hygiene noise out of focus and preserves focus for
+    operationally actionable alerts.
+    """
+    status = health_data.get("overall_status")
+    if not status or status == "HEALTHY":
+        return None
+
+    subsystems = health_data.get("subsystems", {}) or {}
+    arch = subsystems.get("architectural_guardian", {}) or {}
+    arch_status = arch.get("status")
+    if arch_status not in ("DEGRADED", "CRITICAL"):
+        return None
+
+    violations = arch.get("violations", 0)
+    details = arch.get("details", [])
+    detail_summary = "; ".join(details[:3]) if details else "no details"
+    severity = "warning" if arch_status == "CRITICAL" else "info"
+
+    return HeartbeatAlert(
+        check_name="architectural_guardian_health",
+        channel="logs",
+        message=f"[ARCHITECTURE] Status: {arch_status} — {violations} issues ({detail_summary})",
         severity=severity,
     )
