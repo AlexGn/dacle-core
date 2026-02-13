@@ -158,6 +158,7 @@ data/state/
 data/agent_traces/
 data/analytics/refresh_slo_metrics.json
 data/bot/token_disambiguation.json
+data/retry_queue/
 
 # Internal cache (runtime, regeneratable)
 src/data/cache/
