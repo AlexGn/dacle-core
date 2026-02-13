@@ -25,35 +25,40 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v5.21 - Quick TA Consolidation, Feb 5, 2026)
+## 📊 Current Status (v1.2.0 - Architectural Reliability, Feb 13, 2026)
 
-### 🎯 v5.0 SHORT EXECUTION SYSTEM - PRODUCTION READY
+### 🎯 v1.2.0 ARCHITECTURAL HYGIENE - PRODUCTION READY
 
 | Component | Status | Details |
 |-----------|--------|---------|
+| **Trade Router** | ✅ 100% | Redis-backed, durable retry queue + idempotency |
+| **System Doctor** | ✅ 100% | Auto-healing systemctl for API and Bot services |
+| **Scoring Parity** | ✅ 100% | CLI/API parity for analyze.py scoring pipeline |
+| **Liquidity Guard** | ✅ 100% | Integrated into TGE scanner for auto-filtering |
 | **Scoring System** | ✅ 100% | 13 components, ρ=-0.612 OUTSTANDING |
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
 | **Learning System** | ✅ 100% | 92 learnings (L001-L092) |
 | **MEXC Trade Sync** | ✅ 100% | Dual-phase sync (active + closed positions) |
-| **Phase 6 Learnings** | ✅ 100% | L032-L037 fully wired to pipeline |
-| **Health Monitoring** | ✅ 100% | Daemon deployed to VPS (Session 270) |
-| **LONG System Validation** | ✅ 100% | N=41 trades, 82.9% WIN+BE rate (Session 314) |
-| **TA Extraction Validation** | ✅ 100% | R:R ratio sanity checks, 30-day screenshot retention |
 
-**Next Phase**: ML training with LONG outcomes, R:R ratio optimization
+**Next Phase**: Prometheus/Grafana monitoring, LONG ML training expansion
 
 ---
 
-**🔒 LATEST (Session 374)**: Quick TA Pipeline Consolidation — Safety Gaps + P1/P2/P3 Improvements + Learning Stats ✅ **COMPLETE**
-- **Session 374**: Wired outcome tracker (log_ta_score → record_outcome), persisted macro/btc_context in TA results.
-- **Session 374b (P0 Safety)**: Token win rate gating in computed TA endpoint, weekend restriction (L093) for entry zone monitor.
-- **Session 374c/d (P1-P3)**: Auto-outcome recording with trade log sync, DCA confluences scored, TP2/TP3 computed, entry_decision populated, auto-playbook generation, rectangle dead code documented.
-- **Session 374e**: Learning stats API endpoints (`GET /api/ta/accuracy-stats`, `GET /api/ta/calibration-suggestions`) + lazy-loaded dashboard card.
-- **5-Step Feedback Loop**: log_ta_score → sync_ta_outcomes → record_outcome → get_score_accuracy_stats → get_calibration_suggestions.
-- **Test Coverage**: 2,445 total tests passing (289 TA tests, 9 learning stats tests).
-- **Git Commits**: `801ceb2f`, `6de54390`, `4b1c9d53`, `fba7ce64`, `877088cc`.
+**🔒 LATEST (Session 415b)**: Architectural Reliability & Parity ✅ **COMPLETE**
+- **Trade Router Redis Migration**: Migrated Node.js trade-router to `ioredis` for persistent retry queues and idempotency.
+- **System Doctor Healing**: Implemented auto-healing logic to restart `dacle-api` and `dacle-bot` if detected as down.
+- **CLI/API Parity**: Refactored `analyze.py` to use `IntegratedAnalysisPipeline` for scoring parity with the production API.
+- **Liquidity Guard Integration**: Automated TGE scanner now automatically filters tokens with insufficient liquidity.
+- **Test Coverage**: 2,998+ total tests passing.
+
+**🔒 PREVIOUS (Session 415)**: Operational Hardening (TDD) ✅ **COMPLETE**
+- **Refetch Zombie Tokens**: Implemented maintenance utility to repair tokens with stale or missing data on VPS.
+- **Dynamic TGE Reports**: Refactored HTML reports to use conviction-aware outcome expectations and stop-losses.
+- **Critical Process Monitoring**: System Doctor now monitors core DACLE services via `psutil`.
+
+**🔒 PREVIOUS (Session 374)**: Quick TA Pipeline Consolidation — Safety Gaps + P1/P2/P3 Improvements + Learning Stats ✅ **COMPLETE**
 
 **🔒 PREVIOUS (Session 372)**: Compound Intelligence — R:R Sizing + Pattern Mining + Token Blocking ✅ **COMPLETE**
 - **P1: R:R Position Modifier**: Scales position size based on risk/reward ratio (1.25x for 4-7 R:R, 0.5x for low R:R).
@@ -1080,8 +1085,8 @@ See [LICENSE](LICENSE)
 
 ---
 
-**Last Updated**: February 5, 2026
-**Version**: v5.21
-**Status**: Session 374 Quick TA Consolidation COMPLETE ✅ (Safety Gaps, P1-P3 Improvements, Learning Stats API)
+**Last Updated**: February 13, 2026
+**Version**: v1.2.0
+**Status**: Session 415b Architectural Reliability COMPLETE ✅ (Redis Trade-Router, Auto-Healing, Scoring Parity)
 **Total Learnings**: 92 (L001-L092), **100% integrated** (25 Sherlock learnings operational)
 **Token Preservation**: L092 guardrails prevent token deletion, auto-create missing data
