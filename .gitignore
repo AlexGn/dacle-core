@@ -132,6 +132,9 @@ supabase/.temp/
 # Local Netlify folder
 .netlify
 
+# Router runtime lockfile generated on VPS by npm install
+deploy/openclaw/market-direction-router/package-lock.json
+
 # claude-mem plugin data (local development memory)
 .claude-mem/
 .hypothesis/
@@ -153,6 +156,8 @@ data/ta_uploads/
 # Runtime state files (updated by cron monitors, not source code)
 data/state/
 data/agent_traces/
+data/analytics/refresh_slo_metrics.json
+data/bot/token_disambiguation.json
 
 # Internal cache (runtime, regeneratable)
 src/data/cache/
