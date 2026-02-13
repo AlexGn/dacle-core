@@ -44,7 +44,7 @@ ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240
 
 class TokenDisambiguationSelect(discord.ui.Select):
     def __init__(self, parent: "TokenDisambiguationView"):
-        self.parent = parent
+        self._parent_view = parent
         options: List[discord.SelectOption] = []
         for idx, option in enumerate(parent.options):
             name = option.get("name") or "Unknown"
@@ -69,7 +69,7 @@ class TokenDisambiguationSelect(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        if self.parent.requester_id and interaction.user.id != self.parent.requester_id:
+        if self._parent_view.requester_id and interaction.user.id != self._parent_view.requester_id:
             await interaction.response.send_message(
                 "Only the requester can select a token for this analysis.",
                 ephemeral=True,
@@ -77,11 +77,11 @@ class TokenDisambiguationSelect(discord.ui.Select):
             return
 
         selected_idx = int(self.values[0])
-        self.parent.selection = self.parent.options[selected_idx]
-        for child in self.parent.children:
+        self._parent_view.selection = self._parent_view.options[selected_idx]
+        for child in self._parent_view.children:
             child.disabled = True
-        await interaction.response.edit_message(view=self.parent)
-        self.parent.stop()
+        await interaction.response.edit_message(view=self._parent_view)
+        self._parent_view.stop()
 
 
 class TokenDisambiguationView(discord.ui.View):
