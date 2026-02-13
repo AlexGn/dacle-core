@@ -139,13 +139,6 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load sync_commands cog: {e}")
 
-        # Load basic health commands (ping)
-        try:
-            await self.load_extension("src.bot.cogs.health_commands")
-            logger.info("✅ Loaded health_commands cog")
-        except Exception as e:
-            logger.error(f"❌ Failed to load health_commands cog: {e}")
-
         # NOTE: Trade Router (Deterministic parsing) is handled by Node.js service
         # deploy/openclaw/trade-router/index.js to ensure Session 408 reliability.
         # Python cog src.bot.cogs.trade_router is disabled to prevent double-posting.
