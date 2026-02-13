@@ -276,7 +276,11 @@ class MessageMonitor(commands.Cog):
         Supports patterns like $DUSK, $DUSK/USDT, and infers direction.
         """
         projects = []
-        symbols = re.findall(r"\$([A-Z0-9]{2,10})(?:/USDT|/USD|/USDC)?", content.upper())
+        # Require at least one letter to avoid parsing price levels like $19.7160 as symbols.
+        symbols = re.findall(
+            r"\$((?=[A-Z0-9]{2,10}\b)(?=[A-Z0-9]*[A-Z])[A-Z0-9]{2,10})(?:/USDT|/USD|/USDC)?",
+            content.upper(),
+        )
         if not symbols:
             return projects
 
