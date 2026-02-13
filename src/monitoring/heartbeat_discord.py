@@ -7,10 +7,12 @@ Pattern from scripts/monitors/market_direction_monitor.py:201-226.
 
 import logging
 import os
+from datetime import datetime, timezone
 
 import httpx
 
 from src.ops.discord_channel_contract import get_discord_channel_contract
+from src.monitoring.channel_telemetry import write_channel_telemetry_event
 
 logger = logging.getLogger(__name__)
 
@@ -52,12 +54,36 @@ async def post_to_discord(channel_name: str, message: str) -> bool:
             resp = await client.post(url, headers=headers, json=payload)
             if resp.status_code in (200, 201):
                 logger.info(f"Posted HEARTBEAT alert to #{channel_name}")
+                write_channel_telemetry_event(
+                    telemetry_path=None,
+                    timestamp_iso=datetime.now(timezone.utc).isoformat(),
+                    channel=channel_name,
+                    message=message,
+                    source="heartbeat_discord",
+                    posted=True,
+                )
                 return True
             else:
                 logger.error(
                     f"Discord API error {resp.status_code}: {resp.text[:300]}"
                 )
+                write_channel_telemetry_event(
+                    telemetry_path=None,
+                    timestamp_iso=datetime.now(timezone.utc).isoformat(),
+                    channel=channel_name,
+                    message=message,
+                    source="heartbeat_discord",
+                    posted=False,
+                )
                 return False
     except Exception as e:
         logger.error(f"Discord post failed: {e}")
+        write_channel_telemetry_event(
+            telemetry_path=None,
+            timestamp_iso=datetime.now(timezone.utc).isoformat(),
+            channel=channel_name,
+            message=message,
+            source="heartbeat_discord",
+            posted=False,
+        )
         return False
