@@ -152,6 +152,7 @@ data/ta_uploads/
 
 # Runtime state files (updated by cron monitors, not source code)
 data/state/
+data/agent_traces/
 
 # Internal cache (runtime, regeneratable)
 src/data/cache/
