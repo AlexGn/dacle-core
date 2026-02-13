@@ -385,6 +385,7 @@ class AnalysisCommands(commands.Cog):
         Usage: /analyze <SYMBOL>
         """
         symbol = symbol.upper()
+        request_id = f"analyze-{interaction.id}"
         invoke_channel = interaction.channel
         analysis_channel = self._resolve_analysis_channel()
         if analysis_channel is None:
@@ -400,6 +401,14 @@ class AnalysisCommands(commands.Cog):
         await interaction.response.send_message(
             f"🔍 Analyzing **{symbol}**. I will post results in {analysis_channel.mention}.",
             ephemeral=True,
+        )
+
+        logger.info(
+            "ANALYZE_SLASH_START "
+            f"request_id={request_id} "
+            f"symbol={symbol} "
+            f"user_id={interaction.user.id} "
+            f"channel_id={analysis_channel.id}"
         )
 
         logger.info(
@@ -420,10 +429,6 @@ class AnalysisCommands(commands.Cog):
             thread_status = await thread.send(
                 f"🔍 Analyzing **{symbol}**... (this may take 10-20s)"
             )
-            try:
-                await status_msg.delete()
-            except discord.NotFound:
-                pass
             status_msg = thread_status
             target_channel = thread
         except Exception as e:
@@ -447,6 +452,7 @@ class AnalysisCommands(commands.Cog):
                 target_channel,
                 notify_channel=analysis_channel,
                 resolved_name=resolved_name,
+                request_id=request_id,
             )
         )
 
@@ -458,11 +464,15 @@ class AnalysisCommands(commands.Cog):
         target_channel: discord.abc.Messageable,
         notify_channel: Optional[discord.abc.Messageable] = None,
         resolved_name: Optional[str] = None,
+        request_id: Optional[str] = None,
     ):
         """Background task for analysis"""
         try:
             requester_name = requester if requester else "unknown"
-            logger.info(f"🚀 Starting on-demand analysis for {symbol} requested by {requester_name}")
+            logger.info(
+                f"🚀 Starting on-demand analysis for {symbol} requested by {requester_name} "
+                f"(request_id={request_id or 'n/a'})"
+            )
 
             # Force refetch and validate required data (no embed if missing)
             loop = asyncio.get_event_loop()
@@ -486,6 +496,13 @@ class AnalysisCommands(commands.Cog):
                 if diagnostics.get("completeness_pct") is not None:
                     diag_lines.append(f"Completeness: {diagnostics['completeness_pct']}%")
                 diag_text = "\n" + "\n".join(diag_lines) if diag_lines else ""
+                logger.error(
+                    "ANALYZE_SLASH_ERROR "
+                    f"request_id={request_id or 'n/a'} "
+                    f"symbol={symbol} "
+                    f"reason=missing_required_data "
+                    f"missing={missing_str}"
+                )
                 await status_msg.edit(
                     content=(
                         f"❌ Analysis blocked: missing required data after refresh "
@@ -509,6 +526,13 @@ class AnalysisCommands(commands.Cog):
             )
             
             if result.has_error:
+                logger.error(
+                    "ANALYZE_SLASH_ERROR "
+                    f"request_id={request_id or 'n/a'} "
+                    f"symbol={symbol} "
+                    f"reason=pipeline_error "
+                    f"error={result.error_message}"
+                )
                 await status_msg.edit(content=f"❌ Analysis failed: {result.error_message}")
                 return
 
@@ -534,9 +558,21 @@ class AnalysisCommands(commands.Cog):
             except discord.NotFound:
                 pass  # Message already deleted or not found
             
+            logger.info(
+                "ANALYZE_SLASH_SUCCESS "
+                f"request_id={request_id or 'n/a'} "
+                f"symbol={symbol}"
+            )
             logger.info(f"✅ Sent analysis report for {symbol}")
 
         except Exception as e:
+            logger.error(
+                "ANALYZE_SLASH_ERROR "
+                f"request_id={request_id or 'n/a'} "
+                f"symbol={symbol} "
+                f"reason=exception "
+                f"error={e}"
+            )
             logger.error(f"Error in analyze command: {e}", exc_info=True)
             # Try to report error to the user if possible
             try:
