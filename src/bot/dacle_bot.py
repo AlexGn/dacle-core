@@ -8,6 +8,7 @@ import asyncio
 import os
 import time
 import re
+import subprocess
 import httpx
 from pathlib import Path
 from typing import Optional
@@ -188,6 +189,8 @@ class DACLEBot(commands.Bot):
             self.loop.create_task(self._sync_guild_commands(private_server))
             # Start memory watchdog in background
             self.loop.create_task(self._memory_watchdog())
+            # Start legacy clawdbot process watchdog in background
+            self.loop.create_task(self._legacy_process_watchdog())
 
             # List all channels the bot can see
             logger.info(f"📋 Channels in {private_server.name}:")
@@ -234,6 +237,59 @@ class DACLEBot(commands.Bot):
                     except Exception as e:
                         logger.error(f"Failed to send Telegram memory alert: {e}")
             await asyncio.sleep(60)
+
+    @staticmethod
+    def _extract_legacy_clawdbot_processes(ps_output: str) -> list[str]:
+        """Return command lines that match legacy clawdbot process names."""
+        matches = []
+        for line in ps_output.splitlines():
+            if not line.strip():
+                continue
+            parts = line.split(None, 10)
+            cmd = parts[10] if len(parts) > 10 else line
+            if re.search(r"\bclawdbot[\w\-]*\b", cmd, flags=re.IGNORECASE):
+                matches.append(cmd.strip())
+        return matches
+
+    def _scan_legacy_clawdbot_processes(self) -> list[str]:
+        """Scan current process table for legacy clawdbot* processes."""
+        try:
+            proc = subprocess.run(
+                ["ps", "aux"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=5,
+            )
+            return self._extract_legacy_clawdbot_processes(proc.stdout)
+        except Exception as e:
+            logger.warning(f"Legacy process watchdog scan failed: {e}")
+            return []
+
+    async def _legacy_process_watchdog(self) -> None:
+        """
+        Alert when legacy clawdbot* processes appear, especially after clean startup.
+        This guards against accidental re-enabling of deprecated gateway responders.
+        """
+        interval = int(os.getenv("LEGACY_PROCESS_WATCHDOG_INTERVAL_SEC", "60"))
+        previously_present = False
+        while not self.is_closed():
+            matches = self._scan_legacy_clawdbot_processes()
+            currently_present = len(matches) > 0
+            if currently_present and not previously_present:
+                sample = "; ".join(matches[:3])
+                msg = (
+                    "🚨 Legacy process detected (clawdbot*). "
+                    f"Deprecated responder may be active again. Found: {sample}"
+                )
+                logger.error(msg)
+                try:
+                    from src.alerts.telegram_notifier import send_telegram_message
+                    send_telegram_message(msg)
+                except Exception as e:
+                    logger.warning(f"Failed to send legacy-process alert: {e}")
+            previously_present = currently_present
+            await asyncio.sleep(max(interval, 1))
 
     def _get_owner_id(self) -> Optional[int]:
         owner_id = os.getenv("DISCORD_OWNER_ID")
