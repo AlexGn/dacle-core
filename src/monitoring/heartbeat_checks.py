@@ -8,7 +8,7 @@ Channel routing:
     - Market direction  → #macro-updates (1470361576237306058)
     - New discoveries   → #discovery
     - Discovery recap   → #focus
-    - Position health   → #trades        (1468948950412431598)
+    - Position health   → #focus         (1470789144736174326)
     - Staleness         → #focus         (1470789144736174326)
     - Infrastructure    → #focus         (1470789144736174326)
 """
@@ -249,7 +249,7 @@ def check_position_health(
 
     return HeartbeatAlert(
         check_name="position_health",
-        channel="trades",
+        channel="focus",
         message="\n".join(msgs),
         severity=severity,
     )
