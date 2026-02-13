@@ -285,7 +285,7 @@ class DACLEBot(commands.Bot):
                 logger.error(msg)
                 try:
                     from src.alerts.telegram_notifier import send_telegram_message
-                    send_telegram_message(msg)
+                    send_telegram_message(msg, parse_mode=None)
                 except Exception as e:
                     logger.warning(f"Failed to send legacy-process alert: {e}")
             previously_present = currently_present
