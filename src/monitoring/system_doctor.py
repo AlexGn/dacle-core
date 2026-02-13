@@ -82,9 +82,9 @@ class SystemDoctor:
                 if service_name:
                     logger.warning(f"SystemDoctor: Attempting to restart {service_name}...")
                     if self._restart_service(service_name):
-                        actions.append(f"RESTARTED: {name} (was not running).")
+                        actions.append(f"RESTARTED: {name} is not running (auto-healed).")
                     else:
-                        actions.append(f"FAILED RESTART: {name} is down.")
+                        actions.append(f"FAILED RESTART: {name} is not running.")
                 else:
                     actions.append(f"CRITICAL: {name} is not running (no service mapping).")
                 
