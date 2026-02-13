@@ -14,7 +14,9 @@ Channel routing:
 """
 
 from dataclasses import dataclass
-from typing import List, Optional
+from datetime import datetime, timezone
+import hashlib
+from typing import Any, List, Optional
 
 
 @dataclass
@@ -24,6 +26,7 @@ class HeartbeatAlert:
     channel: str         # Discord channel name: "macro-updates", "trades", "focus"
     message: str         # Ready-to-post Discord message
     severity: str        # "info", "warning", "critical"
+    meta: Optional[dict[str, Any]] = None
 
 
 # Staleness threshold: alert when more than this many tokens are stale
@@ -350,4 +353,65 @@ def check_architectural_guardian_health(
         channel="logs",
         message=f"[ARCHITECTURE] Status: {arch_status} — {violations} issues ({detail_summary})",
         severity=severity,
+    )
+
+
+def _parse_iso(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def check_zero_usage_gap_sustained(
+    gap_report: dict,
+    last_state: dict,
+    now: Optional[datetime] = None,
+    cooldown_hours: int = 24,
+) -> Optional[HeartbeatAlert]:
+    """
+    Alert when zero-usage endpoint gaps persist, routed to #logs.
+
+    Suppresses duplicates for unchanged fingerprints during cooldown window.
+    """
+    payload = gap_report or {}
+    groups = payload.get("gaps", {}) or {}
+    underused = groups.get("underused_or_dead", []) or []
+    zero_usage = [g for g in underused if "Zero-usage endpoint coverage" in str(g.get("title", ""))]
+    if not zero_usage:
+        return None
+
+    categories = sorted(
+        {
+            str(item.get("title", "")).replace("Zero-usage endpoint coverage in ", "").strip()
+            for item in zero_usage
+        }
+    )
+    fingerprint = hashlib.sha256("|".join(categories).encode("utf-8")).hexdigest()[:16]
+
+    ts_now = now or datetime.now(timezone.utc)
+    last_fp = (last_state or {}).get("last_zero_usage_fingerprint")
+    last_alert = _parse_iso((last_state or {}).get("last_zero_usage_alert_utc"))
+    if last_fp == fingerprint and last_alert is not None:
+        age_h = (ts_now - last_alert).total_seconds() / 3600.0
+        if age_h < max(1, cooldown_hours):
+            return None
+
+    preview = ", ".join(categories[:3])
+    if len(categories) > 3:
+        preview = f"{preview}, +{len(categories) - 3} more"
+    return HeartbeatAlert(
+        check_name="zero_usage_gap_sustained",
+        channel="logs",
+        severity="warning",
+        message=(
+            "[GAP COVERAGE] Sustained zero-usage endpoint categories (7d): "
+            f"{len(categories)} ({preview})."
+        ),
+        meta={"fingerprint": fingerprint, "categories": categories},
     )
