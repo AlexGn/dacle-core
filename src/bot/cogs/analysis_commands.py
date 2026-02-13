@@ -40,40 +40,82 @@ REQUIRED_FIELDS = {
 }
 
 
+class TokenDisambiguationSelect(discord.ui.Select):
+    def __init__(self, parent: "TokenDisambiguationView"):
+        self.parent = parent
+        options: List[discord.SelectOption] = []
+        for idx, option in enumerate(parent.options):
+            name = option.get("name") or "Unknown"
+            symbol = (option.get("symbol") or "").upper()
+            source = option.get("source") or "unknown"
+            mc = option.get("market_cap")
+            mc_text = f"MC ${mc:,.0f}" if isinstance(mc, (int, float)) else "MC n/a"
+            label = f"{idx + 1}. {name}"
+            if len(label) > 100:
+                label = label[:97] + "..."
+            description = f"{symbol} • {source} • {mc_text}"
+            if len(description) > 100:
+                description = description[:97] + "..."
+            options.append(discord.SelectOption(label=label, description=description, value=str(idx)))
+
+        super().__init__(
+            placeholder="Select the correct token...",
+            min_values=1,
+            max_values=1,
+            options=options,
+            row=0,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.parent.requester_id and interaction.user.id != self.parent.requester_id:
+            await interaction.response.send_message(
+                "Only the requester can select a token for this analysis.",
+                ephemeral=True,
+            )
+            return
+
+        selected_idx = int(self.values[0])
+        self.parent.selection = self.parent.options[selected_idx]
+        for child in self.parent.children:
+            child.disabled = True
+        await interaction.response.edit_message(view=self.parent)
+        self.parent.stop()
+
+
 class TokenDisambiguationView(discord.ui.View):
     def __init__(self, options: List[Dict[str, Any]], requester: Optional[discord.abc.User]):
-        super().__init__(timeout=120)
+        super().__init__(timeout=300)
         self.options = options
         self.requester_id = requester.id if requester else None
         self.selection: Optional[Dict[str, Any]] = None
+        self.message: Optional[discord.Message] = None
 
-        for idx, option in enumerate(options):
-            label = f"{idx + 1}. {option.get('name') or 'Unknown'}"
-            if len(label) > 80:
-                label = label[:77] + "..."
-            button = discord.ui.Button(label=label, style=discord.ButtonStyle.primary)
-            button.callback = self._make_callback(idx)
-            self.add_item(button)
-
-        cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary)
+        self.add_item(TokenDisambiguationSelect(self))
+        cancel_button = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, row=1)
         cancel_button.callback = self._cancel
         self.add_item(cancel_button)
 
-    def _make_callback(self, idx: int):
-        async def _callback(interaction: discord.Interaction):
-            if self.requester_id and interaction.user.id != self.requester_id:
-                await interaction.response.send_message(
-                    "Only the requester can select a token for this analysis.",
-                    ephemeral=True,
-                )
-                return
-            self.selection = self.options[idx]
-            for child in self.children:
-                child.disabled = True
-            await interaction.response.edit_message(view=self)
-            self.stop()
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(view=self)
+            except Exception:
+                logger.debug("Failed to disable disambiguation view on timeout", exc_info=True)
 
-        return _callback
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item[Any]) -> None:
+        logger.exception("Disambiguation interaction failed: %s", error)
+        if interaction.response.is_done():
+            await interaction.followup.send(
+                "❌ Failed to apply selection. Please retry `/analyze`.",
+                ephemeral=True,
+            )
+        else:
+            await interaction.response.send_message(
+                "❌ Failed to apply selection. Please retry `/analyze`.",
+                ephemeral=True,
+            )
 
     async def _cancel(self, interaction: discord.Interaction):
         if self.requester_id and interaction.user.id != self.requester_id:
@@ -278,6 +320,7 @@ class AnalysisCommands(commands.Cog):
         )
         view = TokenDisambiguationView(shortlist, requester)
         prompt_msg = await target_channel.send(content=prompt, view=view)
+        view.message = prompt_msg
         await view.wait()
         if not view.selection:
             await prompt_msg.edit(content="⏳ Disambiguation timed out. Please retry the command.", view=None)
