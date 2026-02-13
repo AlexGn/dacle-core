@@ -6,7 +6,8 @@ Zero I/O, zero side effects — easy to test.
 
 Channel routing:
     - Market direction  → #macro-updates (1470361576237306058)
-    - High conviction   → #trades        (1468948950412431598)
+    - New discoveries   → #discovery
+    - Discovery recap   → #focus
     - Position health   → #trades        (1468948950412431598)
     - Staleness         → #focus         (1470789144736174326)
     - Infrastructure    → #focus         (1470789144736174326)
@@ -140,7 +141,7 @@ def check_high_conviction_discoveries(
     for symbol in new_high:
         alerts.append(HeartbeatAlert(
             check_name=f"new_discovery_{symbol}",
-            channel="trades",
+            channel="discovery",
             message=f"\U0001f3af **NEW HIGH CONVICTION: {symbol}**\nPreparing trade setup card...",
             severity="critical"
         ))
@@ -154,7 +155,7 @@ def check_high_conviction_discoveries(
 
     alerts.append(HeartbeatAlert(
         check_name="high_conviction_discovery",
-        channel="trades",
+        channel="focus",
         message=msg,
         severity="info",
     ))
@@ -303,12 +304,29 @@ def check_infrastructure_health(
 
     alerts = health_data.get("alerts", [])
     alert_summary = "; ".join(alerts) if alerts else "no details"
-
     severity = "critical" if status == "CRITICAL" else "warning"
+    channel = "focus"
+
+    # Route architectural hygiene noise to logs when it's the only degraded
+    # signal and runtime-critical systems are otherwise healthy.
+    subsystems = health_data.get("subsystems", {}) or {}
+    non_healthy = {
+        name: info
+        for name, info in subsystems.items()
+        if info.get("status") in ("DEGRADED", "CRITICAL")
+    }
+    arch_only_degraded = (
+        status == "DEGRADED"
+        and non_healthy
+        and set(non_healthy.keys()) == {"architectural_guardian"}
+    )
+    if arch_only_degraded:
+        channel = "logs"
+        severity = "info"
 
     return HeartbeatAlert(
         check_name="infrastructure_health",
-        channel="focus",
+        channel=channel,
         message=f"[SYSTEM] Status: {status} — {alert_summary}",
         severity=severity,
     )

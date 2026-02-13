@@ -10,16 +10,13 @@ import os
 
 import httpx
 
+from src.ops.discord_channel_contract import get_discord_channel_contract
+
 logger = logging.getLogger(__name__)
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
-# Discord channel IDs (from deploy/openclaw/HEARTBEAT.md + CLAUDE.md)
-CHANNEL_IDS = {
-    "macro-updates": "1470361576237306058",
-    "trades": "1468948950412431598",
-    "focus": "1470789144736174326",
-}
+CHANNEL_IDS = get_discord_channel_contract().ids
 
 
 async def post_to_discord(channel_name: str, message: str) -> bool:
