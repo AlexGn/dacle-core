@@ -20,6 +20,7 @@ from src.orchestration.trade_workflow import full_pipeline
 import asyncio
 from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
+from src.bot.utils.safe_task import safe_create_task
 from src.agent.reasoning.evolver import CapabilityEvolver
 from api.routers.macro import get_btc_regime_widget
 
@@ -759,7 +760,12 @@ class MessageMonitor(commands.Cog):
                         logger.warning(f"❌ Could not find target channel for report")
 
                 # Launch as task
-                asyncio.create_task(run_and_report(trigger_channel))
+                safe_create_task(
+                    run_and_report(trigger_channel),
+                    logger=logger,
+                    error_channel=trigger_channel,
+                    name=f"pipeline-{symbol}",
+                )
 
             # Log conviction details for visibility
             if conviction_score.conviction_signals:

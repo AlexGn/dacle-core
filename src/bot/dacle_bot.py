@@ -24,6 +24,7 @@ from src.knowledge.supabase_client import get_knowledge_base
 from src.monitoring.health import HealthCheckServer, get_health_status, run_periodic_health_checks
 from src.utils.config import get_discord_config, load_config
 from src.utils.logger import get_logger
+from src.bot.health import bot_health_check
 from src.bot.utils.memory_guard import (
     get_mem_available_mb,
     get_memory_alert_mb,
@@ -498,6 +499,10 @@ class DACLEBot(commands.Bot):
     async def on_error(self, event: str, *args, **kwargs):
         """Handle errors"""
         logger.error(f"Error in {event}", exc_info=True)
+
+    def is_healthy(self) -> dict:
+        """Return bot health status for /api/health integration."""
+        return bot_health_check(self)
 
     @commands.command(name="status")
     async def status(self, ctx: commands.Context):

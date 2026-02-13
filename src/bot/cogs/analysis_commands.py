@@ -20,6 +20,7 @@ from discord.ext import commands
 from src.orchestration.trade_workflow import full_pipeline
 from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
+from src.bot.utils.safe_task import safe_create_task
 from src.utils.config import get_discord_config
 from api.routers.macro import get_btc_regime_widget
 
@@ -375,8 +376,11 @@ class AnalysisCommands(commands.Cog):
         # Run analysis in background task
         # Pass the channel explicitly (it might be the new thread or the original channel)
         # Note: We use ctx.channel which we updated above if a thread was created
-        asyncio.create_task(
-            self._run_analysis_task(ctx.author, status_msg, resolved_symbol, ctx.channel, resolved_name=resolved_name)
+        safe_create_task(
+            self._run_analysis_task(ctx.author, status_msg, resolved_symbol, ctx.channel, resolved_name=resolved_name),
+            logger=logger,
+            error_channel=ctx.channel,
+            name=f"analyze-{resolved_symbol}",
         )
 
     @app_commands.command(name="analyze", description="Analyze a token and generate a playbook")
@@ -447,7 +451,7 @@ class AnalysisCommands(commands.Cog):
                 content=f"🔍 Analyzing **{resolved_symbol}**... (this may take 10-20s)"
             )
 
-            asyncio.create_task(
+            safe_create_task(
                 self._run_analysis_task(
                     interaction.user,
                     status_msg,
@@ -456,7 +460,10 @@ class AnalysisCommands(commands.Cog):
                     notify_channel=analysis_channel,
                     resolved_name=resolved_name,
                     request_id=request_id,
-                )
+                ),
+                logger=logger,
+                error_channel=target_channel,
+                name=f"analyze-slash-{resolved_symbol}",
             )
         except Exception as e:
             logger.error(
