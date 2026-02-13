@@ -38,6 +38,8 @@ REQUIRED_FIELDS = {
     "market_cap": ("market_cap",),
     "float_percent": ("float_percent", "float_pct"),
 }
+ANALYSIS_REFRESH_TIMEOUT_SECONDS = 180
+ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240
 
 
 class TokenDisambiguationSelect(discord.ui.Select):
@@ -475,12 +477,36 @@ class AnalysisCommands(commands.Cog):
             )
 
             # Force refetch and validate required data (no embed if missing)
-            loop = asyncio.get_event_loop()
-            if resolved_name:
-                await loop.run_in_executor(None, lambda: self._research_token_data(symbol, resolved_name))
-            else:
-                await loop.run_in_executor(None, lambda: self._refresh_token_data(symbol))
-            consolidated = await loop.run_in_executor(None, lambda: self._load_consolidated(symbol))
+            loop = asyncio.get_running_loop()
+            try:
+                if resolved_name:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: self._research_token_data(symbol, resolved_name)),
+                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
+                    )
+                else:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: self._refresh_token_data(symbol)),
+                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
+                    )
+                consolidated = await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: self._load_consolidated(symbol)),
+                    timeout=30,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "ANALYZE_SLASH_ERROR "
+                    f"request_id={request_id or 'n/a'} "
+                    f"symbol={symbol} "
+                    "reason=refresh_timed_out"
+                )
+                await status_msg.edit(
+                    content=(
+                        f"❌ Analysis timed out while refreshing **{symbol}**. "
+                        "Please retry in ~1 minute."
+                    )
+                )
+                return
             ok, missing = self._validate_required_fields(consolidated)
             if not ok:
                 missing_str = ", ".join(missing)
@@ -514,16 +540,33 @@ class AnalysisCommands(commands.Cog):
 
             # Run the full pipeline
             # Note: We run in executor to avoid blocking the bot's event loop
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None, 
-                lambda: full_pipeline(
-                    symbol=symbol, 
-                    force_refresh=False,  # Refresh is handled above
-                    force_playbook=True, # Always generate playbook
-                    notify_discord=False # We handle notification manually
+            try:
+                result = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: full_pipeline(
+                            symbol=symbol,
+                            force_refresh=False,  # Refresh is handled above
+                            force_playbook=True,  # Always generate playbook
+                            notify_discord=False,  # We handle notification manually
+                        ),
+                    ),
+                    timeout=ANALYSIS_PIPELINE_TIMEOUT_SECONDS,
                 )
-            )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "ANALYZE_SLASH_ERROR "
+                    f"request_id={request_id or 'n/a'} "
+                    f"symbol={symbol} "
+                    "reason=pipeline_timed_out"
+                )
+                await status_msg.edit(
+                    content=(
+                        f"❌ Analysis timed out while running pipeline for **{symbol}**. "
+                        "Please retry shortly."
+                    )
+                )
+                return
             
             if result.has_error:
                 logger.error(
