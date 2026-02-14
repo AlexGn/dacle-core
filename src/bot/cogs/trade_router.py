@@ -2,9 +2,12 @@ from src.utils.logger import get_logger
 import re
 import aiohttp
 import discord
+from discord import app_commands
 from discord.ext import commands
 import os
 from typing import Optional, Dict, Any
+
+from src.utils.redis_lms import get_current_price
 
 logger = get_logger(__name__)
 
@@ -120,6 +123,84 @@ class TradeRouter(commands.Cog):
             f"**Decision:** {status_emoji} {status_word}\n"
             f"{'Meets score threshold. Post full Entry/SL/Target to run full risk diagnostics.' if approved else 'Below threshold. Post full Entry/SL/Target only if you want full risk diagnostics.'}"
         )
+
+    @app_commands.command(name="rerun", description="Re-run trade analysis with current market data")
+    async def rerun(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=False)
+
+        channel = interaction.channel
+        if not isinstance(channel, discord.Thread):
+            await interaction.followup.send(
+                "❌ `/rerun` must be used inside a trade thread.", ephemeral=True
+            )
+            return
+        if channel.parent_id != TRADES_CHANNEL_ID:
+            await interaction.followup.send(
+                "❌ `/rerun` only works in `#trades` threads.", ephemeral=True
+            )
+            return
+
+        setup = await self._extract_setup_from_thread(channel)
+        if not setup:
+            await interaction.followup.send(
+                "❌ Could not find a trade setup in this thread.\n"
+                "Expected format: `Entry: X.XX`, `SL: X.XX`, etc."
+            )
+            return
+
+        proximity_note = await self._check_price_proximity(setup)
+
+        try:
+            api_res = await self.call_pre_trade_check(setup)
+        except Exception as e:
+            logger.error(f"Rerun API call failed: {e}")
+            api_res = None
+
+        if api_res and api_res.get("data", {}).get("formatted_response"):
+            header = f"🔄 **RERUN** — {setup['token']} {setup['direction']}\n"
+            if proximity_note:
+                header += f"{proximity_note}\n"
+            header += f"_Original setup: Entry ${setup['entry']}, SL ${setup['sl']}"
+            if setup.get("target"):
+                header += f", Target ${setup['target']}"
+            header += "_\n\n"
+            response_text = header + api_res["data"]["formatted_response"]
+        else:
+            response_text = "❌ Trade rerun failed — DACLE API unavailable."
+
+        await interaction.followup.send(response_text)
+
+    async def _extract_setup_from_thread(self, thread: discord.Thread) -> Optional[Dict[str, Any]]:
+        """Scan thread messages for the original trade setup."""
+        try:
+            starter = await thread.fetch_message(thread.id)
+            setup = self.parse_setup(starter.content)
+            if setup:
+                return setup
+        except Exception:
+            pass
+
+        async for msg in thread.history(limit=50, oldest_first=True):
+            if msg.author.bot:
+                continue
+            setup = self.parse_setup(msg.content)
+            if setup:
+                return setup
+
+        return None
+
+    async def _check_price_proximity(self, setup: Dict[str, Any]) -> Optional[str]:
+        """Check if current price is within 10% of original entry. Returns warning or None."""
+        try:
+            current = get_current_price(setup["token"])
+            if current is None:
+                return "⚠️ Could not fetch current price — proximity check skipped."
+            pct_diff = abs(current - setup["entry"]) / setup["entry"] * 100
+            if pct_diff > 10:
+                return f"⚠️ Current price ${current:.4g} is {pct_diff:.1f}% from entry ${setup['entry']} — setup may be stale."
+            return None
+        except Exception:
+            return None
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
