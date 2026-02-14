@@ -33,12 +33,12 @@ DEFAULT_LEVELS = {
         "current_value_b": None
     },
     "others_d": {
-        "support": 6.5,
-        "resistance": 8.0,
+        "support": 30.0,
+        "resistance": 36.0,
         "current_value": None
     },
     "btc_structure": {
-        "structure_bias": "NEUTRAL"
+        "structure_bias": "BEARISH"
     }
 }
 
