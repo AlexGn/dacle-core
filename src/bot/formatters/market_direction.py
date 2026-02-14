@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 
@@ -19,11 +22,41 @@ def _to_num(value: Any) -> Optional[float]:
         return None
 
 
+def _get_levels_staleness_badge(btc_levels_path: Path | None = None) -> str:
+    """Return staleness badge text for the Key Levels header.
+
+    Returns empty string if fresh, "(STALE - Nd old)" if >7d, "(OUTDATED)" if >30d.
+    """
+    if btc_levels_path is None:
+        btc_levels_path = Path("data/macro/btc_structure_levels.json")
+
+    try:
+        if not btc_levels_path.exists():
+            return " (OUTDATED)"
+        with open(btc_levels_path) as f:
+            data = json.load(f)
+        updated = data.get("updated") or data.get("updated_at", "")
+        if not updated:
+            return " (OUTDATED)"
+        # Parse date (supports both "2026-02-14" and ISO formats)
+        updated_str = str(updated).split("T")[0]
+        updated_dt = datetime.strptime(updated_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        age_days = (datetime.now(timezone.utc) - updated_dt).days
+        if age_days > 30:
+            return " (OUTDATED)"
+        if age_days > 7:
+            return f" (STALE - {age_days}d old)"
+    except Exception:
+        return " (OUTDATED)"
+    return ""
+
+
 def build_market_direction_embed(
     data: dict[str, Any],
     *,
     next_update_hint: str = "~4h",
     include_next_update: bool = True,
+    btc_levels_path: Path | None = None,
 ) -> dict[str, Any]:
     """Build a normalized Discord embed from /api/macro/market-direction payload."""
     bias = str(data.get("bias", "UNKNOWN"))
@@ -138,8 +171,10 @@ def build_market_direction_embed(
     ]
     if context_text:
         fields.append({"name": "━━━━ Market Context ━━━━", "value": context_text[:1024], "inline": False})
+    staleness_badge = _get_levels_staleness_badge(btc_levels_path)
+    key_levels_header = f"━━━━ Key Levels{staleness_badge} ━━━━"
     fields.extend([
-        {"name": "━━━━ Key Levels ━━━━", "value": levels_text[:1024], "inline": False},
+        {"name": key_levels_header, "value": levels_text[:1024], "inline": False},
         {"name": "━━━━ Implications ━━━━", "value": implications_text[:1024], "inline": False},
     ])
 

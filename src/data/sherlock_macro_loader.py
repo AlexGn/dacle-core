@@ -10,9 +10,9 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
-import logging
+from src.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # File path for Sherlock's daily macro updates
 SHERLOCK_LEVELS_PATH = Path("data/macro/sherlock_macro_levels.json")
