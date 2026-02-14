@@ -140,9 +140,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load sync_commands cog: {e}")
 
-        # NOTE: Trade Router (Deterministic parsing) is handled by Node.js service
-        # deploy/openclaw/trade-router/index.js to ensure Session 408 reliability.
-        # Python cog src.bot.cogs.trade_router is disabled to prevent double-posting.
+        # Trade Router cog: on_message parsing is handled by Node.js (Session 408).
+        # Python cog re-enabled for /rerun slash command only (no on_message listener).
+        try:
+            await self.load_extension("src.bot.cogs.trade_router")
+            logger.info("✅ Loaded trade_router cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load trade_router cog: {e}")
 
         # Load Scout Commands (Self-Evolution Audit)
         try:

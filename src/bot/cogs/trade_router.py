@@ -202,53 +202,9 @@ class TradeRouter(commands.Cog):
         except Exception:
             return None
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
-        if message.author.bot:
-            return
-
-        # Check channel
-        if message.channel.id != TRADES_CHANNEL_ID:
-            return
-
-        # Ignore if mentions anyone (ClawdBot handles mentions)
-        if message.mentions:
-            return
-
-        # Try full setup
-        setup = self.parse_setup(message.content)
-        if setup:
-            logger.info(f"Trade Router detected setup for {setup['token']}")
-            api_res = await self.call_pre_trade_check(setup)
-            
-            if api_res and api_res.get("data", {}).get("formatted_response"):
-                response_text = api_res["data"]["formatted_response"]
-            else:
-                response_text = "❌ Trade check failed - DACLE API unavailable."
-
-            await self.send_in_thread(message, setup, response_text)
-            return
-
-        # Try score card
-        card = self.parse_score_card(message.content)
-        if card:
-            logger.info(f"Trade Router detected score card for {card['token']}")
-            response_text = self.format_score_decision(card)
-            await self.send_in_thread(message, card, response_text)
-
-    async def send_in_thread(self, message: discord.Message, setup: Dict[str, Any], content: str):
-        try:
-            # Create thread if not in one
-            if not isinstance(message.channel, discord.Thread):
-                thread_name = f"{setup['token']}-{setup['direction']}"
-                thread = await message.create_thread(name=thread_name, auto_archive_duration=1440)
-                await thread.send(content)
-                await message.reply(f"🧵 Analysis posted in thread: {thread.mention}", mention_author=False)
-            else:
-                await message.channel.send(content)
-        except Exception as e:
-            logger.error(f"Failed to send in thread: {e}")
-            await message.reply(content, mention_author=False)
+    # NOTE: on_message listener removed — trade setup detection is handled by
+    # Node.js trade-router (deploy/openclaw/trade-router/index.js) per Session 408.
+    # This cog only provides the /rerun slash command.
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TradeRouter(bot))
