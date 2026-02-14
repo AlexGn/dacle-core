@@ -37,7 +37,8 @@ REQUIRED_FIELDS = {
     "price": ("current_price", "price"),
     "fdv": ("fdv", "fully_diluted_valuation"),
     "market_cap": ("market_cap",),
-    "float_percent": ("float_percent", "float_pct"),
+    # float_percent: scorer handles missing gracefully (0/5 score + "MISSING DATA" flag).
+    # Hard-gating here blocks established tokens (e.g. TAO) where sources lack supply data.
 }
 ANALYSIS_REFRESH_TIMEOUT_SECONDS = 180
 ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240
