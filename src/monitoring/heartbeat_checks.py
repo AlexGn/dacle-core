@@ -11,6 +11,9 @@ Channel routing:
     - Position health   → #focus         (1470789144736174326)
     - Staleness         → #focus         (1470789144736174326)
     - Infrastructure    → #focus         (1470789144736174326)
+    - Disk space        → #focus         (Session 427)
+    - Redis health      → #focus         (Session 427)
+    - Process memory    → #focus         (Session 427)
 """
 
 from dataclasses import dataclass
@@ -414,4 +417,142 @@ def check_zero_usage_gap_sustained(
             f"{len(categories)} ({preview})."
         ),
         meta={"fingerprint": fingerprint, "categories": categories},
+    )
+
+
+# =============================================================================
+# Session 427: Disk Space, Redis Health, Process Memory Checks
+# =============================================================================
+
+# Disk space thresholds
+DISK_WARN_PERCENT = 80.0
+DISK_CRITICAL_PERCENT = 90.0
+
+# Redis health thresholds
+REDIS_MEMORY_WARN_MB = 256
+REDIS_KEY_COUNT_WARN = 100_000
+
+# Process memory threshold (RSS in MB)
+PROCESS_MEMORY_WARN_MB = 512
+
+
+def check_disk_space(
+    disk_usage_tuple: tuple,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check disk usage percentage from shutil.disk_usage() output.
+
+    Args:
+        disk_usage_tuple: (total, used, free) in bytes from shutil.disk_usage("/")
+
+    Returns:
+        HeartbeatAlert if usage >= 80%, None otherwise.
+    """
+    total, used, free = disk_usage_tuple
+    if total <= 0:
+        return None
+
+    usage_pct = (used / total) * 100
+
+    if usage_pct >= DISK_CRITICAL_PERCENT:
+        free_gb = free / (1024 ** 3)
+        return HeartbeatAlert(
+            check_name="disk_space",
+            channel="focus",
+            message=(
+                f"[DISK CRITICAL] Usage at {usage_pct:.1f}% "
+                f"({free_gb:.1f} GB free) — immediate action required"
+            ),
+            severity="critical",
+        )
+
+    if usage_pct >= DISK_WARN_PERCENT:
+        free_gb = free / (1024 ** 3)
+        return HeartbeatAlert(
+            check_name="disk_space",
+            channel="focus",
+            message=(
+                f"[DISK WARNING] Usage at {usage_pct:.1f}% "
+                f"({free_gb:.1f} GB free) — consider cleanup"
+            ),
+            severity="warning",
+        )
+
+    return None
+
+
+def check_redis_health(
+    redis_info: dict,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check Redis health from redis.info() output.
+
+    Args:
+        redis_info: Dict from redis.info() with keys like used_memory, db0, etc.
+
+    Returns:
+        HeartbeatAlert if memory or key count exceeds thresholds, None otherwise.
+    """
+    issues = []
+
+    # Check memory usage
+    used_memory_bytes = redis_info.get("used_memory", 0)
+    used_memory_mb = used_memory_bytes / (1024 * 1024)
+    if used_memory_mb > REDIS_MEMORY_WARN_MB:
+        issues.append(f"memory {used_memory_mb:.0f}MB (>{REDIS_MEMORY_WARN_MB}MB)")
+
+    # Check total key count across all DBs
+    total_keys = 0
+    for key, value in redis_info.items():
+        if key.startswith("db") and isinstance(value, dict):
+            total_keys += value.get("keys", 0)
+    if total_keys > REDIS_KEY_COUNT_WARN:
+        issues.append(f"{total_keys:,} keys (>{REDIS_KEY_COUNT_WARN:,})")
+
+    if not issues:
+        return None
+
+    severity = "critical" if used_memory_mb > REDIS_MEMORY_WARN_MB * 2 else "warning"
+    return HeartbeatAlert(
+        check_name="redis_health",
+        channel="focus",
+        message=f"[REDIS] {'; '.join(issues)}",
+        severity=severity,
+    )
+
+
+def check_process_memory(
+    process_info_list: List[dict],
+    threshold_mb: float = PROCESS_MEMORY_WARN_MB,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check process RSS memory usage.
+
+    Args:
+        process_info_list: List of dicts with keys: name, pid, rss_mb
+        threshold_mb: Alert threshold in MB (default 512)
+
+    Returns:
+        HeartbeatAlert if any process exceeds threshold, None otherwise.
+    """
+    high_mem = []
+    for proc in process_info_list:
+        rss_mb = proc.get("rss_mb", 0)
+        if rss_mb > threshold_mb:
+            name = proc.get("name", "unknown")
+            pid = proc.get("pid", "?")
+            high_mem.append(f"{name} (PID {pid}): {rss_mb:.0f}MB")
+
+    if not high_mem:
+        return None
+
+    severity = "critical" if any(
+        p.get("rss_mb", 0) > threshold_mb * 2 for p in process_info_list
+    ) else "warning"
+
+    return HeartbeatAlert(
+        check_name="process_memory",
+        channel="focus",
+        message=f"[MEMORY] High RSS: {'; '.join(high_mem)}",
+        severity=severity,
     )

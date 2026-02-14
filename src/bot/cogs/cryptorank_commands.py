@@ -276,6 +276,10 @@ class CryptoRankCommands(commands.Cog):
             )
 
 
+    async def cog_app_command_error(self, interaction, error):
+        logger.error(f"[CryptoRankCommands] {error}", exc_info=error)
+
+
 async def setup(bot: commands.Bot):
     """Load the CryptoRank commands cog."""
     await bot.add_cog(CryptoRankCommands(bot))

@@ -658,6 +658,10 @@ class AnalysisCommands(commands.Cog):
                 pass
 
 
+    async def cog_app_command_error(self, interaction, error):
+        logger.error(f"[AnalysisCommands] {error}", exc_info=error)
+
+
 async def setup(bot: commands.Bot):
     """Setup function called by bot when loading this cog"""
     await bot.add_cog(AnalysisCommands(bot))

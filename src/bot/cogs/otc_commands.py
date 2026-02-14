@@ -324,6 +324,10 @@ class OTCCommands(commands.Cog):
             return "➖"
 
 
+    async def cog_app_command_error(self, interaction, error):
+        logger.error(f"[OTCCommands] {error}", exc_info=error)
+
+
 async def setup(bot: commands.Bot):
     """Setup function to load the cog."""
     await bot.add_cog(OTCCommands(bot))

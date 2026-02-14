@@ -49,6 +49,10 @@ class MacroCommands(commands.Cog):
             )
 
 
+    async def cog_app_command_error(self, interaction, error):
+        logger.error(f"[MacroCommands] {error}", exc_info=error)
+
+
 async def setup(bot: commands.Bot):
     """Setup function for Discord extension loading."""
     await bot.add_cog(MacroCommands(bot))

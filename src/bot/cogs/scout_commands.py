@@ -48,6 +48,10 @@ class ScoutCommands(commands.Cog):
             logger.error(f"Scout command failed: {e}", exc_info=True)
             await interaction.followup.send(f"❌ Error running audit: {str(e)}")
 
+    async def cog_app_command_error(self, interaction, error):
+        logger.error(f"[ScoutCommands] {error}", exc_info=error)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(ScoutCommands(bot))
     logger.info("ScoutCommands cog loaded")

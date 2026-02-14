@@ -50,5 +50,9 @@ class SyncCommands(commands.Cog):
             await interaction.followup.send(f"❌ Sync failed: {e}", ephemeral=True)
 
 
+    async def cog_app_command_error(self, interaction, error):
+        logger.error(f"[SyncCommands] {error}", exc_info=error)
+
+
 async def setup(bot: commands.Bot):
     await bot.add_cog(SyncCommands(bot))
