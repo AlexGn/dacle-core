@@ -1,24 +1,25 @@
 """
 Market Direction Scorer — Periodic Market Bias Assessment
 
-Calculates a composite direction bias (BULLISH / NEUTRAL / BEARISH) from 7 weighted
+Calculates a composite direction bias (BULLISH / NEUTRAL / BEARISH) from 8 weighted
 signals. Used by the market_direction_monitor cron script and the /api/macro/market-direction
 endpoint to give David a clear "which way is the market likely to break?" assessment.
 
 Signals (all scored -1 to +1):
-    1. BTC Trend (25%)      — Price vs EMA20 from Binance 4H
-    2. BTC RSI 4H (10%)     — Oversold/overbought momentum
-    3. BTCDOM direction (15%) — Falling = alt-friendly, rising = alt-bearish
-    4. USDT.D direction (15%) — Falling = risk-on, rising = risk-off
-    5. TOTAL3 direction (15%) — Alt market cap trend
-    6. Fear & Greed (10%)    — Sentiment extremes
-    7. BTC Funding Rate (10%) — Derivatives positioning
+    1. BTC Trend (20%)       — Price vs EMA20 from Binance 4H
+    2. BTC RSI 4H (8%)       — Oversold/overbought momentum
+    3. BTCDOM direction (12%) — Falling = alt-friendly, rising = alt-bearish
+    4. USDT.D direction (12%) — Falling = risk-on, rising = risk-off
+    5. TOTAL3 direction (12%) — Alt market cap trend
+    6. Fear & Greed (8%)      — Sentiment extremes
+    7. BTC Funding Rate (8%)  — Derivatives positioning
+    8. BTC Structure (20%)    — Higher-timeframe structural bias from daily/weekly levels
 
 Data Sources (all free, no API keys):
     - Binance REST API (BTC price, klines, funding)
     - CoinPaprika /v1/global + /v1/tickers (BTCDOM, TOTAL3, USDT.D)
     - Alternative.me (Fear & Greed)
-    - Local JSON files (key levels from Sherlock)
+    - Local JSON files (key levels from Sherlock, BTC structure bias)
 """
 
 import asyncio
@@ -126,94 +127,153 @@ class DirectionUpdate:
 # =============================================================================
 
 def _score_btc_trend(trend: str, price: float, ema20: float) -> SignalResult:
-    """BTC Trend — 25% weight."""
+    """BTC Trend — 20% weight."""
     trend_upper = (trend or "").upper()
     if trend_upper == "UPTREND" or (price and ema20 and price > ema20):
-        return SignalResult("BTC Trend", 0.25, 1.0, price, f"UPTREND (${price:,.0f})", "🟢")
+        return SignalResult("BTC Trend", 0.20, 1.0, price, f"UPTREND (${price:,.0f})", "🟢")
     elif trend_upper == "DOWNTREND" or (price and ema20 and price < ema20):
-        return SignalResult("BTC Trend", 0.25, -1.0, price, f"DOWNTREND (${price:,.0f})", "🔴")
-    return SignalResult("BTC Trend", 0.25, 0.0, price, f"SIDEWAYS (${price:,.0f})", "🟡")
+        return SignalResult("BTC Trend", 0.20, -1.0, price, f"DOWNTREND (${price:,.0f})", "🔴")
+    return SignalResult("BTC Trend", 0.20, 0.0, price, f"SIDEWAYS (${price:,.0f})", "🟡")
 
 
 def _score_btc_rsi(rsi: Optional[float]) -> SignalResult:
-    """BTC RSI(4H) — 10% weight."""
+    """BTC RSI(4H) — 8% weight."""
     if rsi is None:
-        return SignalResult("BTC RSI", 0.10, 0.0, None, "N/A", "⚪")
+        return SignalResult("BTC RSI", 0.08, 0.0, None, "N/A", "⚪")
     if rsi > 60:
-        return SignalResult("BTC RSI", 0.10, 1.0, round(rsi, 1), f"{rsi:.1f} — Strong", "🟢")
+        return SignalResult("BTC RSI", 0.08, 1.0, round(rsi, 1), f"{rsi:.1f} — Strong", "🟢")
     elif rsi < 40:
-        return SignalResult("BTC RSI", 0.10, -1.0, round(rsi, 1), f"{rsi:.1f} — Weak", "🔴")
-    return SignalResult("BTC RSI", 0.10, 0.0, round(rsi, 1), f"{rsi:.1f} — Neutral", "🟡")
+        return SignalResult("BTC RSI", 0.08, -1.0, round(rsi, 1), f"{rsi:.1f} — Weak", "🔴")
+    return SignalResult("BTC RSI", 0.08, 0.0, round(rsi, 1), f"{rsi:.1f} — Neutral", "🟡")
 
 
 def _score_btcdom(change_24h: Optional[float], value: Optional[float]) -> SignalResult:
-    """BTCDOM direction — 15% weight. Falling BTCDOM = bullish for alts."""
+    """BTCDOM direction — 12% weight. Falling BTCDOM = bullish for alts."""
     if change_24h is None:
-        return SignalResult("BTCDOM", 0.15, 0.0, None, "N/A", "⚪")
+        return SignalResult("BTCDOM", 0.12, 0.0, None, "N/A", "⚪")
     if change_24h < -0.3:
-        return SignalResult("BTCDOM", 0.15, 1.0, round(value or 0, 1),
+        return SignalResult("BTCDOM", 0.12, 1.0, round(value or 0, 1),
                             f"Falling {change_24h:+.1f}%/24h", "🟢")
     elif change_24h > 0.3:
-        return SignalResult("BTCDOM", 0.15, -1.0, round(value or 0, 1),
+        return SignalResult("BTCDOM", 0.12, -1.0, round(value or 0, 1),
                             f"Rising {change_24h:+.1f}%/24h", "🔴")
-    return SignalResult("BTCDOM", 0.15, 0.0, round(value or 0, 1),
+    return SignalResult("BTCDOM", 0.12, 0.0, round(value or 0, 1),
                         f"Flat {change_24h:+.1f}%/24h", "🟡")
 
 
 def _score_usdt_d(change_24h: Optional[float], value: Optional[float]) -> SignalResult:
-    """USDT.D direction — 15% weight. Falling = risk-on (bullish)."""
+    """USDT.D direction — 12% weight. Falling = risk-on (bullish)."""
     if change_24h is None:
-        return SignalResult("USDT.D", 0.15, 0.0, None, "N/A", "⚪")
+        return SignalResult("USDT.D", 0.12, 0.0, None, "N/A", "⚪")
     # USDT.D rising = risk-off = bearish, falling = risk-on = bullish
     if change_24h < -0.2:
-        return SignalResult("USDT.D", 0.15, 1.0, round(value or 0, 2),
+        return SignalResult("USDT.D", 0.12, 1.0, round(value or 0, 2),
                             f"Falling {change_24h:+.2f}%/24h (risk-on)", "🟢")
     elif change_24h > 0.2:
-        return SignalResult("USDT.D", 0.15, -1.0, round(value or 0, 2),
+        return SignalResult("USDT.D", 0.12, -1.0, round(value or 0, 2),
                             f"Rising {change_24h:+.2f}%/24h (risk-off)", "🔴")
-    return SignalResult("USDT.D", 0.15, 0.0, round(value or 0, 2),
+    return SignalResult("USDT.D", 0.12, 0.0, round(value or 0, 2),
                         f"Flat {change_24h:+.2f}%/24h", "🟡")
 
 
 def _score_total3(change_24h: Optional[float], value_b: Optional[float]) -> SignalResult:
-    """TOTAL3 direction — 15% weight. Rising = bullish for alts."""
+    """TOTAL3 direction — 12% weight. Rising = bullish for alts."""
     if change_24h is None:
-        return SignalResult("TOTAL3", 0.15, 0.0, None, "N/A", "⚪")
+        return SignalResult("TOTAL3", 0.12, 0.0, None, "N/A", "⚪")
     if change_24h > 1.0:
-        return SignalResult("TOTAL3", 0.15, 1.0, round(value_b or 0, 0),
+        return SignalResult("TOTAL3", 0.12, 1.0, round(value_b or 0, 0),
                             f"Rising {change_24h:+.1f}%/24h", "🟢")
     elif change_24h < -1.0:
-        return SignalResult("TOTAL3", 0.15, -1.0, round(value_b or 0, 0),
+        return SignalResult("TOTAL3", 0.12, -1.0, round(value_b or 0, 0),
                             f"Falling {change_24h:+.1f}%/24h", "🔴")
-    return SignalResult("TOTAL3", 0.15, 0.0, round(value_b or 0, 0),
+    return SignalResult("TOTAL3", 0.12, 0.0, round(value_b or 0, 0),
                         f"Flat {change_24h:+.1f}%/24h", "🟡")
 
 
 def _score_fear_greed(value: Optional[int]) -> SignalResult:
-    """Fear & Greed — 10% weight."""
+    """Fear & Greed — 8% weight."""
     if value is None:
-        return SignalResult("Fear & Greed", 0.10, 0.0, None, "N/A", "⚪")
+        return SignalResult("Fear & Greed", 0.08, 0.0, None, "N/A", "⚪")
     if value >= 55:
         label = "Extreme Greed" if value >= 75 else "Greed"
-        return SignalResult("Fear & Greed", 0.10, 1.0, value, f"{value} — {label}", "🟢")
+        return SignalResult("Fear & Greed", 0.08, 1.0, value, f"{value} — {label}", "🟢")
     elif value <= 34:
         label = "Extreme Fear" if value <= 20 else "Fear"
-        return SignalResult("Fear & Greed", 0.10, -1.0, value, f"{value} — {label}", "🔴")
-    return SignalResult("Fear & Greed", 0.10, 0.0, value, f"{value} — Neutral", "🟡")
+        return SignalResult("Fear & Greed", 0.08, -1.0, value, f"{value} — {label}", "🔴")
+    return SignalResult("Fear & Greed", 0.08, 0.0, value, f"{value} — Neutral", "🟡")
 
 
 def _score_funding(rate_pct: Optional[float]) -> SignalResult:
-    """BTC Funding Rate — 10% weight."""
+    """BTC Funding Rate — 8% weight."""
     if rate_pct is None:
-        return SignalResult("Funding", 0.10, 0.0, None, "N/A", "⚪")
+        return SignalResult("Funding", 0.08, 0.0, None, "N/A", "⚪")
     if rate_pct > 0.005:
-        return SignalResult("Funding", 0.10, 1.0, round(rate_pct, 4),
+        return SignalResult("Funding", 0.08, 1.0, round(rate_pct, 4),
                             f"{rate_pct:.4f}% — Positive (longs paying)", "🟢")
     elif rate_pct < -0.01:
-        return SignalResult("Funding", 0.10, -1.0, round(rate_pct, 4),
+        return SignalResult("Funding", 0.08, -1.0, round(rate_pct, 4),
                             f"{rate_pct:.4f}% — Negative (crowded shorts)", "🔴")
-    return SignalResult("Funding", 0.10, 0.0, round(rate_pct, 4),
+    return SignalResult("Funding", 0.08, 0.0, round(rate_pct, 4),
                         f"{rate_pct:.4f}% — Neutral", "🟡")
+
+
+def _score_btc_structure(btc_price: float, structure_bias: str, structure_shift: float) -> SignalResult:
+    """BTC Structure — 20% weight. Higher-timeframe structural bias from daily/weekly levels."""
+    bias_upper = (structure_bias or "").upper()
+
+    # Missing data: no price or no bias
+    if not btc_price or not bias_upper:
+        return SignalResult("BTC Structure", 0.20, 0.0, None, "N/A", "⚪")
+
+    if bias_upper == "NEUTRAL":
+        return SignalResult("BTC Structure", 0.20, 0.0, btc_price,
+                            f"NEUTRAL (${btc_price:,.0f})", "🟡")
+
+    # Determine distance from MSS (market structure shift level)
+    if structure_shift and structure_shift > 0:
+        distance_pct = ((btc_price - structure_shift) / structure_shift) * 100
+    else:
+        distance_pct = None
+
+    if bias_upper == "BEARISH":
+        if distance_pct is not None and distance_pct <= -10.0:
+            score = -1.0
+            emoji = "🔴"
+            label = f"BEARISH ${btc_price:,.0f} ({distance_pct:+.1f}% from MSS ${structure_shift:,.0f})"
+        elif distance_pct is not None and distance_pct <= -5.0:
+            score = -0.7
+            emoji = "🔴"
+            label = f"BEARISH ${btc_price:,.0f} ({distance_pct:+.1f}% from MSS ${structure_shift:,.0f})"
+        else:
+            score = -0.5
+            emoji = "🟠"
+            if distance_pct is not None:
+                label = f"BEARISH ${btc_price:,.0f} ({distance_pct:+.1f}% from MSS ${structure_shift:,.0f})"
+            else:
+                label = f"BEARISH ${btc_price:,.0f} (no MSS level)"
+        return SignalResult("BTC Structure", 0.20, score, btc_price, label, emoji)
+
+    if bias_upper == "BULLISH":
+        if distance_pct is not None and distance_pct >= 10.0:
+            score = 1.0
+            emoji = "🟢"
+            label = f"BULLISH ${btc_price:,.0f} ({distance_pct:+.1f}% from MSS ${structure_shift:,.0f})"
+        elif distance_pct is not None and distance_pct >= 5.0:
+            score = 0.7
+            emoji = "🟢"
+            label = f"BULLISH ${btc_price:,.0f} ({distance_pct:+.1f}% from MSS ${structure_shift:,.0f})"
+        else:
+            score = 0.5
+            emoji = "🟡"
+            if distance_pct is not None:
+                label = f"BULLISH ${btc_price:,.0f} ({distance_pct:+.1f}% from MSS ${structure_shift:,.0f})"
+            else:
+                label = f"BULLISH ${btc_price:,.0f} (no MSS level)"
+        return SignalResult("BTC Structure", 0.20, score, btc_price, label, emoji)
+
+    # Unknown bias string
+    return SignalResult("BTC Structure", 0.20, 0.0, btc_price,
+                        f"{bias_upper} (${btc_price:,.0f})", "🟡")
 
 
 # =============================================================================
@@ -332,7 +392,7 @@ def _build_key_levels(
 
 async def calculate_direction_bias() -> DirectionUpdate:
     """
-    Fetch all 7 signals and compute composite market direction bias.
+    Fetch all 8 signals and compute composite market direction bias.
 
     Returns a DirectionUpdate with score, signals, key levels, and sizing hints.
     """
@@ -524,7 +584,13 @@ async def calculate_direction_bias() -> DirectionUpdate:
     except Exception as e:
         logger.debug(f"Fear & Greed fetch failed: {e}")
 
-    # ---- Score all 7 signals ----
+    # ---- Load BTC structure data for 8th signal ----
+    structure_data = _load_btc_structure_data()
+    structure_bias = structure_data.get("structure_bias", "")
+    structure_levels = structure_data.get("levels", {})
+    structure_shift = structure_levels.get("structure_shift", 0)
+
+    # ---- Score all 8 signals ----
     signals = [
         _score_btc_trend(btc_trend or "", btc_price or 0, btc_ema20 or 0),
         _score_btc_rsi(btc_rsi),
@@ -533,6 +599,7 @@ async def calculate_direction_bias() -> DirectionUpdate:
         _score_total3(total3_change_24h, total3_value_b),
         _score_fear_greed(fg_value),
         _score_funding(funding_rate_pct),
+        _score_btc_structure(btc_price or 0, structure_bias, structure_shift),
     ]
 
     # ---- Context indicators (weight=0, informational) ----
@@ -602,8 +669,20 @@ async def calculate_direction_bias() -> DirectionUpdate:
 # File Loaders
 # =============================================================================
 
+def _load_btc_structure_data() -> dict:
+    """Load full BTC structure data including top-level structure_bias."""
+    path = DATA_DIR / "macro" / "btc_structure_levels.json"
+    try:
+        if path.exists():
+            with open(path) as f:
+                return json.load(f)
+    except Exception as e:
+        logger.debug(f"Failed to load BTC structure data: {e}")
+    return {}
+
+
 def _load_btc_structure_levels() -> dict:
-    """Load BTC structure key levels from Sherlock data."""
+    """Load BTC structure key levels from Sherlock data (for key level display)."""
     path = DATA_DIR / "macro" / "btc_structure_levels.json"
     try:
         if path.exists():
