@@ -150,6 +150,7 @@ class TradeRouter(commands.Cog):
 
         proximity_note = await self._check_price_proximity(setup)
 
+        setup["is_rerun"] = True
         try:
             api_res = await self.call_pre_trade_check(setup)
         except Exception as e:
