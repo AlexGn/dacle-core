@@ -120,6 +120,7 @@ class DirectionUpdate:
             "previous_bias": self.previous_bias,
             "timestamp": self.timestamp,
             "btc_price": self.btc_price,
+            "narrative": generate_narrative_summary(self),
         }
         return d
 
@@ -666,6 +667,87 @@ async def calculate_direction_bias() -> DirectionUpdate:
         context_signals=context_signals,
         btc_price=btc_price or 0.0,
     )
+
+
+# =============================================================================
+# Narrative Summary Generator
+# =============================================================================
+
+def generate_narrative_summary(update: DirectionUpdate) -> str:
+    """Generate a rule-based narrative summary from a DirectionUpdate.
+
+    Template-driven, zero LLM cost. Leads with strongest signal, mentions
+    confirming signals, flags contradictions.
+    """
+    signals = update.signals
+    if not signals:
+        return "Insufficient signal data for narrative."
+
+    bias = update.bias.value if isinstance(update.bias, DirectionBias) else str(update.bias)
+    score = update.score
+
+    # Rank signals by absolute weighted contribution (weight * |score|)
+    ranked = sorted(
+        [(s, abs(s.weight * s.score)) for s in signals if s.score != 0],
+        key=lambda x: x[1],
+        reverse=True,
+    )
+
+    # Separate agreeing vs dissenting signals relative to composite direction
+    if score > 0:
+        agreeing = [(s, c) for s, c in ranked if s.score > 0]
+        dissenting = [(s, c) for s, c in ranked if s.score < 0]
+    elif score < 0:
+        agreeing = [(s, c) for s, c in ranked if s.score < 0]
+        dissenting = [(s, c) for s, c in ranked if s.score > 0]
+    else:
+        agreeing = []
+        dissenting = ranked
+
+    # --- Build narrative parts ---
+    parts = []
+
+    # 1. Opening statement with strongest signal
+    if bias == "BULLISH":
+        if agreeing:
+            strongest = agreeing[0][0]
+            parts.append(f"Market leaning bullish: {strongest.name} ({strongest.label}) is the strongest signal")
+        else:
+            parts.append("Market leaning bullish despite mixed signals")
+    elif bias == "BEARISH":
+        if agreeing:
+            strongest = agreeing[0][0]
+            parts.append(f"Market turning bearish: {strongest.name} ({strongest.label}) is the strongest signal")
+        else:
+            parts.append("Market turning bearish despite mixed signals")
+    else:
+        parts.append("Market undecided with mixed signals")
+
+    # 2. Confirming signals (up to 2 more)
+    confirm_names = []
+    for s, _ in agreeing[1:3]:
+        confirm_names.append(f"{s.name} ({s.label})")
+    if confirm_names:
+        parts.append(", confirmed by " + " and ".join(confirm_names))
+
+    # 3. Contradictions / contrarian signals
+    if dissenting:
+        contra_parts = []
+        for s, _ in dissenting[:2]:
+            contra_parts.append(f"{s.name} showing {s.label}")
+        parts.append(". However, " + " and ".join(contra_parts) + " (contrarian)")
+
+    # 4. BTC Structure context (if significant)
+    structure_signal = next((s for s in signals if s.name == "BTC Structure" and abs(s.score) >= 0.5), None)
+    if structure_signal and "MSS" in (structure_signal.label or ""):
+        if not any("Structure" in p for p in parts):
+            parts.append(f". Key risk: {structure_signal.label}")
+
+    narrative = "".join(parts)
+    if not narrative.endswith("."):
+        narrative += "."
+
+    return narrative
 
 
 # =============================================================================

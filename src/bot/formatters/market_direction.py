@@ -166,9 +166,13 @@ def build_market_direction_embed(
     if timestamp:
         footer_parts.append(f"Data: {timestamp}")
 
-    fields = [
-        {"name": "━━━━ Signal Breakdown ━━━━", "value": signals_text[:1024], "inline": False},
-    ]
+    # Narrative summary (rule-based, from generate_narrative_summary)
+    narrative = data.get("narrative") or ""
+
+    fields = []
+    if narrative:
+        fields.append({"name": "━━━━ Summary ━━━━", "value": narrative[:1024], "inline": False})
+    fields.append({"name": "━━━━ Signal Breakdown ━━━━", "value": signals_text[:1024], "inline": False})
     if context_text:
         fields.append({"name": "━━━━ Market Context ━━━━", "value": context_text[:1024], "inline": False})
     staleness_badge = _get_levels_staleness_badge(btc_levels_path)
