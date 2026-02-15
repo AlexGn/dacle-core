@@ -42,6 +42,48 @@ REQUIRED_FIELDS = {
 }
 ANALYSIS_REFRESH_TIMEOUT_SECONDS = 180
 ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240
+MAX_BATCH_SYMBOLS = 5
+BATCH_CONCURRENCY = 3
+TA_FRESHNESS_THRESHOLD_MINUTES = 30
+
+
+def _check_ta_freshness(symbol: str) -> bool:
+    """Return True if TA data is fresh (<30 min), False if stale."""
+    ta_file = TOKENS_DIR / symbol.upper() / "ta" / "latest.json"
+    if not ta_file.exists():
+        return False
+    try:
+        mtime = ta_file.stat().st_mtime
+        age_min = (time.time() - mtime) / 60
+        return age_min < TA_FRESHNESS_THRESHOLD_MINUTES
+    except Exception:
+        return False
+
+
+def parse_batch_symbols(symbols_str: str) -> list[str]:
+    """Parse comma or space separated symbols into a deduped list.
+
+    - Strips $ prefix
+    - Uppercases
+    - Deduplicates (preserving order)
+    - Max 5 symbols
+    """
+    # Split on commas first; if no commas, split on whitespace
+    if "," in symbols_str:
+        parts = [s.strip() for s in symbols_str.split(",")]
+    else:
+        parts = symbols_str.split()
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for part in parts:
+        cleaned = part.strip().lstrip("$").upper()
+        if not cleaned:
+            continue
+        if cleaned not in seen:
+            seen.add(cleaned)
+            result.append(cleaned)
+    return result[:MAX_BATCH_SYMBOLS]
 
 
 class TokenDisambiguationSelect(discord.ui.Select):
@@ -482,6 +524,113 @@ class AnalysisCommands(commands.Cog):
             except Exception:
                 pass
 
+    @app_commands.command(name="analyze-batch", description="Analyze multiple tokens concurrently")
+    @app_commands.describe(symbols="Comma-separated token symbols (e.g., ZRO, ALCH, DRIFT)")
+    async def analyze_batch_slash(self, interaction: discord.Interaction, symbols: str):
+        """Slash command to analyze multiple tokens at once."""
+        parsed = parse_batch_symbols(symbols)
+        if not parsed:
+            await interaction.response.send_message(
+                "No valid symbols provided. Use comma or space separated symbols (e.g., `ZRO, ALCH, DRIFT`).",
+                ephemeral=True,
+            )
+            return
+
+        analysis_channel = self._resolve_analysis_channel()
+        invoke_channel = interaction.channel
+        if analysis_channel is None:
+            analysis_channel = invoke_channel if isinstance(invoke_channel, discord.TextChannel) else None
+
+        if analysis_channel is None:
+            await interaction.response.send_message(
+                "Could not resolve analysis channel. Try again in `#analysis-updates`.",
+                ephemeral=True,
+            )
+            return
+
+        symbol_list = ", ".join(parsed)
+        await interaction.response.send_message(
+            f"Analyzing **{len(parsed)}** tokens: {symbol_list}. Results will appear in {analysis_channel.mention}.",
+            ephemeral=True,
+        )
+
+        logger.info(
+            f"/analyze-batch requested by {interaction.user} for [{symbol_list}] "
+            f"target channel #{analysis_channel.name} ({analysis_channel.id})"
+        )
+
+        semaphore = asyncio.Semaphore(BATCH_CONCURRENCY)
+        tasks = [
+            self._analyze_one(sym, analysis_channel, interaction.user, semaphore)
+            for sym in parsed
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        success_count = sum(
+            1 for r in results
+            if isinstance(r, tuple) and r[1] is True
+        )
+        try:
+            await interaction.followup.send(
+                f"Batch complete: **{success_count}/{len(parsed)}** analyses finished.",
+                ephemeral=True,
+            )
+        except Exception:
+            logger.debug("Failed to send batch completion followup", exc_info=True)
+
+    async def _analyze_one(
+        self,
+        symbol: str,
+        analysis_channel: discord.TextChannel,
+        requester: discord.abc.User,
+        semaphore: asyncio.Semaphore,
+    ) -> tuple[str, bool]:
+        """Analyze a single token with semaphore-controlled concurrency."""
+        async with semaphore:
+            status_msg = await analysis_channel.send(
+                f"Analyzing **{symbol}**... (batch request by {requester.mention})"
+            )
+            target_channel: discord.abc.Messageable = analysis_channel
+            try:
+                thread = await status_msg.create_thread(
+                    name=f"Analysis: {symbol}",
+                    auto_archive_duration=1440,
+                )
+                thread_status = await thread.send(
+                    f"Analyzing **{symbol}**... (this may take 10-20s)"
+                )
+                status_msg = thread_status
+                target_channel = thread
+            except Exception:
+                pass
+
+            try:
+                resolved = await self._maybe_disambiguate(symbol, requester, target_channel)
+                if not resolved:
+                    await status_msg.edit(content=f"Skipped {symbol} -- disambiguation cancelled.")
+                    return symbol, False
+                resolved_symbol, resolved_name = resolved
+                await status_msg.edit(
+                    content=f"Analyzing **{resolved_symbol}**... (this may take 10-20s)"
+                )
+
+                await self._run_analysis_task(
+                    requester,
+                    status_msg,
+                    resolved_symbol,
+                    target_channel,
+                    notify_channel=analysis_channel,
+                    resolved_name=resolved_name,
+                )
+                return symbol, True
+            except Exception as e:
+                logger.error(f"Batch analysis failed for {symbol}: {e}", exc_info=True)
+                try:
+                    await status_msg.edit(content=f"Analysis failed for **{symbol}**: {e}")
+                except Exception:
+                    pass
+                return symbol, False
+
     async def _run_analysis_task(
         self,
         requester: Optional[discord.abc.User],
@@ -531,6 +680,17 @@ class AnalysisCommands(commands.Cog):
                     )
                 )
                 return
+            # 4c: TA freshness warning
+            if os.getenv("AUTO_REFRESH_ON_ANALYZE", "").lower() == "true":
+                if not _check_ta_freshness(symbol):
+                    logger.info(f"[{symbol}] TA data is stale (>{TA_FRESHNESS_THRESHOLD_MINUTES}min)")
+                    try:
+                        await status_msg.edit(
+                            content=f"Refreshing stale TA data for **{symbol}**..."
+                        )
+                    except Exception:
+                        pass
+
             ok, missing = self._validate_required_fields(consolidated)
             if not ok:
                 missing_str = ", ".join(missing)

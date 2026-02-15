@@ -1836,6 +1836,7 @@ def fetch_from_primary_sources(
     Attempt to fill missing fields from primary sources BEFORE calling AI APIs.
 
     Session 275: Now uses parallel fetching by default for 3-4x speedup.
+    Session 434: PARALLEL_FETCH_ENABLED env var gate (set to "false" to disable).
 
     Args:
         token: Token symbol (e.g., "RTX")
@@ -1860,6 +1861,11 @@ def fetch_from_primary_sources(
     results = {}
     sources_tried = []
     sources_succeeded = []
+
+    # Session 434: env var gate — set PARALLEL_FETCH_ENABLED=false to force sequential
+    env_parallel = os.environ.get("PARALLEL_FETCH_ENABLED", "true").lower()
+    if env_parallel == "false":
+        parallel = False
 
     start_time = time.time()
     logger.info(f"Primary source fetch for {token}: missing {missing_fields} (parallel={parallel})")
