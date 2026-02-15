@@ -172,21 +172,25 @@ class TradeRouter(commands.Cog):
 
     async def _extract_setup_from_thread(self, thread: discord.Thread) -> Optional[Dict[str, Any]]:
         """Scan thread messages for the original trade setup."""
+        # Try starter message first (thread created from David's message)
         try:
             starter = await thread.fetch_message(thread.id)
+            logger.info(f"Rerun: starter msg by {'bot' if starter.author.bot else starter.author.name}: {starter.content[:120]!r}")
             setup = self.parse_setup(starter.content)
             if setup:
                 return setup
-        except Exception:
-            pass
+        except Exception as e:
+            logger.info(f"Rerun: starter fetch failed: {e}")
 
+        # Scan thread history — check ALL messages (including bot analysis responses
+        # which embed the original Entry/SL/Target values)
         async for msg in thread.history(limit=50, oldest_first=True):
-            if msg.author.bot:
-                continue
             setup = self.parse_setup(msg.content)
             if setup:
+                logger.info(f"Rerun: found setup in msg by {msg.author.name}: {setup}")
                 return setup
 
+        logger.warning(f"Rerun: no setup found in thread {thread.name} ({thread.id})")
         return None
 
     async def _check_price_proximity(self, setup: Dict[str, Any]) -> Optional[str]:
