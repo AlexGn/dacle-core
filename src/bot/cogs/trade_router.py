@@ -172,18 +172,20 @@ class TradeRouter(commands.Cog):
 
     async def _extract_setup_from_thread(self, thread: discord.Thread) -> Optional[Dict[str, Any]]:
         """Scan thread messages for the original trade setup."""
-        # Try starter message first (thread created from David's message)
+        # The starter message lives in the PARENT channel (not the thread) when
+        # created via message.startThread(). Fetch from parent first.
         try:
-            starter = await thread.fetch_message(thread.id)
-            logger.info(f"Rerun: starter msg by {'bot' if starter.author.bot else starter.author.name}: {starter.content[:120]!r}")
-            setup = self.parse_setup(starter.content)
-            if setup:
-                return setup
+            parent_channel = thread.parent
+            if parent_channel:
+                starter = await parent_channel.fetch_message(thread.id)
+                logger.info(f"Rerun: parent starter by {starter.author.name}: {starter.content[:120]!r}")
+                setup = self.parse_setup(starter.content)
+                if setup:
+                    return setup
         except Exception as e:
-            logger.info(f"Rerun: starter fetch failed: {e}")
+            logger.info(f"Rerun: parent starter fetch failed: {e}")
 
-        # Scan thread history — check ALL messages (including bot analysis responses
-        # which embed the original Entry/SL/Target values)
+        # Fallback: scan thread history for any message with a parseable setup
         async for msg in thread.history(limit=50, oldest_first=True):
             setup = self.parse_setup(msg.content)
             if setup:
