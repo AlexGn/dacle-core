@@ -621,3 +621,54 @@ def check_process_memory(
         message=f"[MEMORY] High RSS: {'; '.join(high_mem)}",
         severity=severity,
     )
+
+
+# =============================================================================
+# Session 433: Policy Engine Health Check
+# =============================================================================
+
+POLICY_ERROR_RATE_WARN_PCT = 10.0
+POLICY_ERROR_RATE_CRITICAL_PCT = 50.0
+
+
+def check_policy_engine_health(
+    kpi_summary: dict,
+    shadow_mode: bool = False,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check policy engine KPI health from summarize_policy_kpis() output.
+
+    Args:
+        kpi_summary: Dict with total_runs, success_count, error_count,
+                     fallback_count, avg_latency_ms.
+        shadow_mode: Whether the engine is in shadow mode.
+
+    Returns:
+        HeartbeatAlert if error rate > 10% or 100% fallback, None otherwise.
+    """
+    total = kpi_summary.get("total_runs", 0)
+    if total == 0:
+        return None
+
+    error_count = kpi_summary.get("error_count", 0)
+    fallback_count = kpi_summary.get("fallback_count", 0)
+    error_rate = (error_count / total) * 100
+
+    if error_rate <= POLICY_ERROR_RATE_WARN_PCT:
+        return None
+
+    mode_label = " (SHADOW)" if shadow_mode else ""
+    severity = "critical" if error_rate >= POLICY_ERROR_RATE_CRITICAL_PCT else "warning"
+
+    return HeartbeatAlert(
+        check_name="policy_engine_health",
+        channel="focus",
+        message=(
+            f"[POLICY ENGINE{mode_label}] Error rate {error_rate:.0f}% "
+            f"({error_count}/{total} runs) — "
+            f"fallbacks: {fallback_count}, "
+            f"avg latency: {kpi_summary.get('avg_latency_ms', 0):.0f}ms"
+        ),
+        severity=severity,
+        meta={"shadow_mode": shadow_mode, "error_rate_pct": round(error_rate, 1)},
+    )
