@@ -553,6 +553,17 @@ class BlofinTradeSync:
         # Fetch trades from Blofin
         blofin_trades = self.fetch_position_history(days=days)
 
+        # Session 433: Build entry fill lookup by symbol
+        # Blofin returns individual fills; entry fills have fillPnl=0,
+        # close fills have fillPnl!=0. We match close fills to their
+        # nearest preceding entry fill for accurate entry price/date.
+        entry_fills_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
+        for fill in blofin_trades:
+            fill_pnl = float(fill.get('info', {}).get('fillPnl', 0) or 0)
+            if fill_pnl == 0:  # Entry fill
+                sym = fill.get('symbol', '')
+                entry_fills_by_symbol.setdefault(sym, []).append(fill)
+
         for blofin_trade in blofin_trades:
             try:
                 # Extract token symbol
@@ -587,11 +598,27 @@ class BlofinTradeSync:
                     })
                     continue
 
+                # Session 433: Find matching entry fill for close fills
+                entry_fill = None
+                fill_pnl = float(blofin_trade.get('info', {}).get('fillPnl', 0) or 0)
+                if fill_pnl != 0 and symbol in entry_fills_by_symbol:
+                    # Find nearest entry fill before this close fill
+                    close_ts = blofin_trade.get('timestamp', 0)
+                    candidates = [
+                        ef for ef in entry_fills_by_symbol[symbol]
+                        if ef.get('timestamp', 0) <= close_ts
+                    ]
+                    if candidates:
+                        # Use the most recent entry fill before this close
+                        entry_fill = max(candidates, key=lambda x: x.get('timestamp', 0))
+
                 # Parse trade data
-                dacle_trade = self._convert_to_dacle_format(blofin_trade, trade_id, token)
+                dacle_trade = self._convert_to_dacle_format(
+                    blofin_trade, trade_id, token, entry_fill=entry_fill
+                )
 
                 if dacle_trade:
-                    # Skip PENDING orders (entry orders without P&L)
+                    # Skip PENDING orders (entry fills without P&L)
                     if dacle_trade.get("result") == "PENDING":
                         results["skipped_existing"].append({
                             "token": token,
@@ -656,47 +683,75 @@ class BlofinTradeSync:
         self,
         blofin_trade: Dict[str, Any],
         trade_id: str,
-        token: str
+        token: str,
+        entry_fill: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Convert Blofin trade to DACLE trade_log format.
+        Convert Blofin trade fill to DACLE trade_log format.
+
+        Session 433: Fixed to use Blofin's fillPnl field (not profit/reduceOnly
+        which are MEXC-specific). Blofin returns individual fills via fetchMyTrades;
+        close fills have fillPnl != 0, entry fills have fillPnl = 0.
 
         Args:
-            blofin_trade: Raw Blofin trade data
+            blofin_trade: Raw Blofin trade data (a single fill)
             trade_id: Generated trade ID
             token: Token symbol
+            entry_fill: Optional matching entry fill for this close fill,
+                        used to populate entry price/date
 
         Returns:
             DACLE-formatted trade dict or None
         """
         try:
-            # Determine trade type from side
+            info = blofin_trade.get('info', {})
+
+            # Session 433: Blofin fills use 'fillPnl', not 'profit'/'reduceOnly'
+            # fillPnl=0 → entry fill, fillPnl!=0 → close fill with realized P&L
+            fill_pnl = float(info.get('fillPnl', 0) or 0)
+            # Also check legacy 'profit' field for backwards compatibility
+            profit_str = info.get('profit')
+            legacy_pnl = float(profit_str) if profit_str else 0
+            pnl_usd = fill_pnl if fill_pnl != 0 else legacy_pnl
+
+            # Check if this is a close fill (has actual P&L)
+            is_close_order = (
+                info.get('reduceOnly', False)
+                or pnl_usd != 0
+            )
+
+            if not is_close_order:
+                # Entry fills don't have P&L yet - mark as PENDING
+                return {"result": "PENDING"}
+
+            # For close fills: this fill's side is the CLOSING side
+            # A buy close = closing a SHORT, a sell close = closing a LONG
             side = blofin_trade.get('side', '').upper()
-            trade_type = "SHORT" if side == "SELL" else "LONG"
+            trade_type = "SHORT" if side == "BUY" else "LONG"
 
-            # Parse timestamps
-            entry_ts = blofin_trade.get('timestamp', 0)
-            entry_date = datetime.fromtimestamp(entry_ts / 1000, tz=timezone.utc)
-
-            # Get price data
-            entry_price = float(blofin_trade.get('price', 0))
+            # Parse close fill timestamp and price
+            close_ts = blofin_trade.get('timestamp', 0)
+            close_date = datetime.fromtimestamp(close_ts / 1000, tz=timezone.utc)
+            close_price = float(blofin_trade.get('price', 0))
             amount = float(blofin_trade.get('amount', 0))
             cost = float(blofin_trade.get('cost', 0))
 
-            # Calculate P&L from Blofin data
-            # Blofin returns 'profit' field for close orders (reduceOnly=true)
-            info = blofin_trade.get('info', {})
-            profit_str = info.get('profit', '0')
-            pnl_usd = float(profit_str) if profit_str else 0
+            # Entry price/date from the matched entry fill (if available)
+            if entry_fill:
+                entry_ts = entry_fill.get('timestamp', 0)
+                entry_date = datetime.fromtimestamp(entry_ts / 1000, tz=timezone.utc)
+                entry_price = float(entry_fill.get('price', 0))
+            else:
+                # Fallback: no matched entry fill, use close fill date
+                entry_date = close_date
+                entry_price = None
 
             # Get leverage for P&L % calculation
             leverage = float(info.get('leverage', 1) or 1)
 
-            # Calculate P&L percentage
-            # For close orders: orderMargin is 0, so we calculate from cost/leverage
+            # Calculate P&L percentage from margin
             order_margin = float(info.get('orderMargin', 0) or info.get('usedMargin', 0))
             if order_margin <= 0 and cost > 0:
-                # For close orders, estimate margin from cost and leverage
                 order_margin = cost / leverage if leverage > 0 else cost
 
             if order_margin > 0:
@@ -704,15 +759,9 @@ class BlofinTradeSync:
             else:
                 pnl_percent = 0
 
-            # Check if this is a close order (has actual P&L)
-            is_close_order = info.get('reduceOnly', False) or pnl_usd != 0
-
             # Determine result based on P&L
             # Use $1 USD threshold for BREAKEVEN to avoid tiny profit/loss noise
-            if not is_close_order:
-                # Entry orders don't have P&L yet - mark as PENDING
-                result = "PENDING"
-            elif abs(pnl_usd) < 1.0:  # Less than $1 USD = BREAKEVEN
+            if abs(pnl_usd) < 1.0:
                 result = "BREAKEVEN"
             elif pnl_usd > 0:
                 result = "WIN"
@@ -728,7 +777,7 @@ class BlofinTradeSync:
             trade_dict = {
                 "trade_id": trade_id,
                 "token": token,
-                "exchange": "BLOFIN",  # Session 371: Multi-exchange support
+                "exchange": "BLOFIN",
                 "trade_type": trade_type,
                 "result": result,
                 "submitted_at": datetime.now(timezone.utc).isoformat(),
@@ -738,16 +787,16 @@ class BlofinTradeSync:
                     "conviction_score": conviction_score
                 },
                 "exit": {
-                    "price": None,  # Need to fetch separately for position close
-                    "date": None,
+                    "price": close_price,
+                    "date": close_date.isoformat(),
                     "stop_loss_hit": None,
                     "take_profit_hit": None,
-                    "partial_exits": [],  # List of {price, date, percentage, pnl_pct}
-                    "remaining_position_pct": 100.0,  # Tracks how much position is left
+                    "partial_exits": [],
+                    "remaining_position_pct": 0.0,
                 },
                 "position": {
                     "size_usd": cost,
-                    "leverage": blofin_trade.get('info', {}).get('leverage', 1)
+                    "leverage": leverage
                 },
                 "metrics": {
                     "pnl_percent": round(pnl_percent, 2),
@@ -757,10 +806,9 @@ class BlofinTradeSync:
                     "estimated_sl_pct": rr_data.get("estimated_sl_pct"),
                     "estimated_tp_pct": rr_data.get("estimated_tp_pct"),
                     "estimated_rr_ratio": rr_data.get("estimated_rr_ratio"),
-                    "actual_rr_ratio": None,  # Calculated after trade closes
+                    "actual_rr_ratio": None,
                 },
                 "feedback": {
-                    # Auto-sync trades have no manual feedback
                     "auto_synced": True,
                     "sync_source": "BLOFIN",
                     "what_went_well": None,
@@ -776,7 +824,7 @@ class BlofinTradeSync:
                 "blofin_data": {
                     "order_id": blofin_trade.get('id'),
                     "symbol": blofin_trade.get('symbol'),
-                    "raw": blofin_trade.get('info', {})
+                    "raw": info
                 }
             }
 
