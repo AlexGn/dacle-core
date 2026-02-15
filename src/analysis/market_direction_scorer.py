@@ -81,6 +81,7 @@ class DirectionUpdate:
     shift_detected: bool = False
     previous_bias: Optional[str] = None
     timestamp: str = ""
+    btc_price: float = 0.0
 
     def __post_init__(self):
         if not self.timestamp:
@@ -118,6 +119,7 @@ class DirectionUpdate:
             "shift_detected": self.shift_detected,
             "previous_bias": self.previous_bias,
             "timestamp": self.timestamp,
+            "btc_price": self.btc_price,
         }
         return d
 
@@ -662,6 +664,7 @@ async def calculate_direction_bias() -> DirectionUpdate:
         key_levels=key_levels,
         position_implications=position_impl,
         context_signals=context_signals,
+        btc_price=btc_price or 0.0,
     )
 
 
