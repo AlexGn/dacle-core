@@ -148,6 +148,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load trade_router cog: {e}")
 
+        # Load Position Commands
+        try:
+            await self.load_extension("src.bot.cogs.position_commands")
+            logger.info("✅ Loaded position_commands cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load position_commands cog: {e}")
+
         # Load Scout Commands (Self-Evolution Audit)
         try:
             await self.load_extension("src.bot.cogs.scout_commands")
