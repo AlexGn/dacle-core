@@ -521,6 +521,71 @@ def check_redis_health(
     )
 
 
+# =============================================================================
+# Phase 5: Position Aging Check
+# =============================================================================
+
+POSITION_AGING_THRESHOLD_HOURS = 48
+
+
+def update_position_first_seen(
+    current_positions: list[dict],
+    existing_first_seen: dict[str, str],
+    now: datetime = None,
+) -> dict[str, str]:
+    """Update first-seen tracking: add new positions, remove closed ones."""
+    ts_now = now or datetime.now(timezone.utc)
+    current_symbols = {p.get("symbol") for p in current_positions if p.get("symbol")}
+
+    updated = {}
+    for symbol in current_symbols:
+        if symbol in existing_first_seen:
+            updated[symbol] = existing_first_seen[symbol]
+        else:
+            updated[symbol] = ts_now.isoformat()
+
+    return updated
+
+
+def check_position_aging(
+    positions: list[dict],
+    position_first_seen: dict[str, str],
+    now: datetime = None,
+) -> Optional[HeartbeatAlert]:
+    """Alert if any position has been open >= 48h based on first-seen tracking."""
+    if not positions:
+        return None
+
+    ts_now = now or datetime.now(timezone.utc)
+    aging = []
+
+    for p in positions:
+        symbol = p.get("symbol")
+        if not symbol or symbol not in position_first_seen:
+            continue
+
+        first_seen_dt = _parse_iso(position_first_seen[symbol])
+        if first_seen_dt is None:
+            continue
+
+        age_hours = (ts_now - first_seen_dt).total_seconds() / 3600.0
+        if age_hours >= POSITION_AGING_THRESHOLD_HOURS:
+            aging.append((symbol, int(age_hours)))
+
+    if not aging:
+        return None
+
+    parts = [f"{sym} open for {hrs}h" for sym, hrs in aging]
+    msg = "[AGING] " + ", ".join(parts) + " — consider reviewing TP/SL"
+
+    return HeartbeatAlert(
+        check_name="position_aging",
+        channel="trades",
+        message=msg,
+        severity="warning",
+    )
+
+
 def check_process_memory(
     process_info_list: List[dict],
     threshold_mb: float = PROCESS_MEMORY_WARN_MB,
