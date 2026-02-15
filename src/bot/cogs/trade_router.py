@@ -199,8 +199,22 @@ class TradeRouter(commands.Cog):
         """Check if current price is within 10% of original entry. Returns warning or None."""
         try:
             current = get_current_price(setup["token"])
+
+            # Fallback: API live-price (Blofin → Binance → DexScreener)
+            if current is None:
+                try:
+                    url = f"{self.api_url}/api/tokens/{setup['token']}/live-price"
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(url) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                current = data.get("price")
+                except Exception as e:
+                    logger.debug(f"Live-price API fallback failed for {setup['token']}: {e}")
+
             if current is None:
                 return "⚠️ Could not fetch current price — proximity check skipped."
+            current = float(current)
             pct_diff = abs(current - setup["entry"]) / setup["entry"] * 100
             if pct_diff > 10:
                 return f"⚠️ Current price ${current:.4g} is {pct_diff:.1f}% from entry ${setup['entry']} — setup may be stale."
