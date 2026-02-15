@@ -612,7 +612,7 @@ class AnalysisCommands(commands.Cog):
 
             # Format the rich embed
             embed = AnalysisFormatter.format_candidate_embed(result, macro)
-            view = TradeApprovalView(symbol, result.conviction_score)
+            view = TradeApprovalView(symbol, result.conviction_score, direction=result.direction)
 
             # Send result to the target channel (thread or main channel)
             # We use target_channel.send() instead of ctx.reply() to avoid 

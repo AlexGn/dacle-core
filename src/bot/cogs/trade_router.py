@@ -1,10 +1,12 @@
 from src.utils.logger import get_logger
+import json
 import re
 import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
 import os
+from pathlib import Path
 from typing import Optional, Dict, Any
 
 from src.utils.redis_lms import get_current_price
@@ -223,9 +225,117 @@ class TradeRouter(commands.Cog):
         except Exception:
             return None
 
+    @app_commands.command(name="setup", description="Post a trade setup from playbook to #trades")
+    @app_commands.describe(
+        token="Token symbol (e.g., ZRO, ALCH, DRIFT)",
+        direction="Trade direction: SHORT or LONG",
+    )
+    @app_commands.choices(direction=[
+        app_commands.Choice(name="SHORT", value="SHORT"),
+        app_commands.Choice(name="LONG", value="LONG"),
+    ])
+    async def setup_command(self, interaction: discord.Interaction, token: str, direction: str):
+        """Post a trade setup from playbook directly to #trades and run pre-trade-check."""
+        await interaction.response.defer(ephemeral=False)
+
+        token = token.upper()
+        direction = direction.upper()
+        project_root = Path(__file__).resolve().parents[3]
+        tokens_dir = project_root / "data" / "tokens"
+
+        # Load playbook execution state
+        playbooks_dir = tokens_dir / token / "playbooks"
+        exec_state = None
+        if playbooks_dir.exists():
+            candidates = [
+                playbooks_dir / f"{token}_{direction.lower()}_execution_state.json",
+                playbooks_dir / f"{token}_execution_state.json",
+            ]
+            for path in candidates:
+                if path.exists():
+                    try:
+                        exec_state = json.loads(path.read_text())
+                        break
+                    except Exception:
+                        continue
+
+        if not exec_state:
+            await interaction.followup.send(
+                f"No playbook found for **{token}** {direction}. "
+                f"Run `/analyze {token}` first to generate a playbook."
+            )
+            return
+
+        # Extract levels
+        levels = exec_state.get("execution_levels", {})
+        entry_low = levels.get("entry_low")
+        stop_loss = levels.get("stop_loss")
+        target = levels.get("target_1")
+
+        if not entry_low or not stop_loss:
+            await interaction.followup.send(
+                f"Playbook for **{token}** {direction} is incomplete (missing entry or SL). "
+                f"Re-run `/analyze {token}` to regenerate."
+            )
+            return
+
+        # Format setup message
+        parts = [f"TAKE {direction} ${token}"]
+        entry_high = levels.get("entry_high")
+        if entry_high and entry_high != entry_low:
+            parts.append(f"Entry: {entry_low} - {entry_high}")
+        else:
+            parts.append(f"Entry: {entry_low}")
+        parts.append(f"SL: {stop_loss}")
+        if target:
+            parts.append(f"Target: {target}")
+        setup_msg = "\n".join(parts)
+
+        # Post to #trades
+        trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
+        if not trades_channel:
+            await interaction.followup.send(
+                f"Could not find #trades channel. Post manually:\n```\n{setup_msg}\n```"
+            )
+            return
+
+        try:
+            await trades_channel.send(setup_msg)
+        except Exception as e:
+            logger.error(f"/setup failed to post to #trades: {e}")
+            await interaction.followup.send(
+                f"Failed to post to #trades: {e}\nManual setup:\n```\n{setup_msg}\n```"
+            )
+            return
+
+        # Also run pre-trade-check directly
+        setup_data = {
+            "token": token,
+            "direction": direction,
+            "entry": float(entry_low),
+            "sl": float(stop_loss),
+            "target": float(target) if target else None,
+        }
+
+        ptc_result = await self.call_pre_trade_check(setup_data)
+        ptc_text = ""
+        if ptc_result and ptc_result.get("data", {}).get("formatted_response"):
+            ptc_text = ptc_result["data"]["formatted_response"]
+
+        if ptc_text:
+            await interaction.followup.send(
+                f"Setup posted to #trades for **{token}** {direction}.\n\n"
+                f"**Pre-Trade Check:**\n{ptc_text}"
+            )
+        else:
+            await interaction.followup.send(
+                f"Setup posted to #trades for **{token}** {direction}. "
+                f"Trade router will run pre-trade-check in the thread."
+            )
+
     # NOTE: on_message listener removed — trade setup detection is handled by
     # Node.js trade-router (deploy/openclaw/trade-router/index.js) per Session 408.
-    # This cog only provides the /rerun slash command.
+    # This cog provides /rerun and /setup slash commands.
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TradeRouter(bot))
