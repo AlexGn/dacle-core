@@ -970,7 +970,7 @@ def calculate_exhaustion_score(
             # Calculate RSI from OHLCV
             closes = [c.get("close", 0) for c in ohlcv_data[-15:]]
             current_rsi = calculate_rsi(closes)
-        except:
+        except Exception:
             current_rsi = 50  # Default neutral
 
     rsi_score, rsi_reason = calculate_rsi_score(current_rsi, components.get("rsi_extreme", {"weight": 20}))

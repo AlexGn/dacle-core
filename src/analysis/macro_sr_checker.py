@@ -145,7 +145,7 @@ class MacroSRChecker:
             expires_at = datetime.fromisoformat(signal['expires_at'].replace('Z', '+00:00'))
             now = datetime.utcnow()
             time_until_expiry = (expires_at - now).total_seconds() / 60
-        except:
+        except Exception:
             time_until_expiry = None
 
         return {
