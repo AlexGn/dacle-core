@@ -424,7 +424,7 @@ class TradableOpportunityScanner:
                 try:
                     added_date = datetime.fromisoformat(date_added.replace("Z", "+00:00"))
                     token_age_days = (datetime.utcnow() - added_date.replace(tzinfo=None)).days
-                except:
+                except Exception:
                     pass
 
             # Get narrative context (David: "c'est juste la narrative qui faut attrapé")

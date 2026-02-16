@@ -1418,11 +1418,11 @@ def _parse_websearch_results(
                         parsed_date = datetime.strptime(date_str, fmt)
                         extracted["tge_date"] = parsed_date.isoformat()
                         break
-                    except:
+                    except Exception:
                         continue
                 if extracted["tge_date"]:
                     break
-            except:
+            except Exception:
                 continue
 
     # Extract total supply (look for large numbers near "total supply")
@@ -1824,7 +1824,7 @@ def consolidate_tge_data_if_available(token: str, automated_data: Dict[str, Any]
                                 "diff_pct": diff_pct
                             })
                     consolidated[field] = manual_value  # Prefer manual
-                except:
+                except Exception:
                     consolidated[field] = manual_value
             elif manual_value:
                 # Only manual has data

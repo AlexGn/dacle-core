@@ -417,7 +417,7 @@ class DataCrossValidator:
         try:
             dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
             return dt.strftime("%Y-%m-%d")
-        except:
+        except Exception:
             pass
 
         # Try parsing common formats
@@ -425,7 +425,7 @@ class DataCrossValidator:
             try:
                 dt = datetime.strptime(date_str, fmt)
                 return dt.strftime("%Y-%m-%d")
-            except:
+            except Exception:
                 continue
 
         return date_str

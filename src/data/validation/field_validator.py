@@ -708,7 +708,7 @@ class FieldValidator:
                 last_updated = datetime.fromisoformat(perplexity_timestamp.replace('Z', '+00:00'))
                 delta = datetime.now() - last_updated.replace(tzinfo=None)
                 return delta.days
-            except:
+            except Exception:
                 return None
 
         return None
@@ -757,7 +757,7 @@ class FieldValidator:
                         tge = datetime.strptime(str(tge_date).split("T")[0], "%Y-%m-%d").date()
                         days_since_tge = (datetime.now().date() - tge).days
                         is_new_token = days_since_tge <= 7
-                    except:
+                    except Exception:
                         pass
 
                 if is_new_token:

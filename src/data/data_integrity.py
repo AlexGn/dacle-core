@@ -445,7 +445,7 @@ def atomic_json_write(
         if 'tmp_path' in locals():
             try:
                 os.unlink(tmp_path)
-            except:
+            except Exception:
                 pass
 
         return False, error_msg
