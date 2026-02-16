@@ -302,29 +302,51 @@ class DACLEBot(commands.Bot):
             logger.warning(f"Legacy process watchdog scan failed: {e}")
             return []
 
+    @staticmethod
+    def _is_legacy_service_active() -> bool:
+        """Check if the masked clawdbot-gateway.service has been re-enabled.
+
+        The legitimate ClawdBot gateway runs via nohup (not systemd), so
+        process-name matching alone produces false positives.  The real
+        threat is someone unmasking and starting the systemd unit.
+        """
+        try:
+            proc = subprocess.run(
+                ["systemctl", "is-active", "clawdbot-gateway.service"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+            state = proc.stdout.strip().lower()
+            return state in {"active", "activating", "reloading"}
+        except Exception:
+            return False
+
     async def _legacy_process_watchdog(self) -> None:
         """
-        Alert when legacy clawdbot* processes appear, especially after clean startup.
-        This guards against accidental re-enabling of deprecated gateway responders.
+        Alert when the retired clawdbot-gateway.service systemd unit becomes
+        active.  Only fires when the *service* is running — the nohup-launched
+        ClawdBot (OpenClaw/Pi-AI) gateway is expected and not flagged.
         """
         interval = int(os.getenv("LEGACY_PROCESS_WATCHDOG_INTERVAL_SEC", "60"))
-        previously_present = False
+        previously_active = False
         while not self.is_closed():
-            matches = self._scan_legacy_clawdbot_processes()
-            currently_present = len(matches) > 0
-            if currently_present and not previously_present:
-                sample = "; ".join(matches[:3])
+            currently_active = self._is_legacy_service_active()
+            if currently_active and not previously_active:
+                matches = self._scan_legacy_clawdbot_processes()
+                sample = "; ".join(matches[:3]) if matches else "(no ps detail)"
                 msg = (
-                    "🚨 Legacy process detected (clawdbot*). "
-                    f"Deprecated responder may be active again. Found: {sample}"
+                    "🚨 Legacy clawdbot-gateway.service is ACTIVE. "
+                    f"Masked service was re-enabled! Processes: {sample}"
                 )
                 logger.error(msg)
                 try:
                     from src.alerts.telegram_notifier import send_telegram_message
                     send_telegram_message(msg, parse_mode=None)
                 except Exception as e:
-                    logger.warning(f"Failed to send legacy-process alert: {e}")
-            previously_present = currently_present
+                    logger.warning(f"Failed to send legacy-service alert: {e}")
+            previously_active = currently_active
             await asyncio.sleep(max(interval, 1))
 
     def _get_owner_id(self) -> Optional[int]:
