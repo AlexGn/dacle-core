@@ -672,10 +672,13 @@ class BlofinTradeSync:
         if results["new_trades"]:
             _save_trade_log(trade_log)
             sync_state["synced_trade_ids"] = list(synced_ids)
-            _save_sync_state(sync_state)
 
             # Trigger forward validation sync
             self._trigger_forward_validation_sync()
+
+        # Always update last_sync timestamp on successful run
+        # (health check uses this to verify sync is running, not just new trades)
+        _save_sync_state(sync_state)
 
         return results
 
