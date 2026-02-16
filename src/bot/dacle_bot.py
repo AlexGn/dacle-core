@@ -169,6 +169,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load performance_commands cog: {e}")
 
+        # Load Heartbeat Action Cards cog (Sprint 1b)
+        try:
+            await self.load_extension("src.bot.cogs.heartbeat_cog")
+            logger.info("✅ Loaded heartbeat_cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load heartbeat_cog: {e}")
+
         # Log app commands discovered (sync happens on_ready when guild is available)
         app_commands = list(self.tree.get_commands())
         logger.info(f"🔎 App commands discovered: {len(app_commands)}")

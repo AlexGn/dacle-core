@@ -5,7 +5,6 @@ T1.2: Thin I/O layer. Posts messages to Discord via direct HTTP API.
 Pattern from scripts/monitors/market_direction_monitor.py:201-226.
 """
 
-import logging
 import os
 from datetime import datetime, timezone
 
@@ -13,8 +12,9 @@ import httpx
 
 from src.ops.discord_channel_contract import get_discord_channel_contract
 from src.monitoring.channel_telemetry import write_channel_telemetry_event
+from src.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
 
