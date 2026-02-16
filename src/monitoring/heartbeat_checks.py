@@ -672,3 +672,188 @@ def check_policy_engine_health(
         severity=severity,
         meta={"shadow_mode": shadow_mode, "error_rate_pct": round(error_rate, 1)},
     )
+
+
+# =============================================================================
+# Behavioral Checks (Session 434 — Sprint 4)
+# =============================================================================
+
+# Constants for behavioral checks
+REVENGE_COOLING_HOURS = 2.0
+FEEDBACK_GAP_HOURS = 12.0
+ESCALATION_RECENT_TRADES = 5
+ESCALATION_MULTIPLIER = 2.0
+
+
+def _parse_trade_date(trade: dict) -> Optional[datetime]:
+    """Parse datetime from a trade dict."""
+    for field in ("submitted_at", "close_time", "open_time"):
+        val = trade.get(field)
+        if not val or not isinstance(val, str):
+            continue
+        try:
+            dt = datetime.fromisoformat(val.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def check_revenge_risk(
+    trades: list,
+    now: Optional[datetime] = None,
+) -> Optional[HeartbeatAlert]:
+    """Alert if a trade was opened within 2h of a loss (revenge trade).
+
+    Only alerts if the revenge trade is recent (within 4h of now).
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    if not trades or len(trades) < 2:
+        return None
+
+    # Sort by date ascending
+    dated = [(t, _parse_trade_date(t)) for t in trades]
+    dated = [(t, d) for t, d in dated if d is not None]
+    dated.sort(key=lambda x: x[1])
+
+    # Walk through pairs looking for revenge trades
+    for i in range(len(dated) - 1, 0, -1):
+        curr_trade, curr_date = dated[i]
+        prev_trade, prev_date = dated[i - 1]
+
+        # Only care about recent trades
+        if (now - curr_date).total_seconds() / 3600 > 4.0:
+            break
+
+        prev_result = prev_trade.get("result")
+        if not isinstance(prev_result, str) or prev_result.upper() != "LOSS":
+            continue
+
+        gap_hours = (curr_date - prev_date).total_seconds() / 3600
+        if gap_hours <= REVENGE_COOLING_HOURS:
+            token = curr_trade.get("token", "?")
+            return HeartbeatAlert(
+                check_name="revenge_risk",
+                channel="focus",
+                message=(
+                    f"[REVENGE RISK] {token} trade opened {gap_hours:.1f}h after a loss. "
+                    f"Revenge trades have 0% historical win rate. "
+                    f"Consider closing if still in drawdown."
+                ),
+                severity="warning",
+                meta={"token": token, "gap_hours": round(gap_hours, 2)},
+            )
+
+    return None
+
+
+def check_position_escalation(
+    trades: list,
+    now: Optional[datetime] = None,
+) -> Optional[HeartbeatAlert]:
+    """Alert if recent average position > 2x the overall median.
+
+    Requires at least 10 trades to have enough data for meaningful comparison.
+    """
+    if not trades or len(trades) < 10:
+        return None
+
+    # Get all position sizes
+    sizes = []
+    for trade in trades:
+        pos = trade.get("position", {})
+        if isinstance(pos, dict):
+            size = pos.get("size_usd")
+            if isinstance(size, (int, float)) and size > 0:
+                sizes.append(float(size))
+
+    if len(sizes) < 10:
+        return None
+
+    # Overall median
+    sorted_sizes = sorted(sizes)
+    median = sorted_sizes[len(sorted_sizes) // 2]
+    if median <= 0:
+        return None
+
+    # Recent N trades average
+    recent_count = min(ESCALATION_RECENT_TRADES, len(sizes))
+    recent_sizes = sizes[-recent_count:]  # Last N entries
+    recent_avg = sum(recent_sizes) / len(recent_sizes)
+
+    if recent_avg > median * ESCALATION_MULTIPLIER:
+        return HeartbeatAlert(
+            check_name="position_escalation",
+            channel="focus",
+            message=(
+                f"[POSITION ESCALATION] Recent avg ${recent_avg:.0f} "
+                f"is {recent_avg/median:.1f}x the overall median ${median:.0f}. "
+                f"Large positions historically underperform. Consider sizing down."
+            ),
+            severity="warning",
+            meta={"recent_avg": round(recent_avg, 2), "median": round(median, 2)},
+        )
+
+    return None
+
+
+def check_feedback_gap(
+    trades: list,
+    now: Optional[datetime] = None,
+) -> Optional[HeartbeatAlert]:
+    """Remind about un-reviewed losses older than 12h.
+
+    Scans all LOSS trades in the last 24h without feedback.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    if not trades:
+        return None
+
+    from datetime import timedelta
+    cutoff = now - timedelta(hours=24)
+    gap_cutoff = now - timedelta(hours=FEEDBACK_GAP_HOURS)
+    unreviewed = []
+
+    for trade in trades:
+        result = trade.get("result")
+        if not isinstance(result, str) or result.upper() != "LOSS":
+            continue
+
+        dt = _parse_trade_date(trade)
+        if dt is None or dt < cutoff:
+            continue
+
+        # Check if feedback exists
+        fb = trade.get("feedback")
+        has_fb = False
+        if isinstance(fb, dict) and fb:
+            text = fb.get("text", "") or fb.get("notes", "") or fb.get("review", "")
+            has_fb = bool(text and str(text).strip())
+        elif isinstance(fb, str):
+            has_fb = bool(fb.strip())
+
+        if not has_fb and dt < gap_cutoff:
+            token = trade.get("token", "?")
+            hours_ago = (now - dt).total_seconds() / 3600
+            unreviewed.append((token, hours_ago))
+
+    if not unreviewed:
+        return None
+
+    tokens_str = ", ".join(f"{t} ({h:.0f}h ago)" for t, h in unreviewed[:3])
+    return HeartbeatAlert(
+        check_name="feedback_gap",
+        channel="focus",
+        message=(
+            f"[FEEDBACK GAP] {len(unreviewed)} unreviewed loss(es): {tokens_str}. "
+            f"2 minutes of reflection prevents repeating mistakes."
+        ),
+        severity="warning",
+        meta={"unreviewed_count": len(unreviewed)},
+    )
