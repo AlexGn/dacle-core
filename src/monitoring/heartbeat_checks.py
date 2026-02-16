@@ -14,6 +14,8 @@ Channel routing:
     - Disk space        → #focus         (Session 427)
     - Redis health      → #focus         (Session 427)
     - Process memory    → #focus         (Session 427)
+    - Calibration drift → #focus
+    - Regime prediction → #macro-updates
 """
 
 from dataclasses import dataclass
@@ -857,3 +859,116 @@ def check_feedback_gap(
         severity="warning",
         meta={"unreviewed_count": len(unreviewed)},
     )
+
+
+# =============================================================================
+# Calibration Drift + Regime Prediction Checks
+# =============================================================================
+
+# Minimum completed trades before calibration checks are meaningful
+CALIBRATION_MIN_TRADES = 10
+
+# Score concentration: alert if 9-10 scores exceed this fraction of total
+CALIBRATION_CONCENTRATION_THRESHOLD = 0.25
+
+# Top-tier win rate below this is critical miscalibration
+CALIBRATION_TOP_TIER_MIN_WIN_RATE = 60.0
+
+
+def check_calibration_drift(
+    calibration_data: dict,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check for scorer calibration issues using pre-computed stats.
+
+    Detects three categories of miscalibration:
+    1. Win rate inversion (higher scores have lower win rates than mid scores)
+    2. Score concentration (9-10 scores are too common, >25% of total)
+    3. High-failure top tier (9-10 bucket has <60% win rate)
+
+    Args:
+        calibration_data: Output from get_score_accuracy_stats() with keys:
+            total (int), buckets (dict of bucket_name -> {win_rate, total_trades, ...})
+
+    Returns:
+        HeartbeatAlert if calibration issues found, None if healthy.
+    """
+    total = calibration_data.get("total", 0)
+    if total < CALIBRATION_MIN_TRADES:
+        return None
+
+    buckets = calibration_data.get("buckets")
+    if not buckets:
+        return None
+
+    issues = []
+    severity = "warning"
+
+    # 1. Win Rate Inversion: 8-9 bucket should beat 6-7 bucket
+    high_wr = (buckets.get("8-9") or {}).get("win_rate")
+    mid_wr = (buckets.get("6-7") or {}).get("win_rate")
+    if high_wr is not None and mid_wr is not None and high_wr < mid_wr:
+        issues.append(
+            f"Win Rate Inversion: 8-9 score WR ({high_wr:.0f}%) < 6-7 WR ({mid_wr:.0f}%)"
+        )
+
+    # 2. Score Concentration: 9-10 scores should be rare
+    nine_ten = buckets.get("9-10") or {}
+    nine_ten_trades = nine_ten.get("total_trades", 0)
+    if nine_ten_trades > total * CALIBRATION_CONCENTRATION_THRESHOLD:
+        pct = (nine_ten_trades / total) * 100
+        issues.append(
+            f"Score Concentration: 9-10 scores are {pct:.0f}% of trades (expect <25%)"
+        )
+
+    # 3. High-Failure Top Tier: 9-10 win rate below 60% is critical
+    nine_ten_wr = nine_ten.get("win_rate")
+    if nine_ten_wr is not None and nine_ten_wr < CALIBRATION_TOP_TIER_MIN_WIN_RATE:
+        issues.append(
+            f"Critical: 9-10 setups have {nine_ten_wr:.0f}% win rate (below {CALIBRATION_TOP_TIER_MIN_WIN_RATE:.0f}%)"
+        )
+        severity = "critical"
+
+    if not issues:
+        return None
+
+    return HeartbeatAlert(
+        check_name="calibration_drift",
+        channel="focus",
+        message="[CALIBRATION] " + "; ".join(issues),
+        severity=severity,
+        meta={"issues": issues, "total_trades": total},
+    )
+
+
+def check_regime_prediction(
+    predictive_alerts: Optional[List[str]],
+) -> List[HeartbeatAlert]:
+    """
+    Convert MarketRegimePredictor alert strings into HeartbeatAlert objects.
+
+    This is the pure-function equivalent of the inline HeartbeatAlert creation
+    currently done in heartbeat_monitor.py (check #6). It wraps each alert
+    string from generate_preemptive_alerts() into a proper HeartbeatAlert with
+    consistent check_name and channel routing.
+
+    Args:
+        predictive_alerts: List of alert strings from
+            MarketRegimePredictor.generate_preemptive_alerts().
+            Can be None or empty.
+
+    Returns:
+        List of HeartbeatAlert objects, one per input string.
+    """
+    if not predictive_alerts:
+        return []
+
+    return [
+        HeartbeatAlert(
+            check_name="predictive_regime_shift",
+            channel="macro-updates",
+            message=msg,
+            severity="warning",
+        )
+        for msg in predictive_alerts
+    ]
