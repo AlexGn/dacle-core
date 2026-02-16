@@ -22,7 +22,6 @@ Usage:
 """
 
 import json
-import os
 import logging
 from typing import Dict, Optional, Any
 from dataclasses import dataclass, asdict
@@ -162,15 +161,9 @@ def _llm_validate(token: str, fdv: float, category: str, additional_context: str
     """
     Use LLM to validate FDV realism with market context.
 
-    Uses OpenAI GPT-4o-mini for cost efficiency (~$0.001 per call).
+    Session 436: Migrated from direct OpenAI to UnifiedLLMClient (Groq primary).
     Includes response caching to reduce redundant API calls.
     """
-    import requests
-
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        logger.warning("No OPENAI_API_KEY - skipping LLM validation")
-        return {"used_llm": False, "error": "No API key"}
 
     # Check cache first
     try:
@@ -214,27 +207,17 @@ Respond in JSON format:
 }}"""
 
     try:
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "model": "gpt-4o-mini",
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.1,
-                "max_tokens": 300
-            },
-            timeout=10
+        from src.integrations.llm import get_llm_client
+
+        llm = get_llm_client()
+        response = llm.complete(
+            messages=[{"role": "user", "content": prompt}],
+            model_hint="text",
+            temperature=0.1,
+            max_tokens=300,
         )
 
-        if response.status_code != 200:
-            logger.error(f"LLM API error: {response.status_code}")
-            return {"used_llm": False, "error": f"API error {response.status_code}"}
-
-        data = response.json()
-        content = data["choices"][0]["message"]["content"]
+        content = response["content"]
 
         # Parse JSON from response
         try:

@@ -153,38 +153,30 @@ If you cannot extract a value, set it to null. Do NOT hallucinate data."""
 
     def _parse_with_llm(self, raw_text: str) -> Optional[VestingSchedule]:
         """
-        Parse using OpenAI GPT-4o-mini
+        Parse using LLM (Groq primary, OpenAI fallback).
+
+        Session 436: Migrated from direct OpenAI to UnifiedLLMClient.
 
         Returns:
             VestingSchedule or None if parsing fails
         """
         try:
-            from src.integrations.openai.openai_api_client import OpenAIAPIClient
+            from src.integrations.llm import get_llm_client
 
-            # Initialize OpenAI client
-            client = OpenAIAPIClient(model="gpt-4o-mini")
+            llm = get_llm_client()
 
-            # Make API request with JSON mode
-            response = client.client.post(
-                "https://api.openai.com/v1/chat/completions",
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [
-                        {"role": "system", "content": self.SYSTEM_PROMPT},
-                        {"role": "user", "content": f"Parse this vesting schedule:\n\n{raw_text}"}
-                    ],
-                    "response_format": {"type": "json_object"},
-                    "max_tokens": 500
-                }
+            result = llm.complete(
+                messages=[
+                    {"role": "system", "content": self.SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Parse this vesting schedule:\n\n{raw_text}"}
+                ],
+                model_hint="text",
+                json_mode=True,
+                max_tokens=500,
             )
-            response.raise_for_status()
-
-            # Extract content from response
-            response_json = response.json()
-            content = response_json["choices"][0]["message"]["content"]
 
             # Parse JSON response
-            parsed = json.loads(content)
+            parsed = json.loads(result["content"])
 
             # Validate required fields exist (even if null)
             required_fields = ["tge_unlock_pct", "cliff_months", "vesting_months", "vesting_type"]

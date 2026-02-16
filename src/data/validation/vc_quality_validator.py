@@ -385,15 +385,14 @@ class VCQualityValidator:
 
     def _validate_with_gpt(self, symbol: str) -> VCQualityResult:
         """
-        Fallback: Use GPT-4o-mini for VC reputation analysis
+        Fallback: Use LLM for VC reputation analysis.
 
-        Uses existing OpenAI integration (Session 263 optimization: $0.16/month)
-        Prompt: "Research VC backers for {symbol} token and classify their reputation"
+        Session 436: Migrated from direct OpenAI to UnifiedLLMClient (Groq primary).
         """
         try:
-            from src.integrations.openai.openai_api_client import OpenAIAPIClient
+            from src.integrations.llm import get_llm_client
 
-            client = OpenAIAPIClient(model="gpt-4o-mini")
+            llm = get_llm_client()
 
             prompt = f"""
             Research the VC backers/investors for the {symbol} cryptocurrency token.
@@ -414,19 +413,14 @@ class VCQualityValidator:
             If no VC data found, return {{"quality": "INSUFFICIENT"}}.
             """
 
-            response = client.client.post(
-                "https://api.openai.com/v1/chat/completions",
-                json={
-                    "model": "gpt-4o-mini",
-                    "messages": [{"role": "user", "content": prompt}],
-                    "response_format": {"type": "json_object"},
-                    "max_tokens": 300
-                }
+            result = llm.complete(
+                messages=[{"role": "user", "content": prompt}],
+                model_hint="text",
+                json_mode=True,
+                max_tokens=300,
             )
-            response.raise_for_status()
 
-            content = response.json()["choices"][0]["message"]["content"]
-            parsed = json.loads(content)
+            parsed = json.loads(result["content"])
 
             quality = parsed.get("quality", "INSUFFICIENT")
             quality_level = VCQualityLevel(quality) if quality in [level.value for level in VCQualityLevel] else VCQualityLevel.INSUFFICIENT

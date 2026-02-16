@@ -27,7 +27,6 @@ Usage:
         fetch_from_primary_sources,
 
         # LLM/Web fetchers
-        LLMWebFetch,
         fetch_with_perplexity,
 
         # Exchange fetchers
@@ -65,7 +64,6 @@ from src.data.fetchers.token_data import (
 
 # LLM/Web fetchers
 from src.data.fetchers.llm_web import (
-    LLMWebFetch,
     fetch_with_perplexity,
     validate_with_perplexity,
     ClaudeWebFetcher,
@@ -98,7 +96,6 @@ __all__ = [
     'PrimarySourceFetcher',
 
     # LLM/Web
-    'LLMWebFetch',
     'fetch_with_perplexity',
     'validate_with_perplexity',
     'ClaudeWebFetcher',

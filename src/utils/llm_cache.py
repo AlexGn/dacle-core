@@ -39,7 +39,7 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger(__name__)
 
 # Define constants for providers to avoid magic strings
-KNOWN_PROVIDERS = ["screenshot_tv", "screenshot_mexc", "openai", "openai_fdv", "perplexity"]
+KNOWN_PROVIDERS = ["screenshot_tv", "screenshot_mexc", "openai", "openai_fdv", "perplexity", "groq"]
 
 
 class LLMCache:

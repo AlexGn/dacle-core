@@ -88,10 +88,13 @@ class DirectionUpdate:
             self.timestamp = datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> dict:
+        signals_active = sum(1 for s in self.signals if s.score != 0)
         d = {
             "bias": self.bias.value,
             "score": round(self.score, 3),
             "confidence_pct": self.confidence_pct,
+            "signals_active": signals_active,
+            "signals_total": len(self.signals),
             "signals": [
                 {
                     "name": s.name,
@@ -624,10 +627,11 @@ async def calculate_direction_bias() -> DirectionUpdate:
     else:
         bias = DirectionBias.NEUTRAL
 
-    # Confidence: how many signals agree (non-zero and same sign as composite)
-    agreeing = sum(1 for s in signals if s.score != 0 and (s.score > 0) == (composite > 0))
-    total_non_zero = sum(1 for s in signals if s.score != 0)
-    confidence_pct = int((agreeing / max(total_non_zero, 1)) * 100)
+    # Confidence: weighted fraction of signals that agree with composite direction
+    # Neutral signals (score=0) count as "not supporting" — they weaken confidence
+    total_weight = sum(s.weight for s in signals)  # always 1.0 but safe
+    agreeing_weight = sum(s.weight for s in signals if s.score != 0 and (s.score > 0) == (composite > 0))
+    confidence_pct = int((agreeing_weight / max(total_weight, 0.01)) * 100) if composite != 0 else 0
 
     # ---- Key Level Proximity ----
     btc_levels = _load_btc_structure_levels()
@@ -637,20 +641,36 @@ async def calculate_direction_bias() -> DirectionUpdate:
         sherlock_levels, total3_value_b or 0
     )
 
-    # ---- Position implications ----
+    # ---- Position implications (graduated by score strength) ----
+    abs_score = abs(composite)
+
     if bias == DirectionBias.BEARISH:
-        position_impl = {
-            "short_sizing": "1.0x (favorable)",
-            "long_sizing": "0.5x (counter-trend)",
-            "recommendation": "Look for SHORT setups",
-        }
+        if abs_score >= 0.60:  # Strong bearish
+            position_impl = {
+                "short_sizing": "1.2x (strong bearish alignment)",
+                "long_sizing": "0.25x (strongly counter-trend)",
+                "recommendation": "Look for SHORT setups",
+            }
+        else:  # Moderate bearish (0.30-0.60)
+            position_impl = {
+                "short_sizing": "1.0x (favorable)",
+                "long_sizing": "0.5x (counter-trend)",
+                "recommendation": "Look for SHORT setups",
+            }
     elif bias == DirectionBias.BULLISH:
-        position_impl = {
-            "short_sizing": "0.5x (counter-trend)",
-            "long_sizing": "1.0x (favorable)",
-            "recommendation": "Look for LONG setups",
-        }
-    else:
+        if abs_score >= 0.60:  # Strong bullish
+            position_impl = {
+                "short_sizing": "0.25x (strongly counter-trend)",
+                "long_sizing": "1.2x (strong bullish alignment)",
+                "recommendation": "Look for LONG setups",
+            }
+        else:  # Moderate bullish
+            position_impl = {
+                "short_sizing": "0.5x (counter-trend)",
+                "long_sizing": "1.0x (favorable)",
+                "recommendation": "Look for LONG setups",
+            }
+    else:  # NEUTRAL
         position_impl = {
             "short_sizing": "0.75x (mixed signals)",
             "long_sizing": "0.75x (mixed signals)",
@@ -742,6 +762,15 @@ def generate_narrative_summary(update: DirectionUpdate) -> str:
     if structure_signal and "MSS" in (structure_signal.label or ""):
         if not any("Structure" in p for p in parts):
             parts.append(f". Key risk: {structure_signal.label}")
+
+    # 5. Extreme Fear & Greed contrarian warning
+    fg_signal = next((s for s in signals if s.name == "Fear & Greed" and s.value is not None), None)
+    if fg_signal:
+        fg_val = int(fg_signal.value)
+        if fg_val <= 15:
+            parts.append(f". \u26a0\ufe0f Fear & Greed at {fg_val} (Extreme Fear) \u2014 historically a contrarian bounce zone")
+        elif fg_val >= 85:
+            parts.append(f". \u26a0\ufe0f Fear & Greed at {fg_val} (Extreme Greed) \u2014 historically a contrarian reversal zone")
 
     narrative = "".join(parts)
     if not narrative.endswith("."):

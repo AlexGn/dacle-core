@@ -69,6 +69,13 @@ DEFAULT_LIMITS = {
         monthly_usd=50.00,    # $50/month max
         daily_calls=200,      # Max 200 API calls/day
     ),
+    "groq": APILimits(
+        # Session 436: Groq free tier — text + simple vision via Scout 17B
+        # 30K TPM, 500K TPD. Leave 200 RPD buffer for ClawdBot.
+        daily_usd=999.0,      # Free tier — USD limit effectively unlimited
+        monthly_usd=9999.0,   # Free tier — USD limit effectively unlimited
+        daily_calls=800,      # Conservative limit (leave headroom for ClawdBot)
+    ),
 }
 
 # ============================================================================

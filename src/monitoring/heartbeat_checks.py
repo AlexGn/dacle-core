@@ -77,14 +77,24 @@ def check_market_direction_shift(
     if current_bias == prior_bias:
         return None
 
-    confidence = current_data.get("confidence", 0)
-    
+    confidence = current_data.get("confidence_pct", current_data.get("confidence", 0)) or 0
+    score = float(current_data.get("score", 0) or 0)
+
+    # Actionable recommendation based on new bias
+    abs_score = abs(score)
+    if current_bias == "BEARISH":
+        action = "Look for SHORT setups" + (" (1.2x)" if abs_score >= 0.60 else " (1.0x)")
+    elif current_bias == "BULLISH":
+        action = "Look for LONG setups" + (" (1.2x)" if abs_score >= 0.60 else " (1.0x)")
+    else:
+        action = "Both directions viable (0.75x)"
+
     # T3.4: Position Impact Analysis
     impact_msg = ""
     if positions:
         longs = [p.get("symbol") for p in positions if p.get("side") == "LONG"]
         shorts = [p.get("symbol") for p in positions if p.get("side") == "SHORT"]
-        
+
         if current_bias == "BEARISH":
             if shorts:
                 impact_msg = f"\n\u2705 Tailwind for {len(shorts)} shorts: {', '.join(shorts[:3])}"
@@ -102,8 +112,10 @@ def check_market_direction_shift(
         check_name="market_direction_shift",
         channel="macro-updates",
         message=(
-            f"[MARKET SHIFT] Direction changed from {prior_bias} to {current_bias} "
-            f"({confidence}% confidence){impact_msg}"
+            f"\u26a1 [MARKET SHIFT] {prior_bias} \u2192 {current_bias} "
+            f"({confidence}% confidence, score {score:+.2f})"
+            f"{impact_msg}"
+            f"\n\u27a1\ufe0f {action}"
         ),
         severity="warning",
     )

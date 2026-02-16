@@ -71,9 +71,14 @@ def build_market_direction_embed(
     }
     bc = bias_cfg.get(bias, {"color": 0x9B9B9B, "emoji": "⚪"})
 
-    shift_line = ""
     if data.get("shift_detected") and data.get("previous_bias"):
-        shift_line = f"\n*Shifted from {data['previous_bias']} → {bias}*"
+        shift_line = f"\n\u26a1 *SHIFTED from {data['previous_bias']}*"
+    else:
+        streak = int(data.get("bias_streak", 0) or 0)
+        if streak > 0:
+            shift_line = f"\n\U0001f4cc *Holding {bias} \u2014 {streak} consecutive update{'s' if streak != 1 else ''}*"
+        else:
+            shift_line = ""
 
     signals = data.get("signals") if isinstance(data.get("signals"), list) else []
     context_signals = data.get("context_signals") if isinstance(data.get("context_signals"), list) else []
@@ -184,7 +189,11 @@ def build_market_direction_embed(
 
     return {
         "title": "📊 MARKET DIRECTION UPDATE",
-        "description": f"{bc['emoji']} **{bias}** ({confidence}% confidence){shift_line}",
+        "description": (
+            f"{bc['emoji']} **{bias}** ({confidence}% confidence, "
+            f"{int(data.get('signals_active', 0) or 0)}/{int(data.get('signals_total', 8) or 8)} signals)"
+            f"{shift_line}"
+        ),
         "color": bc["color"],
         "fields": fields,
         "footer": {"text": " | ".join(footer_parts)},

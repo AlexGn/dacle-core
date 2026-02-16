@@ -2,7 +2,6 @@
 LLM/Web Fetchers Module
 
 Consolidates LLM-powered web content extraction:
-- LLMWebFetch: Multi-provider (OpenAI, Anthropic)
 - Perplexity: Real-time web search with citations
 - Claude: High-quality web content analysis
 
@@ -11,16 +10,8 @@ enabling extraction of structured data from unstructured web content.
 
 Usage:
     from src.data.fetchers.llm_web import (
-        LLMWebFetch,
         fetch_with_perplexity,
         ClaudeWebFetcher,
-    )
-
-    # OpenAI-powered web fetch (recommended for cost)
-    fetcher = LLMWebFetch(provider='openai')
-    result = fetcher.fetch(
-        url="https://cryptorank.io/upcoming-ico",
-        prompt="Extract upcoming TGEs with symbol, date, FDV..."
     )
 
     # Perplexity for real-time web search
@@ -41,66 +32,6 @@ if str(_project_root) not in sys.path:  # pragma: no cover
     sys.path.insert(0, str(_project_root))
 
 logger = logging.getLogger(__name__)
-
-
-# =============================================================================
-# LLMWebFetch - Multi-provider web content extraction
-# =============================================================================
-
-class LLMWebFetch:
-    """
-    Intelligent web content extraction using LLM APIs.
-
-    Replaces Claude Code's WebFetch with API-based alternatives
-    that work in GitHub Actions and other CI environments.
-
-    Providers:
-    - openai: GPT-4o-mini (recommended, best cost/quality)
-    - anthropic: Claude 3.5 Sonnet (highest quality)
-
-    Usage:
-        fetcher = LLMWebFetch(provider='openai')
-        result = fetcher.fetch(
-            url="https://example.com",
-            prompt="Extract all product names and prices"
-        )
-    """
-
-    def __init__(self, provider: str = 'openai'):
-        """
-        Initialize LLM WebFetch.
-
-        Args:
-            provider: 'openai' (recommended) or 'anthropic'
-        """
-        from src.data.fetchers.llm_webfetch import LLMWebFetch as _LLMWebFetch
-        self._impl = _LLMWebFetch(provider=provider)
-
-    def fetch(
-        self,
-        url: str,
-        prompt: str,
-        max_content_length: int = 50000,
-        timeout: int = 30
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Fetch URL and extract structured data using LLM.
-
-        Args:
-            url: URL to fetch
-            prompt: Extraction instructions for the LLM
-            max_content_length: Max chars to send to LLM
-            timeout: HTTP timeout in seconds
-
-        Returns:
-            Dict with extracted data, or None on error
-        """
-        return self._impl.fetch(
-            url=url,
-            prompt=prompt,
-            max_content_length=max_content_length,
-            timeout=timeout
-        )
 
 
 # =============================================================================
@@ -270,7 +201,6 @@ def clean_html_for_llm(html: str, max_length: int = 50000) -> str:
 # =============================================================================
 
 __all__ = [
-    'LLMWebFetch',
     'fetch_with_perplexity',
     'validate_with_perplexity',
     'ClaudeWebFetcher',
