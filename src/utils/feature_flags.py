@@ -26,16 +26,6 @@ class FeatureFlag:
     SECTOR_ROTATION_TRACKER = "sector_rotation_tracker"
     ANALYST_FEED_INTEGRATION = "analyst_feed_integration"
 
-    # Session 333 - Sprint 3: Automation & AI Path
-    WEBSOCKET_LIVE_PRICES = "websocket_live_prices"
-    AUTO_REFRESH_DASHBOARD = "auto_refresh_dashboard"
-    MEXC_TRADE_AUTO_DETECT = "mexc_trade_auto_detect"
-    FEEDBACK_AUTO_PROMPT = "feedback_auto_prompt"
-    LOG_MONITORING_AGENT = "log_monitoring_agent"
-    RISK_GATES_ENABLED = "risk_gates_enabled"
-    RISK_GATE_FLASH_CRASH = "risk_gate_flash_crash"
-    RISK_GATE_POSITION_LIMIT = "risk_gate_position_limit"
-    RISK_GATE_DRAWDOWN_PAUSE = "risk_gate_drawdown_pause"
 
 
 # Cache for loaded config (avoid repeated file reads)
@@ -268,111 +258,6 @@ def reload_config():
     _config_path_cache = None
     _load_config(force_reload=True)
     logger.info("Feature flags configuration reloaded")
-
-
-def get_sprint3_status() -> dict:
-    """
-    Get status of all Sprint 3 feature flags with safety checks.
-
-    Session 333: Provides visibility into Sprint 3 rollout progress.
-
-    Returns:
-        Dictionary with flag status, prerequisites, and readiness
-    """
-    config = _load_config()
-
-    sprint3_flags = {
-        "websocket_live_prices": {
-            "enabled": config.get("websocket_live_prices", False),
-            "description": "Real-time price streaming via WebSocket",
-            "prerequisites": ["Integration tests passing"],
-            "risk": "LOW - Additive, doesn't replace polling",
-        },
-        "auto_refresh_dashboard": {
-            "enabled": config.get("auto_refresh_dashboard", False),
-            "description": "Auto-refresh dashboard on >5% price change",
-            "prerequisites": ["websocket_live_prices enabled"],
-            "risk": "LOW - UI only, no backend changes",
-        },
-        "mexc_trade_auto_detect": {
-            "enabled": config.get("mexc_trade_auto_detect", False),
-            "description": "Auto-detect trades on MEXC",
-            "prerequisites": ["MEXC API credentials", "Integration tests"],
-            "risk": "MEDIUM - Writes to trade_log.json",
-        },
-        "feedback_auto_prompt": {
-            "enabled": config.get("feedback_auto_prompt", False),
-            "description": "Auto-prompt for feedback on trade exit",
-            "prerequisites": ["mexc_trade_auto_detect enabled"],
-            "risk": "LOW - Telegram notification only",
-        },
-        "log_monitoring_agent": {
-            "enabled": config.get("log_monitoring_agent", False),
-            "description": "AI agent monitoring logs for errors",
-            "prerequisites": ["None - read-only daemon"],
-            "risk": "VERY LOW - Separate process, read-only",
-        },
-        "risk_gates_enabled": {
-            "enabled": config.get("risk_gates_enabled", False),
-            "description": "Master switch for automated risk gates",
-            "prerequisites": ["Integration tests", "David approval"],
-            "risk": "MEDIUM - Can block trades",
-        },
-        "risk_gate_flash_crash": {
-            "enabled": config.get("risk_gate_flash_crash", False),
-            "description": "VETO trades on BTC flash crash (>5% drop)",
-            "prerequisites": ["risk_gates_enabled"],
-            "risk": "MEDIUM - Will block trades",
-        },
-        "risk_gate_position_limit": {
-            "enabled": config.get("risk_gate_position_limit", False),
-            "description": "Block trades when position count >= 3 (L066)",
-            "prerequisites": ["risk_gates_enabled", "mexc_trade_auto_detect"],
-            "risk": "MEDIUM - Will block trades",
-        },
-        "risk_gate_drawdown_pause": {
-            "enabled": config.get("risk_gate_drawdown_pause", False),
-            "description": "Pause new trades when drawdown > 20%",
-            "prerequisites": ["risk_gates_enabled", "KPI tracking active"],
-            "risk": "MEDIUM - Will block trades",
-        },
-    }
-
-    # Calculate summary
-    enabled_count = sum(1 for f in sprint3_flags.values() if f["enabled"])
-    total_count = len(sprint3_flags)
-
-    return {
-        "flags": sprint3_flags,
-        "summary": {
-            "enabled": enabled_count,
-            "total": total_count,
-            "progress_pct": round((enabled_count / total_count) * 100, 1),
-        },
-        "recommended_next": _get_recommended_next_flag(sprint3_flags),
-    }
-
-
-def _get_recommended_next_flag(flags: dict) -> Optional[str]:
-    """Get the next recommended flag to enable based on dependencies."""
-    # Priority order for safe rollout
-    rollout_order = [
-        "log_monitoring_agent",  # Lowest risk - read-only
-        "websocket_live_prices",  # Additive - doesn't replace
-        "auto_refresh_dashboard",  # UI only
-        "mexc_trade_auto_detect",  # Enables feedback loop
-        "feedback_auto_prompt",  # Notification only
-        "risk_gates_enabled",  # Master switch
-        "risk_gate_flash_crash",  # Safety gate
-        "risk_gate_position_limit",  # L066 automation
-        "risk_gate_drawdown_pause",  # Capital protection
-    ]
-
-    for flag_name in rollout_order:
-        if flag_name in flags and not flags[flag_name]["enabled"]:
-            return flag_name
-
-    return None  # All flags enabled
 
 
 # Example usage and testing
