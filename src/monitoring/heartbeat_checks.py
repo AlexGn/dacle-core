@@ -6,6 +6,7 @@ Zero I/O, zero side effects — easy to test.
 
 Channel routing:
     - Market direction  → #macro-updates (1470361576237306058)
+    - Regime re-eval    → #trades        (P1.3: re-run PTC on direction shift)
     - New discoveries   → #discovery
     - Discovery recap   → #focus
     - Position health   → #focus         (1470789144736174326)
@@ -118,6 +119,60 @@ def check_market_direction_shift(
             f"\n\u27a1\ufe0f {action}"
         ),
         severity="warning",
+    )
+
+
+def check_regime_shift_reeval(
+    current_data: dict,
+    last_state: dict,
+    active_setups: List[dict],
+) -> Optional[HeartbeatAlert]:
+    """When market direction shifts, flag active setups that need PTC re-evaluation.
+
+    Args:
+        current_data: Market direction data (bias, confidence, score).
+        last_state: Previous heartbeat state with last_market_bias.
+        active_setups: List of dicts with {token, direction, entry, sl, target} for
+                       tokens with recent execution_state.json.
+
+    Returns:
+        HeartbeatAlert with meta containing affected setups, or None.
+    """
+    current_bias = current_data.get("bias")
+    prior_bias = last_state.get("last_market_bias")
+
+    if not current_bias or not prior_bias:
+        return None
+    if current_bias == prior_bias:
+        return None
+    if not active_setups:
+        return None
+
+    # Find setups that conflict with the new regime
+    affected = []
+    for setup in active_setups:
+        direction = setup.get("direction", "").upper()
+        # BEARISH shift hurts LONG setups, BULLISH shift hurts SHORT setups
+        if current_bias == "BEARISH" and direction == "LONG":
+            affected.append(setup)
+        elif current_bias == "BULLISH" and direction == "SHORT":
+            affected.append(setup)
+        elif current_bias == "NEUTRAL":
+            affected.append(setup)  # Re-eval all on neutral shift
+
+    if not affected:
+        return None
+
+    tokens_str = ", ".join(s.get("token", "?") for s in affected)
+    return HeartbeatAlert(
+        check_name="regime_shift_reeval",
+        channel="trades",
+        message=(
+            f"**REGIME SHIFT RE-EVAL** \u2014 {prior_bias} -> {current_bias}\n"
+            f"Re-running PTC for {len(affected)} active setup(s): {tokens_str}"
+        ),
+        severity="warning",
+        meta={"affected_setups": affected, "new_bias": current_bias, "old_bias": prior_bias},
     )
 
 

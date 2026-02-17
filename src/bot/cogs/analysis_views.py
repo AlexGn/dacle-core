@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Optional
 
+import aiohttp
 import discord
 
 from src.utils.logger import get_logger
@@ -17,6 +18,7 @@ logger = get_logger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
 TRADES_CHANNEL_ID = 1468948950412431598
+API_BASE_URL = os.getenv("DACLE_API_URL", "http://localhost:8000")
 
 
 def _load_execution_state(symbol: str, direction: str) -> Optional[dict]:
@@ -62,6 +64,145 @@ def _format_setup_message(symbol: str, direction: str, exec_state: dict) -> str:
         parts.append(f"Target: {target}")
 
     return "\n".join(parts)
+
+
+class SetLevelsModal(discord.ui.Modal):
+    """Modal for entering Entry/SL/TP levels from the /analyze result."""
+
+    def __init__(self, symbol: str, direction: str):
+        title = f"Set Levels — {symbol} {direction}"
+        if len(title) > 45:
+            title = title[:45]
+        super().__init__(title=title)
+        self.symbol = symbol
+        self.direction = direction
+
+        self.entry_input = discord.ui.TextInput(
+            label="Entry Price",
+            placeholder="e.g. 1.28",
+            required=True,
+            style=discord.TextStyle.short,
+        )
+        self.sl_input = discord.ui.TextInput(
+            label="Stop Loss",
+            placeholder="e.g. 1.50",
+            required=True,
+            style=discord.TextStyle.short,
+        )
+        self.tp_input = discord.ui.TextInput(
+            label="Take Profit (optional)",
+            placeholder="e.g. 0.85",
+            required=False,
+            style=discord.TextStyle.short,
+        )
+        self.add_item(self.entry_input)
+        self.add_item(self.sl_input)
+        self.add_item(self.tp_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            entry = float(self.entry_input.value.strip())
+            sl = float(self.sl_input.value.strip())
+        except ValueError:
+            await interaction.response.send_message(
+                "Entry and SL must be valid numbers.", ephemeral=True
+            )
+            return
+
+        tp = None
+        tp_str = self.tp_input.value.strip()
+        if tp_str:
+            try:
+                tp = float(tp_str)
+            except ValueError:
+                await interaction.response.send_message(
+                    "Take Profit must be a valid number.", ephemeral=True
+                )
+                return
+
+        await interaction.response.defer(ephemeral=False)
+
+        payload = {
+            "token": self.symbol,
+            "direction": self.direction,
+            "entry": entry,
+            "sl": sl,
+        }
+        if tp is not None:
+            payload["tp"] = tp
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{API_BASE_URL}/api/execution/levels"
+                async with session.post(url, json=payload) as response:
+                    if response.status == 422:
+                        error_data = await response.json()
+                        detail = error_data.get("detail", "Validation error")
+                        await interaction.followup.send(f"{detail}")
+                        return
+                    if response.status != 200:
+                        await interaction.followup.send(
+                            f"API error ({response.status}). Check DACLE API logs."
+                        )
+                        return
+                    api_result = await response.json()
+        except Exception as e:
+            logger.error(f"Set Levels API call failed: {e}")
+            await interaction.followup.send("DACLE API unavailable.")
+            return
+
+        ptc = api_result.get("pre_trade_check") or {}
+        confluence = api_result.get("confluence") or {}
+        rr_ratio = api_result.get("rr_ratio", 0)
+        approved = ptc.get("approved", False) if isinstance(ptc, dict) else False
+        formatted = api_result.get("formatted_response") or ""
+
+        status_emoji = "\u2705" if approved else "\U0001f6d1"
+        status_word = "APPROVED" if approved else "BLOCKED"
+        color = discord.Color.green() if approved else discord.Color.red()
+
+        embed = discord.Embed(
+            title=f"{status_emoji} {self.symbol} {self.direction} — {status_word}",
+            color=color,
+        )
+
+        conf_count = confluence.get("confluence_count", 0)
+        conf_sources = confluence.get("matching_sources", [])
+        conf_quality = confluence.get("quality", "NO_DATA")
+        display_sources = [s for s in conf_sources if s not in ("sl_confirmed", "tp1_confirmed")]
+        if conf_count > 0:
+            conf_line = f"{conf_count} confluences ({', '.join(display_sources)}) — {conf_quality}"
+        else:
+            conf_line = f"0 confluences — {conf_quality}"
+        embed.add_field(name="Confluence", value=conf_line, inline=False)
+
+        embed.add_field(name="Entry", value=f"${entry:g}", inline=True)
+        embed.add_field(name="SL", value=f"${sl:g}", inline=True)
+        if tp is not None:
+            embed.add_field(name="TP", value=f"${tp:g}", inline=True)
+            embed.add_field(name="R:R", value=f"{rr_ratio}:1", inline=True)
+        else:
+            embed.add_field(name="TP", value="Not set", inline=True)
+
+        if formatted:
+            lines = formatted.split("\n")
+            if lines and ("APPROVED" in lines[0] or "BLOCKED" in lines[0]):
+                formatted = "\n".join(lines[1:]).lstrip("\n")
+            if len(formatted) > 4000:
+                formatted = formatted[:3997] + "..."
+            embed.description = formatted
+
+        embed.set_footer(text="Levels stored (expires 24h)")
+        await interaction.followup.send(embed=embed)
+
+    async def on_error(self, interaction: discord.Interaction, error: Exception):
+        logger.error(f"SetLevelsModal error: {error}", exc_info=error)
+        try:
+            await interaction.response.send_message(
+                "An error occurred processing your levels.", ephemeral=True
+            )
+        except Exception:
+            pass
 
 
 class TradeApprovalView(discord.ui.View):
@@ -125,12 +266,42 @@ class TradeApprovalView(discord.ui.View):
             child.disabled = True
         await interaction.edit_original_response(view=self)
 
+    @discord.ui.button(label="Set Levels", style=discord.ButtonStyle.blurple, emoji="\U0001f4d0")
+    async def set_levels(self, interaction: discord.Interaction, button: discord.ui.Button):
+        direction = self.direction or "SHORT"
+        modal = SetLevelsModal(self.symbol, direction)
+        await interaction.response.send_modal(modal)
+
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.grey, emoji="🔄")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(
-            f"🔄 **Refreshing Analysis** for **{self.symbol}**...",
-            ephemeral=True
-        )
+        await interaction.response.defer(ephemeral=True)
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{API_BASE_URL}/api/tokens/research/{self.symbol}/refresh"
+                async with session.post(url) as resp:
+                    if resp.status in (200, 202):
+                        await interaction.followup.send(
+                            f"🔄 Data refresh triggered for **{self.symbol}**. "
+                            f"Re-run `/analyze {self.symbol}` in ~30s for updated results.",
+                            ephemeral=True
+                        )
+                    elif resp.status == 423:
+                        await interaction.followup.send(
+                            f"🔒 Refresh already in progress for **{self.symbol}**. "
+                            f"Try `/analyze {self.symbol}` in ~30s.",
+                            ephemeral=True
+                        )
+                    else:
+                        await interaction.followup.send(
+                            f"❌ Refresh failed ({resp.status}). Try `/analyze {self.symbol}` manually.",
+                            ephemeral=True
+                        )
+        except Exception as e:
+            logger.error(f"Refresh failed for {self.symbol}: {e}")
+            await interaction.followup.send(
+                f"❌ Refresh failed: {e}",
+                ephemeral=True
+            )
 
     @discord.ui.button(label="Veto", style=discord.ButtonStyle.red, emoji="❌")
     async def veto(self, interaction: discord.Interaction, button: discord.ui.Button):
