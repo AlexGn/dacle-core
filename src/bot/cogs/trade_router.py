@@ -452,6 +452,10 @@ class TradeRouter(commands.Cog):
             sl=sl,
             tp=tp,
             bot=self.bot,
+            formatted_response=api_result.get("formatted_response", ""),
+            approved=approved,
+            confluence=confluence,
+            rr_ratio=rr_ratio,
         )
         await interaction.followup.send(embed=embed, view=view)
 
@@ -459,7 +463,19 @@ class TradeRouter(commands.Cog):
 class LevelsResultView(discord.ui.View):
     """Interactive view for /levels result with 'Post to #trades' button."""
 
-    def __init__(self, token: str, direction: str, entry: float, sl: float, tp: Optional[float], bot):
+    def __init__(
+        self,
+        token: str,
+        direction: str,
+        entry: float,
+        sl: float,
+        tp: Optional[float],
+        bot,
+        formatted_response: str = "",
+        approved: bool = False,
+        confluence: Optional[dict] = None,
+        rr_ratio: float = 0,
+    ):
         super().__init__(timeout=300)
         self.token = token
         self.direction = direction
@@ -467,6 +483,10 @@ class LevelsResultView(discord.ui.View):
         self.sl = sl
         self.tp = tp
         self._bot = bot
+        self._formatted_response = formatted_response
+        self._approved = approved
+        self._confluence = confluence or {}
+        self._rr_ratio = rr_ratio
 
     @discord.ui.button(label="Post to #trades", style=discord.ButtonStyle.primary, emoji="\U0001f4e8")
     async def post_to_trades(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -485,16 +505,65 @@ class LevelsResultView(discord.ui.View):
         setup_msg = "\n".join(parts)
 
         try:
-            await trades_channel.send(setup_msg)
+            setup_message = await trades_channel.send(setup_msg)
             button.disabled = True
             button.label = "Posted to #trades"
             button.style = discord.ButtonStyle.secondary
             await interaction.response.edit_message(view=self)
+
+            # Create thread and post PTC summary
+            await self._post_thread_summary(setup_message)
         except Exception as e:
             logger.error(f"[levels] Failed to post to #trades: {e}")
             await interaction.response.send_message(
                 f"Failed to post: {e}\n```\n{setup_msg}\n```", ephemeral=True
             )
+
+    async def _post_thread_summary(self, setup_message: discord.Message):
+        """Create a thread on the setup message and post PTC + confluence summary."""
+        try:
+            thread = await setup_message.create_thread(
+                name=f"{self.token}-{self.direction}-{setup_message.created_at.strftime('%H%M')}",
+                auto_archive_duration=1440,  # 24h
+            )
+
+            # Build condensed PTC summary for thread
+            status_emoji = "\u2705" if self._approved else "\U0001f6d1"
+            status_word = "APPROVED" if self._approved else "BLOCKED"
+
+            lines = [f"{status_emoji} **Pre-Trade Check: {status_word}**"]
+
+            # Confluence line
+            conf_count = self._confluence.get("confluence_count", 0)
+            conf_sources = self._confluence.get("matching_sources", [])
+            display_sources = [s for s in conf_sources if s not in ("sl_confirmed", "tp1_confirmed")]
+            if conf_count > 0:
+                lines.append(f"\U0001f4d0 Confluences: {conf_count}x ({', '.join(display_sources)})")
+            else:
+                lines.append("\U0001f4d0 Confluences: 0")
+
+            # R:R
+            if self._rr_ratio > 0:
+                lines.append(f"\U0001f4ca R:R: {self._rr_ratio}:1")
+
+            # Add the full formatted response (truncated for thread)
+            if self._formatted_response:
+                # Strip the header line (already shown above)
+                resp_lines = self._formatted_response.split("\n")
+                if resp_lines and ("APPROVED" in resp_lines[0] or "BLOCKED" in resp_lines[0]):
+                    resp_lines = resp_lines[1:]
+                body = "\n".join(resp_lines).strip()
+                if body:
+                    # Discord message limit is 2000 chars
+                    available = 1900 - len("\n".join(lines)) - 10
+                    if len(body) > available:
+                        body = body[:available] + "..."
+                    lines.append("")
+                    lines.append(body)
+
+            await thread.send("\n".join(lines))
+        except Exception as e:
+            logger.error(f"[levels] Failed to create thread: {e}")
 
     async def on_timeout(self):
         for item in self.children:
