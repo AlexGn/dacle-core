@@ -1483,12 +1483,17 @@ def fetch_coinmarketcap(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def fetch_coinmarketcap_full(token: str, token_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def fetch_coinmarketcap_full(token: str, token_name: Optional[str] = None, cmc_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """
     Fetch FULL token data from CoinMarketCap API.
 
     Use this for tokens not found on CoinGecko/CryptoRank (e.g., RTX/RateX).
     Gets: price, market cap, supply, category, contract address, etc.
+
+    Args:
+        token: Token symbol (e.g., "TRUTH")
+        token_name: Optional name for disambiguation when multiple symbols match
+        cmc_id: Optional CMC ID for direct lookup (from identity lock)
 
     Note: Uses more API credits than fetch_coinmarketcap() - use sparingly.
     """
@@ -1505,7 +1510,11 @@ def fetch_coinmarketcap_full(token: str, token_name: Optional[str] = None) -> Op
 
         # Step 1: Get token info (name, category, contract, description)
         info_url = "https://pro-api.coinmarketcap.com/v2/cryptocurrency/info"
-        info_params = {"symbol": token.upper()}
+        # Direct ID lookup if available (avoids ambiguous symbol matching)
+        if cmc_id:
+            info_params = {"id": str(cmc_id)}
+        else:
+            info_params = {"symbol": token.upper()}
 
         try:
             info_response = fetch_with_retry(info_url, headers, timeout=15, params=info_params)
@@ -1518,26 +1527,42 @@ def fetch_coinmarketcap_full(token: str, token_name: Optional[str] = None) -> Op
             return None
 
         info_data = info_response.json()
-        tokens = info_data.get("data", {}).get(token.upper(), [])
 
-        if not tokens:
-            logger.info(f"CMC Full: Token {token} not found")
-            return None
-
-        # Handle both list and dict response formats
-        # If multiple tokens match, try to find by name
-        token_info = None
-        if isinstance(tokens, list):
-            if token_name:
-                # Try to match by name
-                for t in tokens:
-                    if token_name.lower() in t.get("name", "").lower():
-                        token_info = t
-                        break
+        # Response keyed by ID when using id param, by symbol when using symbol param
+        if cmc_id:
+            token_info = info_data.get("data", {}).get(str(cmc_id))
             if not token_info:
-                token_info = tokens[0]  # Default to first
+                logger.info(f"CMC Full: Token ID {cmc_id} not found")
+                return None
         else:
-            token_info = tokens
+            tokens = info_data.get("data", {}).get(token.upper(), [])
+
+            if not tokens:
+                logger.info(f"CMC Full: Token {token} not found")
+                return None
+
+            # Handle both list and dict response formats
+            # If multiple tokens match, prefer active + highest rank, then try name match
+            token_info = None
+            if isinstance(tokens, list):
+                # First: prefer active tokens with a rank
+                active_ranked = [t for t in tokens if t.get("is_active") == 1 or t.get("status") == 1]
+                if token_name and active_ranked:
+                    for t in active_ranked:
+                        if token_name.lower() in t.get("name", "").lower():
+                            token_info = t
+                            break
+                if not token_info and active_ranked:
+                    token_info = active_ranked[0]
+                if not token_info and token_name:
+                    for t in tokens:
+                        if token_name.lower() in t.get("name", "").lower():
+                            token_info = t
+                            break
+                if not token_info:
+                    token_info = tokens[0]
+            else:
+                token_info = tokens
 
         cmc_id = token_info.get("id")
 
@@ -2034,16 +2059,30 @@ def fetch_from_primary_sources(
     # 4b. CoinMarketCap FULL fetch (for tokens not on CoinGecko/CryptoRank OR when name mismatch)
     if "coinmarketcap" not in skip_sources:
         has_price = results.get("current_price") or results.get("listing_price")
-        has_supply = results.get("total_supply") or results.get("circulating_supply")
+        has_fdv = results.get("fdv") or results.get("market_cap")
         no_major_source = not any(s in sources_succeeded for s in ["cryptorank", "coingecko", "dropstab"])
         coingecko_rejected = "coingecko" in sources_tried and "coingecko" not in sources_succeeded
         name_was_provided = token_name is not None
+        missing_pricing = not has_price or not has_fdv
 
-        if no_major_source or (not has_price and not has_supply) or (coingecko_rejected and name_was_provided):
-            reason = "CoinGecko rejected name mismatch" if coingecko_rejected else "no major sources found"
+        if no_major_source or missing_pricing or (coingecko_rejected and name_was_provided):
+            reason = (
+                "missing pricing data" if missing_pricing
+                else "CoinGecko rejected name mismatch" if coingecko_rejected
+                else "no major sources found"
+            )
             logger.info(f"Trying CMC full fetch for {token} ({reason})")
             sources_tried.append("coinmarketcap_full")
-            cmc_full_data = fetch_coinmarketcap_full(token, token_name)
+            # Use identity lock's CMC ID for direct lookup (avoids ambiguous symbol matching)
+            _cmc_id = None
+            try:
+                from src.data.token_identity_lock import get_identity_lock
+                _lock = get_identity_lock(token)
+                if _lock and str(_lock.get("source", "")).lower() == "coinmarketcap":
+                    _cmc_id = int(_lock["external_id"])
+            except Exception:
+                pass
+            cmc_full_data = fetch_coinmarketcap_full(token, token_name, cmc_id=_cmc_id)
             if cmc_full_data:
                 if token_name and cmc_full_data.get("name"):
                     cmc_name = cmc_full_data.get("name", "").lower()
