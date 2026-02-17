@@ -311,13 +311,16 @@ def _ohlcv_to_dicts(ohlcv: list[list]) -> list[dict]:
 # Individual analysis steps
 # ---------------------------------------------------------------------------
 
-def _compute_market_structure(symbol: str, timeframe: str) -> dict:
+def _compute_market_structure(symbol: str, timeframe: str, ohlcv: list[list] = None) -> dict:
     """Run MarketStructureAnalyzer for CHoCH/BOS/swing points."""
     try:
         from src.analysis.market_structure import MarketStructureAnalyzer
 
         analyzer = MarketStructureAnalyzer()
-        result = analyzer.analyze(symbol, timeframe=timeframe)
+        if ohlcv is not None:
+            result = analyzer.analyze_from_ohlcv(ohlcv, timeframe=timeframe)
+        else:
+            result = analyzer.analyze(symbol, timeframe=timeframe)
         return result
     except Exception as e:
         logger.warning(f"Market structure analysis failed: {e}")
@@ -403,7 +406,7 @@ def _compute_volume_profile(ohlcv_dicts: list[dict], current_price: float = 0) -
 def _compute_rsi(ohlcv: list[list], period: int = 14) -> float:
     """Calculate RSI from OHLCV data."""
     try:
-        from src.analysis.exhaustion_calculator import calculate_rsi
+        from src.ta.indicators.rsi import calculate_rsi
 
         closes = [candle[4] for candle in ohlcv]
         return calculate_rsi(closes, period)
@@ -415,14 +418,13 @@ def _compute_rsi(ohlcv: list[list], period: int = 14) -> float:
 def _compute_emas(ohlcv: list[list]) -> dict:
     """Calculate key EMAs (12, 24, 200) and classify alignment."""
     try:
-        from src.analysis.price_action_analyzer import PriceActionAnalyzer
+        from src.ta.indicators.ema import calculate_ema
 
-        analyzer = PriceActionAnalyzer(exchange_id="binance")
         closes = [candle[4] for candle in ohlcv]
 
-        ema_12 = analyzer._calculate_ema(closes, 12)
-        ema_24 = analyzer._calculate_ema(closes, 24)
-        ema_200 = analyzer._calculate_ema(closes, 200)
+        ema_12 = calculate_ema(closes, 12)
+        ema_24 = calculate_ema(closes, 24)
+        ema_200 = calculate_ema(closes, 200)
 
         current_price = closes[-1]
         ema_12_val = ema_12[-1] if ema_12 else current_price
@@ -469,9 +471,15 @@ def _compute_emas(ohlcv: list[list]) -> dict:
 def _compute_funding_rate(symbol: str) -> Optional[float]:
     """Fetch current funding rate from Binance."""
     try:
-        from src.analysis.exhaustion_calculator import fetch_funding_rate
+        from src.data.fetchers.funding_rate_fetcher import FundingRateFetcher
 
-        return fetch_funding_rate(symbol)
+        fetcher = FundingRateFetcher()
+        rates = fetcher.get_funding_rates(limit=200)
+        symbol_upper = symbol.upper()
+        for rate_data in rates:
+            if rate_data.get("symbol", "") == symbol_upper:
+                return rate_data.get("funding_rate")
+        return None
     except Exception as e:
         logger.debug(f"Funding rate fetch failed: {e}")
         return None
@@ -647,17 +655,21 @@ def _compute_tvem(ohlcv: list[list], ema_period: int = 12, std_multiplier: float
             vwap_values.append(cum_tp_vol / cum_vol if cum_vol > 0 else typical_prices[i])
 
         # EMA
-        from src.analysis.price_action_analyzer import PriceActionAnalyzer
-        analyzer = PriceActionAnalyzer(exchange_id="binance")
-        ema_values = analyzer._calculate_ema(closes, ema_period)
+        from src.ta.indicators.ema import calculate_ema
+        ema_values = calculate_ema(closes, ema_period)
         ema_last = ema_values[-1] if ema_values else closes[-1]
 
         # TVEM = (VWAP + EMA) / 2
+        # Note: calculate_ema() returns None for the first (period-1) entries,
+        # so we fall back to VWAP-only for those early candles.
         tvem_values: list[float] = []
         for i in range(len(closes)):
             vwap_i = vwap_values[i] if i < len(vwap_values) else vwap_values[-1]
             ema_i = ema_values[i] if i < len(ema_values) else ema_last
-            tvem_values.append((vwap_i + ema_i) / 2)
+            if ema_i is None:
+                tvem_values.append(vwap_i)
+            else:
+                tvem_values.append((vwap_i + ema_i) / 2)
 
         tvem_mid = tvem_values[-1]
         result["tvem_mid"] = tvem_mid
@@ -2424,7 +2436,7 @@ def build_computed_ta(
     # ------------------------------------------------------------------
 
     # Market structure (CHoCH, BOS, swing points)
-    structure_data = _compute_market_structure(token_symbol, timeframe)
+    structure_data = _compute_market_structure(token_symbol, timeframe, ohlcv=ohlcv)
     # NOTE: structure_label resolved after EMAs so we can fall back to EMA alignment
 
     # Candlestick patterns
@@ -2476,6 +2488,49 @@ def build_computed_ta(
 
     # Session 373b: Sideways market detection at source level (L039)
     sideways_data = _detect_sideways_range(ohlcv)
+
+    # ------------------------------------------------------------------
+    # Session 440: Compute new momentum indicators
+    # ------------------------------------------------------------------
+    closes = [candle[4] for candle in ohlcv]
+    highs = [candle[2] for candle in ohlcv]
+    lows = [candle[3] for candle in ohlcv]
+
+    try:
+        from src.analysis.momentum_indicators import (
+            calculate_macd, calculate_stochastic, detect_rsi_divergence,
+            detect_ema_cross, calculate_bb_squeeze,
+        )
+        from src.ta.indicators.cvd import calculate_cvd
+
+        macd_data = calculate_macd(closes)
+        stoch_data = calculate_stochastic(highs, lows, closes)
+        ema_cross_data = detect_ema_cross(closes)
+        bb_squeeze_data = calculate_bb_squeeze(closes)
+
+        # RSI divergence needs a rolling RSI series
+        from src.ta.indicators.rsi import calculate_rsi as _calc_rsi
+        rsi_series = []
+        for i in range(len(closes)):
+            if i < 15:
+                rsi_series.append(50.0)
+            else:
+                rsi_series.append(_calc_rsi(closes[:i + 1], 14))
+        rsi_div_data = detect_rsi_divergence(closes, rsi_series, direction)
+
+        cvd_ohlcv_dicts = [
+            {"open": c[1], "high": c[2], "low": c[3], "close": c[4], "volume": c[5]}
+            for c in ohlcv
+        ]
+        cvd_data = calculate_cvd(cvd_ohlcv_dicts, direction)
+    except Exception as e:
+        logger.warning(f"Momentum indicator computation failed: {e}")
+        macd_data = None
+        stoch_data = None
+        rsi_div_data = None
+        ema_cross_data = None
+        bb_squeeze_data = None
+        cvd_data = None
 
     # Build pattern_names after merging candlestick + chart patterns
     pattern_names = [p.get("pattern_name", "") for p in patterns]
@@ -2687,6 +2742,13 @@ def build_computed_ta(
         rsi_value=rsi,
         current_price=current_price,
         suggested_entries=suggested_entries,
+        # Session 440: Momentum indicators
+        macd=macd_data,
+        stochastic=stoch_data,
+        rsi_divergence=rsi_div_data,
+        ema_cross=ema_cross_data,
+        bb_squeeze=bb_squeeze_data,
+        cvd_divergence=cvd_data,
     )
 
     logger.info(

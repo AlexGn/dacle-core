@@ -77,6 +77,12 @@ class ConfluenceType(Enum):
     # Session 302: David's indicators (L085, L086)
     MP_VWAP_ZONE = "mp_vwap_zone"  # L085: Price at POC/VAH/VAL confluence zone
     MTF_EMA_AVG = "mtf_ema_avg"  # L086: MTF EMA Average alignment
+    # Session 440: New momentum indicators
+    MACD_CROSSOVER = "macd_crossover"  # MACD bearish/bullish cross
+    RSI_DIVERGENCE = "rsi_divergence"  # RSI vs price divergence
+    EMA_CROSS = "ema_cross"  # Death cross / Golden cross
+    BB_SQUEEZE_BREAK = "bb_squeeze_break"  # Bollinger squeeze + break
+    CVD_DIVERGENCE = "cvd_divergence"  # CVD vs price divergence
 
 
 @dataclass
@@ -151,6 +157,11 @@ class ConfluenceCounter:
         direction: str = "SHORT",
         mp_vwap_data: Optional[Dict] = None,  # Session 302: L085 MP-VWAP
         mtf_ema_avg_data: Optional[Dict] = None,  # Session 302: L086 MTF EMA Average
+        macd_data: Optional[Dict] = None,  # Session 440: MACD indicator
+        rsi_divergence_data: Optional[Dict] = None,  # Session 440: RSI divergence
+        ema_cross_data: Optional[Dict] = None,  # Session 440: EMA cross
+        bb_squeeze_data: Optional[Dict] = None,  # Session 440: BB squeeze
+        cvd_data: Optional[Dict] = None,  # Session 440: CVD divergence
     ) -> ConfluenceResult:
         """
         Count active confluence factors.
@@ -354,7 +365,54 @@ class ConfluenceCounter:
                     else:
                         descriptions.append(f"📉 MTF EMA Avg: {ema_alignment} (downtrend)")
 
-        # 12. Session 280 F5: Sherlock Chart Pattern Detection
+        # 12. Session 440: MACD crossover confluence
+        if macd_data:
+            macd_dir = macd_data.get("direction", "")
+            if is_long:
+                if "bullish" in macd_dir:
+                    factors.append(ConfluenceType.MACD_CROSSOVER)
+                    cross_label = "cross" if "cross" in macd_dir else "momentum"
+                    descriptions.append(f"MACD bullish {cross_label}")
+            else:
+                if "bearish" in macd_dir:
+                    factors.append(ConfluenceType.MACD_CROSSOVER)
+                    cross_label = "cross" if "cross" in macd_dir else "momentum"
+                    descriptions.append(f"MACD bearish {cross_label}")
+
+        # 13. Session 440: RSI divergence confluence
+        if rsi_divergence_data and rsi_divergence_data.get("detected"):
+            div_type = rsi_divergence_data.get("type", "")
+            if (is_long and div_type == "bullish") or (not is_long and div_type == "bearish"):
+                factors.append(ConfluenceType.RSI_DIVERGENCE)
+                strength = rsi_divergence_data.get("strength", "weak")
+                descriptions.append(f"RSI {div_type} divergence ({strength})")
+
+        # 14. Session 440: EMA cross confluence
+        if ema_cross_data:
+            cross_type = ema_cross_data.get("type", "none")
+            candles_since = ema_cross_data.get("candles_since")
+            if candles_since is not None and candles_since <= 10:
+                if (is_long and cross_type == "golden") or (not is_long and cross_type == "death"):
+                    factors.append(ConfluenceType.EMA_CROSS)
+                    descriptions.append(f"EMA {cross_type} cross ({candles_since} candles ago)")
+
+        # 15. Session 440: BB squeeze + break confluence
+        if bb_squeeze_data:
+            break_dir = bb_squeeze_data.get("break_direction")
+            if bb_squeeze_data.get("is_squeeze") or break_dir:
+                if (is_long and break_dir == "up") or (not is_long and break_dir == "down"):
+                    factors.append(ConfluenceType.BB_SQUEEZE_BREAK)
+                    descriptions.append(f"BB squeeze break {break_dir}")
+
+        # 16. Session 440: CVD divergence confluence
+        if cvd_data and cvd_data.get("divergence_detected"):
+            cvd_type = cvd_data.get("divergence_type", "")
+            if (is_long and cvd_type == "bullish") or (not is_long and cvd_type == "bearish"):
+                factors.append(ConfluenceType.CVD_DIVERGENCE)
+                strength = cvd_data.get("strength", "weak")
+                descriptions.append(f"CVD {cvd_type} divergence ({strength})")
+
+        # 17. Session 280 F5: Sherlock Chart Pattern Detection
         # Uses CandlestickDetector for automatic pattern recognition
         # Session 278: Now direction-aware (bullish patterns for LONG)
         if ohlcv_data and CANDLESTICK_DETECTOR_AVAILABLE:

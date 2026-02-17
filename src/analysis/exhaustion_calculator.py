@@ -173,6 +173,8 @@ def calculate_parabolic_extension_score(
 
 
 def calculate_cvd_divergence_score(
+    # NOTE: Canonical location is now src.ta.indicators.cvd.calculate_cvd
+    # This copy is kept for backward compatibility.
     ohlcv_data: List[Dict],
     config: Dict
 ) -> Tuple[float, str]:
@@ -1036,6 +1038,8 @@ def calculate_exhaustion_score(
 
 
 def calculate_rsi(closes: List[float], period: int = 14) -> float:
+    # NOTE: Canonical location is now src.ta.indicators.rsi.calculate_rsi
+    # This copy is kept for backward compatibility.
     """Calculate RSI from close prices."""
     if len(closes) < period + 1:
         return 50.0  # Default neutral

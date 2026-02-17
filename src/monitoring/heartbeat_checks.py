@@ -984,3 +984,85 @@ def check_regime_prediction(
         )
         for msg in predictive_alerts
     ]
+
+
+# =============================================================================
+# Phase 4: TA Freshness Check
+# =============================================================================
+
+TA_FRESHNESS_MAX_AGE_HOURS = 6.0
+
+
+def check_ta_freshness(
+    playbook_tokens: list[dict],
+    ta_data: dict[str, dict],
+    max_age_hours: float = TA_FRESHNESS_MAX_AGE_HOURS,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check if any playbook-ready tokens have stale TA (>6h old).
+
+    Pure function: zero I/O, zero side effects.
+
+    Args:
+        playbook_tokens: List of dicts with 'symbol' key -- tokens that have
+            active playbooks.
+        ta_data: Dict mapping symbol -> ta/latest.json content (with _computed_at).
+        max_age_hours: Maximum TA age before alerting (default 6h).
+
+    Returns:
+        HeartbeatAlert if any tokens have stale TA, None if all fresh.
+    """
+    if not playbook_tokens:
+        return None
+
+    now = datetime.now(timezone.utc)
+    stale_tokens: list[tuple[str, int]] = []
+
+    for token_info in playbook_tokens:
+        symbol = token_info.get("symbol")
+        if not symbol:
+            continue
+
+        ta = ta_data.get(symbol)
+        if ta is None:
+            # No TA data at all -- treat as stale with unknown age
+            stale_tokens.append((symbol, -1))
+            continue
+
+        computed_at = ta.get("_computed_at")
+        if not computed_at:
+            stale_tokens.append((symbol, -1))
+            continue
+
+        try:
+            ts = datetime.fromisoformat(computed_at)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            age_hours = (now - ts).total_seconds() / 3600
+            if age_hours > max_age_hours:
+                stale_tokens.append((symbol, int(age_hours)))
+        except (ValueError, TypeError):
+            stale_tokens.append((symbol, -1))
+
+    if not stale_tokens:
+        return None
+
+    # Format age display
+    parts = []
+    for sym, age_h in stale_tokens:
+        if age_h < 0:
+            parts.append(f"{sym} (no TA)")
+        else:
+            parts.append(f"{sym} ({age_h}h)")
+
+    return HeartbeatAlert(
+        check_name="ta_freshness",
+        channel="focus",
+        message=(
+            f"\U0001f504 **TA Freshness Alert**: {len(stale_tokens)} token(s) have "
+            f"stale TA (>{max_age_hours:.0f}h): {', '.join(parts)}. "
+            f"Consider refreshing via `/ta TOKEN`."
+        ),
+        severity="warning",
+        meta={"stale_count": len(stale_tokens), "symbols": [s for s, _ in stale_tokens]},
+    )

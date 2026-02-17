@@ -313,6 +313,35 @@ class MarketStructureAnalyzer:
             if not ohlcv or len(ohlcv) < 20:
                 return self._error_result(token_symbol, "Insufficient OHLCV data")
 
+            return self.analyze_from_ohlcv(ohlcv, timeframe=timeframe, category=category,
+                                           token_symbol=token_symbol)
+
+        except Exception as e:
+            logger.error(f"Market structure analysis failed: {e}")
+            return self._error_result(token_symbol, str(e))
+
+    def analyze_from_ohlcv(self, ohlcv: list, timeframe: str = "4h",
+                           category: str = None, token_symbol: str = "UNKNOWN") -> Dict:
+        """
+        Full market structure analysis from pre-fetched OHLCV data.
+
+        Runs the same analysis pipeline as analyze() but skips the OHLCV fetch,
+        allowing callers that already have candle data to avoid redundant API calls.
+
+        Args:
+            ohlcv: Pre-fetched OHLCV data in CCXT format: list of
+                   [timestamp, open, high, low, close, volume]
+            timeframe: Candle timeframe (default 4h)
+            category: Token category for R:R target calculation (Session 116)
+            token_symbol: Token symbol for labeling (default "UNKNOWN")
+
+        Returns:
+            Same dict structure as analyze().
+        """
+        try:
+            if not ohlcv or len(ohlcv) < 20:
+                return self._error_result(token_symbol, "Insufficient OHLCV data")
+
             # 1. Identify swing points
             swing_highs, swing_lows = self._find_swing_points(ohlcv)
 
@@ -575,6 +604,9 @@ class MarketStructureAnalyzer:
                 } if equilibrium else None,
                 'in_premium_zone': equilibrium.zone == 'premium' if equilibrium else False,  # Good for shorts
                 'in_discount_zone': equilibrium.zone == 'discount' if equilibrium else False,  # Good for longs
+
+                # Session 440: Volume-based order blocks (Phase 5 derivatives intelligence)
+                'volume_order_blocks': self.analyze_order_blocks(ohlcv),
 
                 # Session 125: Entry Timing Confirmation (CYS Learning)
                 'entry_timing': {
@@ -1206,6 +1238,100 @@ class MarketStructureAnalyzer:
         # Sort by timestamp (most recent first)
         order_blocks.sort(key=lambda x: x.timestamp, reverse=True)
         return order_blocks
+
+    def analyze_order_blocks(self, ohlcv: list, lookback: int = 50) -> list:
+        """
+        Detect institutional order blocks from OHLCV data using volume analysis.
+
+        Session 440: Phase 5 -- volume-based order block detection complementing
+        the existing engulfing-based ``_detect_order_blocks`` method.
+
+        An order block is a candle (or cluster) with:
+        1. Higher-than-average volume (>1.5x 20-period average)
+        2. Followed by a sharp move (>2% in next 3 candles)
+        3. The order block zone = body of the high-volume candle
+
+        Args:
+            ohlcv: CCXT-format candle data [[ts, o, h, l, c, v], ...]
+            lookback: Number of candles to scan (default 50).
+
+        Returns:
+            List of dicts:
+            [{"type": "bullish"|"bearish", "zone_high": float, "zone_low": float,
+              "volume_ratio": float, "candles_ago": int, "strength": str}]
+        """
+        if not ohlcv or len(ohlcv) < 25:
+            return []
+
+        results: list = []
+        candles = ohlcv[-lookback:] if len(ohlcv) >= lookback else ohlcv
+        total = len(candles)
+
+        for i in range(total - 3):
+            # Volume average: 20-period window centered on the candle (or as much as available)
+            vol_start = max(0, i - 10)
+            vol_end = min(total, i + 10)
+            surrounding_volumes = [c[5] for c in candles[vol_start:vol_end] if c[5] > 0]
+            if not surrounding_volumes:
+                continue
+            avg_volume = sum(surrounding_volumes) / len(surrounding_volumes)
+
+            candle_volume = candles[i][5]
+            if avg_volume <= 0 or candle_volume <= 0:
+                continue
+
+            volume_ratio = candle_volume / avg_volume
+            if volume_ratio < 1.5:
+                continue
+
+            # High-volume candle found; check for sharp move in next 3 candles
+            ob_close = candles[i][4]
+            max_move_pct = 0.0
+            move_direction = None
+
+            for j in range(1, min(4, total - i)):
+                future_close = candles[i + j][4]
+                if ob_close == 0:
+                    continue
+                change_pct = ((future_close - ob_close) / ob_close) * 100
+
+                if abs(change_pct) > abs(max_move_pct):
+                    max_move_pct = change_pct
+                    move_direction = "up" if change_pct > 0 else "down"
+
+            if abs(max_move_pct) < 2.0:
+                continue
+
+            # Classify: high-vol down candle + up move = bullish OB (institutional buy)
+            ob_open = candles[i][1]
+            candle_is_red = ob_close < ob_open
+
+            if candle_is_red and move_direction == "up":
+                ob_type = "bullish"
+            elif not candle_is_red and move_direction == "down":
+                ob_type = "bearish"
+            else:
+                # Candle color doesn't contradict the follow-through -- still valid
+                ob_type = "bullish" if move_direction == "up" else "bearish"
+
+            zone_high = max(ob_open, ob_close)
+            zone_low = min(ob_open, ob_close)
+            candles_ago = total - 1 - i
+
+            strength = "strong" if volume_ratio >= 2.5 else "moderate"
+
+            results.append({
+                "type": ob_type,
+                "zone_high": round(zone_high, 6),
+                "zone_low": round(zone_low, 6),
+                "volume_ratio": round(volume_ratio, 2),
+                "candles_ago": candles_ago,
+                "strength": strength,
+            })
+
+        # Most recent first
+        results.sort(key=lambda x: x["candles_ago"])
+        return results
 
     def _detect_equal_levels(
         self, swing_highs: List[SwingPoint], swing_lows: List[SwingPoint],
