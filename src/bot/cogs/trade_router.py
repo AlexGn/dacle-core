@@ -380,7 +380,7 @@ class TradeRouter(commands.Cog):
                     if response.status == 422:
                         error_data = await response.json()
                         detail = error_data.get("detail", "Validation error")
-                        await interaction.followup.send(f"Validation error: {detail}")
+                        await interaction.followup.send(f"\u274c {detail}")
                         return
                     if response.status != 200:
                         await interaction.followup.send(
