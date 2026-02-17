@@ -335,7 +335,167 @@ class TradeRouter(commands.Cog):
 
     # NOTE: on_message listener removed — trade setup detection is handled by
     # Node.js trade-router (deploy/openclaw/trade-router/index.js) per Session 408.
-    # This cog provides /rerun and /setup slash commands.
+    # This cog provides /rerun, /setup, and /levels slash commands.
+
+    @app_commands.command(name="levels", description="Set manual entry/SL/TP levels with confluence validation")
+    @app_commands.describe(
+        token="Token symbol (e.g., TAO, ZRO)",
+        direction="Trade direction",
+        entry="Entry price",
+        sl="Stop loss price",
+        tp="Take profit price (optional)",
+    )
+    @app_commands.choices(direction=[
+        app_commands.Choice(name="SHORT", value="SHORT"),
+        app_commands.Choice(name="LONG", value="LONG"),
+    ])
+    async def levels_command(
+        self,
+        interaction: discord.Interaction,
+        token: str,
+        direction: app_commands.Choice[str],
+        entry: float,
+        sl: float,
+        tp: Optional[float] = None,
+    ):
+        """Set David's manual levels, validate confluences, and run pre-trade check."""
+        await interaction.response.defer(ephemeral=False)
+
+        token_upper = token.upper()
+        direction_value = direction.value
+
+        payload = {
+            "token": token_upper,
+            "direction": direction_value,
+            "entry": entry,
+            "sl": sl,
+        }
+        if tp is not None:
+            payload["tp"] = tp
+
+        try:
+            url = f"{self.api_url}/api/execution/levels"
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, json=payload) as response:
+                    if response.status == 422:
+                        error_data = await response.json()
+                        detail = error_data.get("detail", "Validation error")
+                        await interaction.followup.send(f"Validation error: {detail}")
+                        return
+                    if response.status != 200:
+                        await interaction.followup.send(
+                            f"API error ({response.status}). Check DACLE API logs."
+                        )
+                        return
+                    api_result = await response.json()
+        except Exception as e:
+            logger.error(f"/levels API call failed: {e}")
+            await interaction.followup.send("DACLE API unavailable.")
+            return
+
+        # Extract results
+        ptc = api_result.get("pre_trade_check") or {}
+        confluence = api_result.get("confluence") or {}
+        rr_ratio = api_result.get("rr_ratio", 0)
+        approved = ptc.get("approved", False) if isinstance(ptc, dict) else False
+        formatted = api_result.get("formatted_response") or ""
+
+        # Build embed
+        status_emoji = "\u2705" if approved else "\U0001f6d1"
+        status_word = "APPROVED" if approved else "BLOCKED"
+        color = discord.Color.green() if approved else discord.Color.red()
+
+        embed = discord.Embed(
+            title=f"{status_emoji} {token_upper} {direction_value} — {status_word}",
+            color=color,
+        )
+
+        # Confluence line
+        conf_count = confluence.get("confluence_count", 0)
+        conf_sources = confluence.get("matching_sources", [])
+        conf_quality = confluence.get("quality", "NO_DATA")
+        # Filter out sl_confirmed/tp1_confirmed for display
+        display_sources = [s for s in conf_sources if s not in ("sl_confirmed", "tp1_confirmed")]
+        if conf_count > 0:
+            conf_line = f"{conf_count} confluences ({', '.join(display_sources)}) — {conf_quality}"
+        elif conf_quality == "NO_DATA":
+            conf_line = "0 confluences — no computed data"
+        else:
+            conf_line = f"0 confluences — {conf_quality}"
+        embed.add_field(name="Confluence", value=conf_line, inline=False)
+
+        # Levels
+        embed.add_field(name="Entry", value=f"${entry:g}", inline=True)
+        embed.add_field(name="SL", value=f"${sl:g}", inline=True)
+        if tp is not None:
+            embed.add_field(name="TP", value=f"${tp:g}", inline=True)
+            embed.add_field(name="R:R", value=f"{rr_ratio}:1", inline=True)
+        else:
+            embed.add_field(name="TP", value="Not set", inline=True)
+
+        # Pre-trade check summary (truncated)
+        if formatted:
+            if len(formatted) > 4000:
+                formatted = formatted[:3997] + "..."
+            embed.description = formatted
+
+        embed.set_footer(text="Levels stored (expires 24h)")
+
+        view = LevelsResultView(
+            token=token_upper,
+            direction=direction_value,
+            entry=entry,
+            sl=sl,
+            tp=tp,
+            bot=self.bot,
+        )
+        await interaction.followup.send(embed=embed, view=view)
+
+
+class LevelsResultView(discord.ui.View):
+    """Interactive view for /levels result with 'Post to #trades' button."""
+
+    def __init__(self, token: str, direction: str, entry: float, sl: float, tp: Optional[float], bot):
+        super().__init__(timeout=300)
+        self.token = token
+        self.direction = direction
+        self.entry = entry
+        self.sl = sl
+        self.tp = tp
+        self._bot = bot
+
+    @discord.ui.button(label="Post to #trades", style=discord.ButtonStyle.primary, emoji="\U0001f4e8")
+    async def post_to_trades(self, interaction: discord.Interaction, button: discord.ui.Button):
+        trades_channel = self._bot.get_channel(TRADES_CHANNEL_ID)
+        if not trades_channel:
+            await interaction.response.send_message(
+                "Could not find #trades channel.", ephemeral=True
+            )
+            return
+
+        parts = [f"TAKE {self.direction} ${self.token}"]
+        parts.append(f"Entry: {self.entry}")
+        parts.append(f"SL: {self.sl}")
+        if self.tp is not None:
+            parts.append(f"Target: {self.tp}")
+        setup_msg = "\n".join(parts)
+
+        try:
+            await trades_channel.send(setup_msg)
+            button.disabled = True
+            button.label = "Posted to #trades"
+            button.style = discord.ButtonStyle.secondary
+            await interaction.response.edit_message(view=self)
+        except Exception as e:
+            logger.error(f"[levels] Failed to post to #trades: {e}")
+            await interaction.response.send_message(
+                f"Failed to post: {e}\n```\n{setup_msg}\n```", ephemeral=True
+            )
+
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+
 
 async def setup(bot: commands.Bot):
     await bot.add_cog(TradeRouter(bot))
