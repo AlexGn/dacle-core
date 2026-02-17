@@ -247,6 +247,41 @@ class TACardView(discord.ui.View):
 
         await interaction.message.edit(embed=embed, view=self)
 
+    @discord.ui.button(label="Details", style=discord.ButtonStyle.grey)
+    async def show_details(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        """Show full reasoning and indicator details."""
+        reasoning = self.data.get("reasoning") or []
+        if not reasoning:
+            await interaction.response.send_message(
+                "No detailed reasoning available.", ephemeral=True
+            )
+            return
+
+        lines = [f"**{self.symbol} {self.direction} — Full Reasoning:**\n"]
+        for i, r in enumerate(reasoning, 1):
+            lines.append(f"{i}. {r}")
+
+        # OI analysis
+        oi = self.data.get("oi_analysis")
+        if oi and oi.get("quadrant") != "NEUTRAL":
+            lines.append(f"\n**OI Analysis:** {oi.get('quadrant')} "
+                         f"(4h: {oi.get('oi_change_4h_pct', 0):.1f}%, "
+                         f"24h: {oi.get('oi_change_24h_pct', 0):.1f}%)")
+
+        # Unlock risk
+        unlock = self.data.get("unlock_risk")
+        if unlock and unlock.get("risk_level") not in ("NO_DATA", "NONE", None):
+            lines.append(f"**Unlock Risk:** {unlock.get('label', 'N/A')}")
+
+        text = "\n".join(lines)
+        # Discord message limit is 2000 chars
+        if len(text) > 2000:
+            text = text[:1997] + "..."
+
+        await interaction.response.send_message(text, ephemeral=True)
+
     @discord.ui.button(label="Full Analysis", style=discord.ButtonStyle.grey)
     async def full_analysis(
         self, interaction: discord.Interaction, button: discord.ui.Button
