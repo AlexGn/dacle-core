@@ -434,7 +434,11 @@ class TradeRouter(commands.Cog):
             embed.add_field(name="TP", value="Not set", inline=True)
 
         # Pre-trade check summary (truncated)
+        # Strip first line — it duplicates the embed title (e.g. "🛑 ORCA SHORT — BLOCKED")
         if formatted:
+            lines = formatted.split("\n")
+            if lines and ("APPROVED" in lines[0] or "BLOCKED" in lines[0]):
+                formatted = "\n".join(lines[1:]).lstrip("\n")
             if len(formatted) > 4000:
                 formatted = formatted[:3997] + "..."
             embed.description = formatted
