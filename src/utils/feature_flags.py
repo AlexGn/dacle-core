@@ -19,12 +19,7 @@ logger = logging.getLogger(__name__)
 
 class FeatureFlag:
     """Feature flag constants"""
-    # Session 310 flags
     ENHANCED_CONFLUENCE_DISPLAY = "enhanced_confluence_display"
-    SETUP_PRIORITIZATION = "setup_prioritization"
-    OPPORTUNITY_SCANNER = "opportunity_scanner"
-    SECTOR_ROTATION_TRACKER = "sector_rotation_tracker"
-    ANALYST_FEED_INTEGRATION = "analyst_feed_integration"
 
 
 
@@ -79,10 +74,6 @@ def _load_config(force_reload: bool = False) -> dict:
         # Return default config (all flags disabled)
         default_config = {
             "enhanced_confluence_display": False,
-            "setup_prioritization": False,
-            "opportunity_scanner": False,
-            "sector_rotation_tracker": False,
-            "analyst_feed_integration": False,
             "user_overrides_enabled": False
         }
         _config_cache = default_config
@@ -230,9 +221,6 @@ def get_all_flags(request: Optional[object] = None) -> dict:
         >>> get_all_flags()
         {
             "enhanced_confluence_display": "v1",
-            "setup_prioritization": True,
-            "opportunity_scanner": False,
-            ...
         }
     """
     config = _load_config()
@@ -273,8 +261,6 @@ if __name__ == "__main__":
 
     # Test flag checking
     print(f"\nEnhanced Confluence: {is_enabled(FeatureFlag.ENHANCED_CONFLUENCE_DISPLAY)}")
-    print(f"Setup Prioritization: {is_enabled(FeatureFlag.SETUP_PRIORITIZATION)}")
-    print(f"Opportunity Scanner: {is_enabled(FeatureFlag.OPPORTUNITY_SCANNER)}")
 
     # Test variant checking
     if isinstance(is_enabled(FeatureFlag.ENHANCED_CONFLUENCE_DISPLAY), str):
