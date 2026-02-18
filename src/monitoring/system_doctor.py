@@ -11,6 +11,7 @@ import json
 import psutil
 from pathlib import Path
 from datetime import datetime, timezone
+from typing import Optional
 from src.utils.redis_cache import get_redis_cache
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,7 @@ class SystemDoctor:
 
     def __init__(self):
         self.cache = get_redis_cache()
+        self._sudo_noninteractive_ok: Optional[bool] = None
 
     async def diagnose_and_heal(self) -> list[str]:
         """Perform a check-up and fix what's broken."""
@@ -91,13 +93,17 @@ class SystemDoctor:
         return actions
 
     def _restart_service(self, service_name: str) -> bool:
-        """Execute systemctl restart for a service (requires sudo)."""
+        """Execute systemctl restart for a service using non-interactive sudo."""
         import subprocess
+        if not self._can_use_noninteractive_sudo():
+            logger.error(
+                "SystemDoctor: passwordless sudo unavailable; "
+                "configure NOPASSWD for systemctl restart on DACLE services."
+            )
+            return False
         try:
-            # We use sudo because the API usually runs as a restricted user (clawd)
-            # but needs permission to restart its own service.
-            result = subprocess.run(
-                ["sudo", "systemctl", "restart", service_name],
+            subprocess.run(
+                ["sudo", "-n", "systemctl", "restart", service_name],
                 capture_output=True,
                 text=True,
                 check=True
@@ -110,6 +116,23 @@ class SystemDoctor:
         except Exception as e:
             logger.error(f"SystemDoctor: Unexpected error restarting {service_name}: {e}")
             return False
+
+    def _can_use_noninteractive_sudo(self) -> bool:
+        """Probe whether sudo -n is available (cached)."""
+        if self._sudo_noninteractive_ok is not None:
+            return self._sudo_noninteractive_ok
+        import subprocess
+        try:
+            subprocess.run(
+                ["sudo", "-n", "true"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self._sudo_noninteractive_ok = True
+        except Exception:
+            self._sudo_noninteractive_ok = False
+        return self._sudo_noninteractive_ok
 
     async def _heal_stale_locks(self) -> list[str]:
         """Find and remove refresh locks that have been held for > 15 mins."""
