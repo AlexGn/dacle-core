@@ -1197,3 +1197,138 @@ def prioritize_stale_ta_tokens(
         {"symbol": c["symbol"], "direction": c["direction"], "age_hours": c["age_hours"]}
         for c in candidates[:max_tokens]
     ]
+
+
+# =============================================================================
+# D2: Direction Accuracy + KPI Health Checks
+# =============================================================================
+
+DIRECTION_ACCURACY_MIN_PERIODS = 10
+DIRECTION_ACCURACY_OVERALL_THRESHOLD = 50.0
+DIRECTION_ACCURACY_BIAS_THRESHOLD = 40.0
+
+KPI_DRAWDOWN_WARN_PCT = 15.0
+KPI_HIGH_CONVICTION_FLOOR = 8.5
+KPI_LOW_CONVICTION_CEIL = 7.0
+
+
+def check_direction_accuracy(
+    accuracy_stats: dict,
+) -> Optional[HeartbeatAlert]:
+    """Check if market direction predictions are worse than a coin flip.
+
+    Args:
+        accuracy_stats: Output from DirectionAccuracyTracker.get_accuracy_stats().
+            Keys: total_periods, correct_calls, hit_rate, by_bias.
+
+    Returns:
+        HeartbeatAlert if accuracy is poor, None if healthy.
+    """
+    if not accuracy_stats:
+        return None
+
+    total = accuracy_stats.get("total_periods", 0)
+    if total < DIRECTION_ACCURACY_MIN_PERIODS:
+        return None
+
+    issues = []
+    hit_rate = accuracy_stats.get("hit_rate", 0)
+
+    if hit_rate < DIRECTION_ACCURACY_OVERALL_THRESHOLD:
+        issues.append(f"Overall hit rate {hit_rate}% (below {DIRECTION_ACCURACY_OVERALL_THRESHOLD}%)")
+
+    by_bias = accuracy_stats.get("by_bias", {})
+    for bias_name in ("BULLISH", "BEARISH"):
+        bias_stats = by_bias.get(bias_name, {})
+        if bias_stats.get("excluded"):
+            continue
+        bias_periods = bias_stats.get("periods", 0)
+        bias_hr = bias_stats.get("hit_rate", 0)
+        if bias_periods >= 5 and bias_hr < DIRECTION_ACCURACY_BIAS_THRESHOLD:
+            issues.append(f"{bias_name} hit rate {bias_hr}% ({bias_stats.get('correct', 0)}/{bias_periods})")
+
+    if not issues:
+        return None
+
+    return HeartbeatAlert(
+        check_name="direction_accuracy",
+        channel="focus",
+        message="[DIRECTION ACCURACY] " + "; ".join(issues)
+            + f" — direction calls are unreliable over last {total} periods",
+        severity="warning",
+        meta={"hit_rate": hit_rate, "total_periods": total},
+    )
+
+
+def check_kpi_health(
+    kpi_data: dict,
+) -> Optional[HeartbeatAlert]:
+    """Check KPI health for drawdown and conviction bucket inversion.
+
+    Args:
+        kpi_data: Dict with keys:
+            max_drawdown: {max_drawdown_pct, status}
+            conviction_buckets: [{bucket, win_rate_pct, total_trades}, ...]
+
+    Returns:
+        HeartbeatAlert if KPI issues found, None if healthy.
+    """
+    if not kpi_data:
+        return None
+
+    issues = []
+    severity = "warning"
+
+    # 1. Max drawdown check
+    drawdown = kpi_data.get("max_drawdown", {})
+    dd_pct = drawdown.get("max_drawdown_pct", 0)
+    if dd_pct > KPI_DRAWDOWN_WARN_PCT:
+        issues.append(f"Max drawdown {dd_pct}% (>{KPI_DRAWDOWN_WARN_PCT}%)")
+        if dd_pct > 25:
+            severity = "critical"
+
+    # 2. Conviction bucket inversion
+    buckets = kpi_data.get("conviction_buckets", [])
+    if buckets:
+        high_conviction = [
+            b for b in buckets
+            if _bucket_floor(b.get("bucket", "")) >= KPI_HIGH_CONVICTION_FLOOR
+            and b.get("total_trades", 0) >= 3
+        ]
+        low_conviction = [
+            b for b in buckets
+            if _bucket_floor(b.get("bucket", "")) < KPI_LOW_CONVICTION_CEIL
+            and b.get("total_trades", 0) >= 3
+        ]
+
+        if high_conviction and low_conviction:
+            high_wr = sum(b.get("win_rate_pct", 0) for b in high_conviction) / len(high_conviction)
+            low_wr = sum(b.get("win_rate_pct", 0) for b in low_conviction) / len(low_conviction)
+            if high_wr < low_wr:
+                issues.append(
+                    f"Conviction inversion: high-conviction WR {high_wr:.1f}% "
+                    f"underperforms low-conviction {low_wr:.1f}%"
+                )
+
+    if not issues:
+        return None
+
+    return HeartbeatAlert(
+        check_name="kpi_health",
+        channel="focus",
+        message="[KPI] " + "; ".join(issues),
+        severity=severity,
+        meta={"issues": issues},
+    )
+
+
+def _bucket_floor(bucket_name: str) -> float:
+    """Extract the lower bound from a bucket name like '8.5-9.0' or '< 6.0'."""
+    if not bucket_name:
+        return 0.0
+    if bucket_name.startswith("<"):
+        return 0.0
+    try:
+        return float(bucket_name.split("-")[0].strip())
+    except (ValueError, IndexError):
+        return 0.0
