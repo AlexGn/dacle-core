@@ -690,6 +690,139 @@ async def calculate_direction_bias() -> DirectionUpdate:
 
 
 # =============================================================================
+# Signal Flip Tracker (Enhancement 5)
+# =============================================================================
+
+# Thresholds for each signal to flip between bearish/neutral/bullish
+_SIGNAL_THRESHOLDS = {
+    "BTC RSI": {"bullish": 60, "bearish": 40},
+    "BTCDOM": {"bullish": -0.3, "bearish": 0.3},     # 24h change %
+    "USDT.D": {"bullish": -0.2, "bearish": 0.2},     # 24h change %
+    "TOTAL3": {"bullish": 1.0, "bearish": -1.0},      # 24h change %
+    "Fear & Greed": {"bullish": 55, "bearish": 34},
+    "Funding": {"bullish": 0.005, "bearish": -0.01},  # rate %
+}
+
+# Map signal names to raw_data keys
+_SIGNAL_RAW_KEYS = {
+    "BTC RSI": "btc_rsi",
+    "BTCDOM": "btcdom_change_24h",
+    "USDT.D": "usdt_d_change_24h",
+    "TOTAL3": "total3_change_24h",
+    "Fear & Greed": "fear_greed",
+    "Funding": "funding_rate",
+}
+
+
+def compute_signal_proximity(
+    signals: List[SignalResult],
+    raw_data: dict,
+) -> List[dict]:
+    """Compute proximity of each signal to its flip threshold.
+
+    For signals with numeric thresholds, calculates distance to the nearest
+    flip point (neutral→bullish or neutral→bearish). For BTC Trend and
+    BTC Structure (which depend on qualitative state), provides descriptive
+    proximity.
+
+    Args:
+        signals: List of current SignalResult objects from calculate_direction_bias.
+        raw_data: Dict with raw values (btc_price, btc_ema20, btc_rsi, etc.)
+
+    Returns:
+        List of dicts sorted by proximity (closest to flip first), each with:
+        - name: Signal name
+        - current_score: Current score (-1 to +1)
+        - weight: Signal weight
+        - to_neutral: Absolute distance to nearest neutral threshold (None if N/A)
+        - description: Human-readable proximity text
+    """
+    proximities = []
+
+    for sig in signals:
+        entry = {
+            "name": sig.name,
+            "current_score": sig.score,
+            "weight": sig.weight,
+            "to_neutral": None,
+            "description": "",
+        }
+
+        if sig.name == "BTC Trend":
+            btc_price = raw_data.get("btc_price", 0) or 0
+            ema20 = raw_data.get("btc_ema20", 0) or 0
+            if btc_price and ema20:
+                pct_diff = ((btc_price - ema20) / ema20) * 100
+                entry["to_neutral"] = abs(pct_diff)
+                if pct_diff > 0:
+                    entry["description"] = f"{pct_diff:.1f}% above EMA20 (flip below to bearish)"
+                elif pct_diff < 0:
+                    entry["description"] = f"{abs(pct_diff):.1f}% below EMA20 (flip above to bullish)"
+                else:
+                    entry["description"] = "At EMA20 (neutral)"
+                    entry["to_neutral"] = 0
+            else:
+                entry["description"] = "Data unavailable"
+
+        elif sig.name == "BTC Structure":
+            # Qualitative — just describe current state
+            if sig.score == 0:
+                entry["to_neutral"] = 0
+                entry["description"] = "Already NEUTRAL"
+            else:
+                entry["to_neutral"] = abs(sig.score) * 10  # Rough proxy
+                bias_label = "BEARISH" if sig.score < 0 else "BULLISH"
+                entry["description"] = f"{bias_label} structure (qualitative — depends on price action)"
+
+        elif sig.name in _SIGNAL_THRESHOLDS:
+            thresholds = _SIGNAL_THRESHOLDS[sig.name]
+            raw_key = _SIGNAL_RAW_KEYS.get(sig.name)
+            raw_val = raw_data.get(raw_key) if raw_key else None
+
+            if raw_val is not None:
+                bull_thresh = thresholds["bullish"]
+                bear_thresh = thresholds["bearish"]
+
+                if sig.score > 0:
+                    # Currently bullish — distance to neutral (flip down)
+                    if sig.name in ("BTCDOM", "USDT.D"):
+                        # Inverted: bullish = falling (negative change)
+                        dist = abs(raw_val - bear_thresh)
+                    elif sig.name == "Funding":
+                        dist = abs(raw_val - 0.005)  # distance from bullish threshold
+                    else:
+                        dist = abs(raw_val - bull_thresh)
+                    entry["to_neutral"] = round(dist, 2)
+                    entry["description"] = f"{raw_val} → neutral at {bull_thresh} ({dist:.1f} away)"
+                elif sig.score < 0:
+                    # Currently bearish — distance to neutral (flip up)
+                    if sig.name in ("BTCDOM", "USDT.D"):
+                        dist = abs(raw_val - bull_thresh)
+                    elif sig.name == "Funding":
+                        dist = abs(raw_val - (-0.01))
+                    else:
+                        dist = abs(raw_val - bear_thresh)
+                    entry["to_neutral"] = round(dist, 2)
+                    entry["description"] = f"{raw_val} → neutral at {bear_thresh} ({dist:.1f} away)"
+                else:
+                    # Currently neutral — distance to nearest flip
+                    dist_bull = abs(raw_val - bull_thresh)
+                    dist_bear = abs(raw_val - bear_thresh)
+                    closer = "bullish" if dist_bull < dist_bear else "bearish"
+                    entry["to_neutral"] = 0
+                    entry["description"] = f"Neutral — closest flip: {closer} ({min(dist_bull, dist_bear):.1f} away)"
+            else:
+                entry["description"] = "Data unavailable"
+
+        proximities.append(entry)
+
+    # Sort by to_neutral ascending (closest to flip first), None values last
+    proximities.sort(key=lambda p: p["to_neutral"] if p["to_neutral"] is not None else float("inf"))
+
+    return proximities
+
+
+# =============================================================================
 # Narrative Summary Generator
 # =============================================================================
 

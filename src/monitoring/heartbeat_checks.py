@@ -1332,3 +1332,85 @@ def _bucket_floor(bucket_name: str) -> float:
         return float(bucket_name.split("-")[0].strip())
     except (ValueError, IndexError):
         return 0.0
+
+
+# =============================================================================
+# Neutral-Period Recovery Opportunities (Enhancement 1)
+# =============================================================================
+
+NEUTRAL_RECOVERY_MAX_CANDIDATES = 5
+
+
+def check_neutral_recovery_opportunities(
+    market_direction: dict,
+    token_summaries: List[dict],
+) -> Optional[HeartbeatAlert]:
+    """Check for LONG recovery candidates during NEUTRAL market periods.
+
+    Only fires when market direction is NEUTRAL. Scans pre-filtered token
+    summaries for tokens that show recovery potential (oversold, high drawdown,
+    accumulation volume).
+
+    Args:
+        market_direction: Dict with bias, score, confidence_pct from market-direction API.
+        token_summaries: Pre-filtered list of dicts with:
+            symbol, direction, score, drawdown_pct, rsi_4h, volume_increasing.
+
+    Returns:
+        HeartbeatAlert if NEUTRAL + recovery candidates exist, None otherwise.
+    """
+    bias = market_direction.get("bias")
+    if bias != "NEUTRAL":
+        return None
+
+    if not token_summaries:
+        return None
+
+    # Sort by conviction score descending
+    sorted_candidates = sorted(
+        token_summaries,
+        key=lambda t: t.get("score", 0),
+        reverse=True,
+    )[:NEUTRAL_RECOVERY_MAX_CANDIDATES]
+
+    if not sorted_candidates:
+        return None
+
+    # Build message
+    lines = []
+    for c in sorted_candidates:
+        sym = c.get("symbol", "?")
+        score = c.get("score", 0)
+        dd = c.get("drawdown_pct", 0)
+        rsi = c.get("rsi_4h", 0)
+        vol = "vol+" if c.get("volume_increasing") else ""
+        lines.append(f"  {sym}: {score:.1f}/10 LONG ({dd:.0f}% down, RSI {rsi:.0f} {vol})")
+
+    confidence = market_direction.get("confidence_pct", 0)
+    msg = (
+        f"**NEUTRAL RECOVERY SCAN** ({confidence}% confidence)\n"
+        f"{len(sorted_candidates)} recovery candidate(s):\n"
+        + "\n".join(lines)
+        + "\n0.75x sizing (neutral regime)"
+    )
+
+    return HeartbeatAlert(
+        check_name="neutral_recovery_opportunities",
+        channel="discovery",
+        message=msg,
+        severity="info",
+        meta={
+            "candidates": [
+                {
+                    "symbol": c.get("symbol"),
+                    "score": c.get("score", 0),
+                    "drawdown_pct": c.get("drawdown_pct", 0),
+                    "rsi_4h": c.get("rsi_4h", 0),
+                    "volume_increasing": c.get("volume_increasing", False),
+                }
+                for c in sorted_candidates
+            ],
+            "market_bias": "NEUTRAL",
+            "confidence_pct": confidence,
+        },
+    )
