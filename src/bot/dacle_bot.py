@@ -91,28 +91,7 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load monitor cog: {e}")
 
-        # Load trade commands cog
-        try:
-            await self.load_extension("src.bot.cogs.trades")
-            logger.info("✅ Loaded trades cog")
-        except Exception as e:
-            logger.error(f"❌ Failed to load trades cog: {e}")
-
-        # Load CryptoRank commands cog
-        try:
-            await self.load_extension("src.bot.cogs.cryptorank_commands")
-            logger.info("✅ Loaded cryptorank_commands cog")
-        except Exception as e:
-            logger.error(f"❌ Failed to load cryptorank_commands cog: {e}")
-
-        # Load Whales Market OTC commands cog
-        try:
-            await self.load_extension("src.bot.cogs.otc_commands")
-            logger.info("✅ Loaded otc_commands cog")
-        except Exception as e:
-            logger.error(f"❌ Failed to load otc_commands cog: {e}")
-
-        # Load daily briefing cog
+        # Load scan cog (stripped-down briefing — /scan only)
         try:
             await self.load_extension("src.bot.cogs.briefing")
             logger.info("✅ Loaded briefing cog")
@@ -154,13 +133,6 @@ class DACLEBot(commands.Bot):
             logger.info("✅ Loaded position_commands cog")
         except Exception as e:
             logger.error(f"❌ Failed to load position_commands cog: {e}")
-
-        # Load Scout Commands (Self-Evolution Audit)
-        try:
-            await self.load_extension("src.bot.cogs.scout_commands")
-            logger.info("✅ Loaded scout_commands cog")
-        except Exception as e:
-            logger.error(f"❌ Failed to load scout_commands cog: {e}")
 
         # Load Performance Commands (behavioral analysis + compounding)
         try:
