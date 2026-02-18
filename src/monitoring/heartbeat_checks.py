@@ -35,8 +35,17 @@ class HeartbeatAlert:
     meta: Optional[dict[str, Any]] = None
 
 
-# Staleness threshold: alert when more than this many tokens are stale
+# Staleness threshold: alert when more than this many relevant tokens are stale
 STALENESS_THRESHOLD = 5
+
+# Minimum conviction for a token to be considered worth tracking/refreshing
+RELEVANCE_CONVICTION_THRESHOLD = 6.5
+
+# Counter-regime conviction threshold (e.g., LONG in BEARISH needs >= 8.5)
+COUNTER_REGIME_CONVICTION_THRESHOLD = 8.5
+
+# Active watchlist states (tokens worth tracking)
+ACTIVE_WATCHLIST_STATES = {"LIVE", "WATCHING", "DISCOVERED", "ANALYZED", "NEW", "ACTION"}
 
 # Position health threshold: alert when PnL% drops below this
 POSITION_HEALTH_THRESHOLD = -10.0
@@ -330,32 +339,187 @@ def check_position_health(
     )
 
 
+def is_relevant_token(token: dict, market_bias: str) -> bool:
+    """Determine if a token is worth tracking/refreshing.
+
+    A token is relevant when ALL rules pass:
+    1. Has active watchlist state (LIVE, WATCHING, DISCOVERED, ANALYZED, NEW, ACTION)
+    2. Has conviction score >= 6.5
+    3. Direction aligns with market bias (counter-regime needs >= 8.5)
+    4. Has exchange listing (not DEX-only with no volume)
+
+    Args:
+        token: Unified token dict. Expected keys: watchlist_state, conviction_score,
+               direction, listing_exchanges.
+        market_bias: Current market direction ("BULLISH", "BEARISH", "NEUTRAL").
+
+    Returns:
+        True if the token is relevant for tracking/refresh.
+    """
+    # Rule 1: Active watchlist state
+    state = token.get("watchlist_state")
+    if not state or state not in ACTIVE_WATCHLIST_STATES:
+        return False
+
+    # Rule 2: Minimum conviction
+    score = token.get("conviction_score")
+    if score is None or score < RELEVANCE_CONVICTION_THRESHOLD:
+        return False
+
+    # Rule 3: Direction alignment with market bias
+    direction = (token.get("direction") or "").upper()
+    bias = (market_bias or "NEUTRAL").upper()
+    if bias == "BEARISH" and direction == "LONG" and score < COUNTER_REGIME_CONVICTION_THRESHOLD:
+        return False
+    if bias == "BULLISH" and direction == "SHORT" and score < COUNTER_REGIME_CONVICTION_THRESHOLD:
+        return False
+
+    # Rule 4: Exchange listing
+    exchanges = token.get("listing_exchanges")
+    if isinstance(exchanges, list) and len(exchanges) == 0:
+        return False
+
+    return True
+
+
+def classify_staleness_tier(token: dict, market_bias: str) -> str:
+    """Classify a token's staleness tier.
+
+    Returns:
+        "actionable": LIVE/has playbook + stale → refresh immediately
+        "relevant": passes is_relevant + stale → refresh in priority order
+        "dormant": fails is_relevant → skip, don't count, don't report
+        "fresh": not stale at all
+    """
+    dq = token.get("data_quality")
+    is_stale = isinstance(dq, dict) and dq.get("is_stale") is True
+
+    if not is_stale:
+        return "fresh"
+
+    if not is_relevant_token(token, market_bias):
+        return "dormant"
+
+    # Actionable: LIVE state or has an active playbook
+    state = token.get("watchlist_state", "")
+    if state == "LIVE" or token.get("has_playbook"):
+        return "actionable"
+
+    return "relevant"
+
+
+def sort_stale_by_priority(tokens: List[dict]) -> List[dict]:
+    """Sort stale tokens for self-healing refresh priority.
+
+    Priority order:
+    1. LIVE tokens first
+    2. Tokens with playbooks
+    3. Higher conviction score first
+    """
+    def sort_key(t):
+        state = t.get("watchlist_state", "")
+        has_playbook = t.get("has_playbook", False)
+        score = t.get("conviction_score") or 0
+        # Lower tuple values = higher priority
+        return (
+            0 if state == "LIVE" else 1,  # LIVE first
+            0 if has_playbook else 1,       # Playbook holders next
+            -score,                          # Higher conviction first
+        )
+
+    return sorted(tokens, key=sort_key)
+
+
+def count_relevant_stale(
+    tokens_with_state: List[dict],
+    market_bias: str = "NEUTRAL",
+    stale_age_days: float = 7.0,
+) -> int:
+    """Count tokens that are both relevant and have stale conviction data.
+
+    Used by discovery summary endpoint to compute relevant_stale_count.
+
+    Args:
+        tokens_with_state: List of dicts with symbol, conviction_score, direction,
+                           conviction_age_days, state.
+        market_bias: Current market direction.
+        stale_age_days: Conviction age threshold in days.
+
+    Returns:
+        Count of relevant stale tokens.
+    """
+    count = 0
+    for t in tokens_with_state:
+        age = t.get("conviction_age_days")
+        if age is None or age <= stale_age_days:
+            continue
+
+        state = t.get("state")
+        if not state or state not in ACTIVE_WATCHLIST_STATES:
+            continue
+
+        score = t.get("conviction_score")
+        if score is None or score < RELEVANCE_CONVICTION_THRESHOLD:
+            continue
+
+        # Direction alignment check
+        direction = (t.get("direction") or "").upper()
+        bias = (market_bias or "NEUTRAL").upper()
+        if bias == "BEARISH" and direction == "LONG" and score < COUNTER_REGIME_CONVICTION_THRESHOLD:
+            continue
+        if bias == "BULLISH" and direction == "SHORT" and score < COUNTER_REGIME_CONVICTION_THRESHOLD:
+            continue
+
+        count += 1
+
+    return count
+
+
 def check_data_staleness(
     unified_tokens: List[dict],
+    market_bias: str = "NEUTRAL",
 ) -> Optional[HeartbeatAlert]:
     """
-    Check for excessive stale token data.
+    Check for excessive stale token data (relevance-aware).
+
+    Only counts tokens that pass relevance filtering. Dormant tokens
+    (not in watchlist, expired, low conviction) are excluded from the
+    alert count but reported as informational context.
 
     Args:
         unified_tokens: List of token dicts from GET /api/tokens/unified
-                        Expected key: data_quality.is_stale
+                        Expected keys: data_quality.is_stale, watchlist_state,
+                        conviction_score, direction, listing_exchanges.
+        market_bias: Current market direction for relevance filtering.
 
     Returns:
-        HeartbeatAlert if stale count > 5, None otherwise.
+        HeartbeatAlert if relevant stale count > threshold, None otherwise.
     """
-    stale_count = 0
+    total_stale = 0
+    relevant_stale = 0
+
     for t in unified_tokens:
         dq = t.get("data_quality")
-        if isinstance(dq, dict) and dq.get("is_stale") is True:
-            stale_count += 1
+        if not (isinstance(dq, dict) and dq.get("is_stale") is True):
+            continue
 
-    if stale_count <= STALENESS_THRESHOLD:
+        total_stale += 1
+        if is_relevant_token(t, market_bias):
+            relevant_stale += 1
+
+    if relevant_stale <= STALENESS_THRESHOLD:
         return None
+
+    dormant_stale = total_stale - relevant_stale
+    dormant_note = f" (+{dormant_stale} dormant, ignored)" if dormant_stale > 0 else ""
 
     return HeartbeatAlert(
         check_name="data_staleness",
         channel="focus",
-        message=f"[STALE DATA] {stale_count} tokens have stale data (>48h) — may need refresh",
+        message=(
+            f"[STALE DATA] {relevant_stale} relevant tokens have stale data (>24h)"
+            f"{dormant_note} — may need refresh"
+        ),
         severity="warning",
     )
 
