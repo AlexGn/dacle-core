@@ -5,8 +5,10 @@ Monitors Discord messages for crypto project mentions and stores them in Supabas
 
 import re
 import os
+import json
+import hashlib
 from collections import deque
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import discord
@@ -118,6 +120,12 @@ class MessageMonitor(commands.Cog):
         self.enable_thread_bq_followup = (
             os.getenv("ENABLE_MONITOR_THREAD_BQ_FOLLOWUP", "false").strip().lower() == "true"
         )
+        try:
+            self.thread_bq_cache_ttl_seconds = int(
+                os.getenv("MONITOR_THREAD_BQ_CACHE_TTL_SECONDS", "300")
+            )
+        except ValueError:
+            self.thread_bq_cache_ttl_seconds = 300
 
         logger.info("MessageMonitor cog initialized with conviction scoring")
 
@@ -458,6 +466,175 @@ class MessageMonitor(commands.Cog):
 
         return " ".join(parts)
 
+    def _build_execution_payload(self, setup: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Build canonical payload for execution endpoints from a thread setup cache entry.
+        """
+        return {
+            "token": str(setup["symbol"]).upper(),
+            "direction": str(setup["direction"]).upper(),
+            "entry": float(setup["entry"]),
+            "sl": float(setup["sl"]),
+            "target": float(setup["target"]),
+        }
+
+    def _execution_payload_hash(self, setup_or_payload: Dict[str, Any]) -> str:
+        """
+        Stable hash for setup levels to detect changed execution inputs.
+        """
+        payload = (
+            setup_or_payload
+            if "token" in setup_or_payload
+            else self._build_execution_payload(setup_or_payload)
+        )
+        normalized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    def _extract_blocking_reasons(self, analysis_data: Dict[str, Any]) -> List[str]:
+        """
+        Pull hard blocking hints from analysis fields for disagreement notes.
+        """
+        reasons: List[str] = []
+        for key in ("warnings", "reasoning", "blocking_reasons"):
+            value = analysis_data.get(key)
+            if isinstance(value, str):
+                candidates = [value]
+            elif isinstance(value, list):
+                candidates = [v for v in value if isinstance(v, str)]
+            else:
+                candidates = []
+            for item in candidates:
+                upper = item.upper()
+                if "BLOCKED" in upper or "REJECT" in upper:
+                    reasons.append(item.strip())
+        # Preserve first occurrences only
+        deduped: List[str] = []
+        for reason in reasons:
+            if reason not in deduped:
+                deduped.append(reason)
+        return deduped
+
+    def _set_initial_thread_decision(
+        self,
+        setup: Dict[str, Any],
+        decision: str,
+        signal: str,
+        payload_hash: Optional[str] = None,
+        source: str = "pre-trade-check",
+        block_reasons: Optional[List[str]] = None,
+    ) -> None:
+        """
+        Persist initial decision metadata used to avoid contradictory thread outcomes.
+        """
+        setup["initial_decision"] = decision
+        setup["initial_signal"] = signal
+        setup["initial_result_ts"] = datetime.now(timezone.utc).isoformat()
+        setup["initial_payload_hash"] = payload_hash or self._execution_payload_hash(setup)
+        setup["initial_decision_source"] = source
+        if block_reasons is not None:
+            setup["initial_block_reasons"] = block_reasons
+
+    def _is_initial_decision_fresh(
+        self,
+        setup: Dict[str, Any],
+        payload_hash: str,
+    ) -> bool:
+        """
+        True when setup levels are unchanged and initial result age is inside cache TTL.
+        """
+        if setup.get("initial_decision") not in ("ENTER", "SKIP"):
+            return False
+        if setup.get("initial_payload_hash") != payload_hash:
+            return False
+        ts_raw = setup.get("initial_result_ts")
+        if not isinstance(ts_raw, str):
+            return False
+        try:
+            ts = datetime.fromisoformat(ts_raw)
+        except ValueError:
+            return False
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - ts).total_seconds()
+        return age_seconds <= self.thread_bq_cache_ttl_seconds
+
+    def _resolve_thread_followup_decision(
+        self,
+        setup: Dict[str, Any],
+        full_analysis_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Resolve final thread decision, locking the initial decision on disagreement.
+        """
+        initial_decision = setup.get("initial_decision")
+        initial_signal = setup.get("initial_signal")
+
+        if initial_decision not in ("ENTER", "SKIP"):
+            pre_trade_approved = setup.get("pre_trade_approved")
+            if isinstance(pre_trade_approved, bool):
+                initial_decision = "ENTER" if pre_trade_approved else "SKIP"
+                if not initial_signal:
+                    initial_signal = "APPROVED" if pre_trade_approved else "BLOCKED"
+
+        if not full_analysis_data:
+            decision = initial_decision or "SKIP"
+            signal = initial_signal or "UNKNOWN"
+            return {
+                "decision": decision,
+                "signal": signal,
+                "locked": bool(initial_decision),
+                "note": "",
+            }
+
+        recheck_approved = bool(full_analysis_data.get("approved", False))
+        recheck_signal = str(full_analysis_data.get("signal") or "UNKNOWN")
+        recheck_decision = "ENTER" if recheck_approved else "SKIP"
+        block_reasons = self._extract_blocking_reasons(full_analysis_data)
+
+        if initial_decision in ("ENTER", "SKIP") and recheck_decision != initial_decision:
+            note = (
+                f"⚠️ Full-analysis disagreed ({recheck_decision}: {recheck_signal}); "
+                f"locking initial {initial_decision} decision."
+            )
+            if block_reasons:
+                note += f" Reason: {block_reasons[0]}"
+            return {
+                "decision": initial_decision,
+                "signal": initial_signal or recheck_signal,
+                "locked": True,
+                "note": note,
+            }
+
+        return {
+            "decision": recheck_decision,
+            "signal": recheck_signal,
+            "locked": False,
+            "note": "",
+        }
+
+    def _format_thread_followup_message(
+        self,
+        bq_summary: str,
+        decision: str,
+        signal: str,
+        note: str = "",
+    ) -> str:
+        """
+        Compose final thread follow-up message.
+        """
+        decision_line = (
+            f"✅ **ENTER** — {signal}"
+            if decision == "ENTER"
+            else f"⛔ **SKIP** — {signal}"
+        )
+        parts: List[str] = []
+        if bq_summary:
+            parts.append(bq_summary)
+        parts.append(decision_line)
+        if note:
+            parts.append(note)
+        return "\n\n".join(parts)
+
     async def _recover_thread_setup(self, thread: discord.Thread) -> Optional[Dict[str, Any]]:
         """
         Attempt to reconstruct trade setup from recent thread history.
@@ -488,6 +665,70 @@ class MessageMonitor(commands.Cog):
         except Exception as e:
             logger.warning(f"Failed to recover thread setup for {thread.id}: {e}")
         return None
+
+    async def _handle_bq_thread_followup(
+        self,
+        thread: discord.Thread,
+        thread_id: int,
+        setup: Dict[str, Any],
+        message_content: str,
+    ) -> bool:
+        """
+        Post a single final ENTER/SKIP follow-up for BQ messages in trade threads.
+        """
+        bq_summary = self._build_bq_summary(
+            message_content,
+            pre_trade_approved=setup.get("pre_trade_approved"),
+        )
+        payload = self._build_execution_payload(setup)
+        payload_hash = self._execution_payload_hash(payload)
+
+        if self._is_initial_decision_fresh(setup, payload_hash):
+            resolved = self._resolve_thread_followup_decision(setup)
+            combined = self._format_thread_followup_message(
+                bq_summary=bq_summary,
+                decision=resolved["decision"],
+                signal=resolved["signal"],
+                note=resolved["note"],
+            )
+            await thread.send(combined)
+            self.thread_decision_sent[thread_id] = True
+            return True
+
+        import requests
+
+        resp = requests.post(
+            "http://localhost:8000/api/execution/full-analysis",
+            json=payload,
+            timeout=20,
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", {})
+            resolved = self._resolve_thread_followup_decision(setup, data)
+            if setup.get("initial_decision") not in ("ENTER", "SKIP"):
+                self._set_initial_thread_decision(
+                    setup,
+                    decision=resolved["decision"],
+                    signal=resolved["signal"],
+                    payload_hash=payload_hash,
+                    source="full-analysis",
+                    block_reasons=self._extract_blocking_reasons(data),
+                )
+            combined = self._format_thread_followup_message(
+                bq_summary=bq_summary,
+                decision=resolved["decision"],
+                signal=resolved["signal"],
+                note=resolved["note"],
+            )
+            await thread.send(combined)
+            self.thread_decision_sent[thread_id] = True
+            return True
+
+        if bq_summary:
+            await thread.send(f"{bq_summary}\n\n⚠️ Final decision unavailable — API error.")
+            self.thread_decision_sent[thread_id] = True
+        logger.warning(f"Full-analysis failed for thread {thread_id}: {resp.status_code}")
+        return False
 
     async def _store_mention(
         self,
@@ -684,7 +925,7 @@ class MessageMonitor(commands.Cog):
                                 if final_target:
                                     # Cache setup for thread follow-up decision
                                     if isinstance(final_target, discord.Thread):
-                                        self.thread_setups[final_target.id] = {
+                                        cached_setup = {
                                             "symbol": symbol,
                                             "direction": trade_setup["direction"],
                                             "entry": trade_setup["entry"],
@@ -692,6 +933,23 @@ class MessageMonitor(commands.Cog):
                                             "target": trade_setup["target"],
                                             "pre_trade_approved": data.get("data", {}).get("approved", False),
                                         }
+                                        initial_approved = bool(data.get("data", {}).get("approved", False))
+                                        initial_signal = str(
+                                            data.get("data", {}).get("signal")
+                                            or ("APPROVED" if initial_approved else "BLOCKED")
+                                        )
+                                        payload_hash = self._execution_payload_hash(cached_setup)
+                                        self._set_initial_thread_decision(
+                                            cached_setup,
+                                            decision="ENTER" if initial_approved else "SKIP",
+                                            signal=initial_signal,
+                                            payload_hash=payload_hash,
+                                            source="pre-trade-check",
+                                            block_reasons=self._extract_blocking_reasons(
+                                                data.get("data", {})
+                                            ),
+                                        )
+                                        self.thread_setups[final_target.id] = cached_setup
                                         self.thread_decision_sent[final_target.id] = False
                                     logger.info(f"📤 Sending pre-trade check summary for {symbol} to trades")
                                     if len(formatted) <= 1900:
@@ -873,46 +1131,14 @@ class MessageMonitor(commands.Cog):
                 if not self.thread_decision_sent.get(thread_id, False):
                     setup = self.thread_setups[thread_id]
                     try:
-                        bq_summary = self._build_bq_summary(
-                            message_content,
-                            pre_trade_approved=setup.get("pre_trade_approved"),
+                        await self._handle_bq_thread_followup(
+                            thread=message.channel,
+                            thread_id=thread_id,
+                            setup=setup,
+                            message_content=message_content,
                         )
-                        import requests
-                        payload = {
-                            "token": setup["symbol"],
-                            "direction": setup["direction"],
-                            "entry": setup["entry"],
-                            "sl": setup["sl"],
-                            "target": setup["target"],
-                        }
-                        resp = requests.post(
-                            "http://localhost:8000/api/execution/full-analysis",
-                            json=payload,
-                            timeout=20,
-                        )
-                        if resp.status_code == 200:
-                            data = resp.json().get("data", {})
-                            approved = data.get("approved", False)
-                            signal = data.get("signal", "UNKNOWN")
-                            decision_line = (
-                                f"✅ **ENTER** — {signal}"
-                                if approved
-                                else f"⛔ **SKIP** — {signal}"
-                            )
-                            combined = (
-                                f"{bq_summary}\n\n{decision_line}"
-                                if bq_summary
-                                else decision_line
-                            )
-                            await message.channel.send(combined)
-                            self.thread_decision_sent[thread_id] = True
+                        if self.thread_decision_sent.get(thread_id, False):
                             return
-                        if bq_summary:
-                            await message.channel.send(
-                                f"{bq_summary}\n\n⚠️ Final decision unavailable — API error."
-                            )
-                            self.thread_decision_sent[thread_id] = True
-                        logger.warning(f"Full-analysis failed for thread {thread_id}: {resp.status_code}")
                     except Exception as e:
                         logger.warning(f"Full-analysis exception for thread {thread_id}: {e}")
                         await message.channel.send(
@@ -927,46 +1153,14 @@ class MessageMonitor(commands.Cog):
                         self.thread_decision_sent[thread_id] = False
                         # Re-run follow-up logic now that we recovered setup
                         try:
-                            bq_summary = self._build_bq_summary(
-                                message_content,
-                                pre_trade_approved=recovered.get("pre_trade_approved"),
+                            await self._handle_bq_thread_followup(
+                                thread=message.channel,
+                                thread_id=thread_id,
+                                setup=recovered,
+                                message_content=message_content,
                             )
-                            import requests
-                            payload = {
-                                "token": recovered["symbol"],
-                                "direction": recovered["direction"],
-                                "entry": recovered["entry"],
-                                "sl": recovered["sl"],
-                                "target": recovered["target"],
-                            }
-                            resp = requests.post(
-                                "http://localhost:8000/api/execution/full-analysis",
-                                json=payload,
-                                timeout=20,
-                            )
-                            if resp.status_code == 200:
-                                data = resp.json().get("data", {})
-                                approved = data.get("approved", False)
-                                signal = data.get("signal", "UNKNOWN")
-                                decision_line = (
-                                    f"✅ **ENTER** — {signal}"
-                                    if approved
-                                    else f"⛔ **SKIP** — {signal}"
-                                )
-                                combined = (
-                                    f"{bq_summary}\n\n{decision_line}"
-                                    if bq_summary
-                                    else decision_line
-                                )
-                                await message.channel.send(combined)
-                                self.thread_decision_sent[thread_id] = True
+                            if self.thread_decision_sent.get(thread_id, False):
                                 return
-                            if bq_summary:
-                                await message.channel.send(
-                                    f"{bq_summary}\n\n⚠️ Final decision unavailable — API error."
-                                )
-                                self.thread_decision_sent[thread_id] = True
-                            logger.warning(f"Full-analysis failed for recovered thread {thread_id}: {resp.status_code}")
                         except Exception as e:
                             logger.warning(f"Full-analysis exception for recovered thread {thread_id}: {e}")
                             await message.channel.send(
