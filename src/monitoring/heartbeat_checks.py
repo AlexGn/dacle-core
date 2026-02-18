@@ -1121,3 +1121,79 @@ def check_ta_freshness(
         severity="warning",
         meta={"stale_count": len(stale_tokens), "symbols": [s for s, _ in stale_tokens]},
     )
+
+
+def prioritize_stale_ta_tokens(
+    stale_symbols: list[str],
+    tokens_dir: "Path",
+    max_tokens: int = 8,
+) -> list[dict]:
+    """Prioritize stale TA tokens for auto-refresh. Returns [{symbol, direction, age_hours}].
+
+    Priority: highest conviction score first (from consolidated.json),
+    then oldest TA first. Only tokens with a known direction get refreshed.
+
+    Pure function: reads filesystem but has no side effects.
+    """
+    import json
+    from pathlib import Path
+
+    if not stale_symbols:
+        return []
+
+    tokens_dir = Path(tokens_dir)
+    now = datetime.now(timezone.utc)
+    candidates = []
+
+    for symbol in stale_symbols:
+        token_dir = tokens_dir / symbol
+        consolidated_path = token_dir / "consolidated.json"
+        if not consolidated_path.exists():
+            continue
+
+        try:
+            data = json.loads(consolidated_path.read_text())
+        except Exception:
+            continue
+
+        # Extract direction and score
+        direction_det = data.get("direction_detection", {})
+        recommended = direction_det.get("recommended", "")
+        if recommended == "SHORT":
+            score = direction_det.get("short_score", 0) or 0
+            direction = "SHORT"
+        elif recommended == "LONG":
+            score = direction_det.get("long_score", 0) or 0
+            direction = "LONG"
+        else:
+            # No clear direction — skip
+            continue
+
+        # Get TA age
+        ta_latest = token_dir / "ta" / "latest.json"
+        age_hours = -1  # -1 means no TA
+        if ta_latest.exists():
+            try:
+                ta_data = json.loads(ta_latest.read_text())
+                computed_at = ta_data.get("_computed_at", "")
+                if computed_at:
+                    ts = datetime.fromisoformat(computed_at)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    age_hours = (now - ts).total_seconds() / 3600
+            except Exception:
+                age_hours = -1
+
+        candidates.append({
+            "symbol": symbol,
+            "direction": direction,
+            "age_hours": round(age_hours, 1) if age_hours >= 0 else -1,
+            "score": score,
+        })
+
+    # Sort: highest score first, then oldest TA first (age_hours descending)
+    candidates.sort(key=lambda c: (-c["score"], -c["age_hours"]))
+    return [
+        {"symbol": c["symbol"], "direction": c["direction"], "age_hours": c["age_hours"]}
+        for c in candidates[:max_tokens]
+    ]
