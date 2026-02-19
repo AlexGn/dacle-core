@@ -46,6 +46,7 @@ import logging
 import functools
 from typing import Any, Callable, Optional, Union
 from datetime import timedelta
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ class RedisCache:
             full_key = self._make_key(key, namespace)
 
             # Serialize to JSON
-            json_value = json.dumps(value)
+            json_value = json.dumps(value, default=self._json_default)
 
             if ttl_seconds:
                 self.client.setex(full_key, ttl_seconds, json_value)
@@ -203,6 +204,22 @@ class RedisCache:
         except Exception as e:
             logger.warning(f"Redis SET error for {key}: {e}")
             return False
+
+    @staticmethod
+    def _json_default(value: Any) -> Any:
+        """Best-effort serializer for cache payloads."""
+        if isinstance(value, Enum):
+            return value.value
+        to_dict = getattr(value, "to_dict", None)
+        if callable(to_dict):
+            return to_dict()
+        isoformat = getattr(value, "isoformat", None)
+        if callable(isoformat):
+            try:
+                return isoformat()
+            except Exception:
+                pass
+        return str(value)
 
     def delete(self, key: str, namespace: Optional[str] = None) -> bool:
         """
