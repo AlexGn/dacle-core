@@ -11,7 +11,7 @@ Channel routing:
     - Discovery recap   → #focus
     - Position health   → #focus         (1470789144736174326)
     - Staleness         → #focus         (1470789144736174326)
-    - Infrastructure    → #focus         (1470789144736174326)
+    - Infrastructure    → #logs
     - Disk space        → #focus         (Session 427)
     - Redis health      → #focus         (Session 427)
     - Process memory    → #focus         (Session 427)
@@ -29,7 +29,7 @@ from typing import Any, List, Optional
 class HeartbeatAlert:
     """A single actionable alert from a heartbeat check."""
     check_name: str      # e.g. "market_direction_shift"
-    channel: str         # Discord channel name: "macro-updates", "trades", "focus"
+    channel: str         # Discord channel name: "macro-updates", "trades", "focus", "logs"
     message: str         # Ready-to-post Discord message
     severity: str        # "info", "warning", "critical"
     meta: Optional[dict[str, Any]] = None
@@ -548,13 +548,13 @@ def check_infrastructure_health(
     severity = "critical" if status == "CRITICAL" else "warning"
 
     # Architectural noise is routed separately to logs.
-    # If only architectural guardian is degraded, do not post infra alert to focus.
+    # If only architectural guardian is degraded, skip infra summary duplicate.
     if status == "DEGRADED" and arch_alerts and not non_arch_alerts:
         return None
 
     return HeartbeatAlert(
         check_name="infrastructure_health",
-        channel="focus",
+        channel="logs",
         message=f"[SYSTEM] Status: {status} — {alert_summary}",
         severity=severity,
     )
