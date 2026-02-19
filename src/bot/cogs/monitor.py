@@ -589,12 +589,14 @@ class MessageMonitor(commands.Cog):
                 "signal": signal,
                 "locked": bool(initial_decision),
                 "note": "",
+                "advisory": "",
             }
 
         recheck_approved = bool(full_analysis_data.get("approved", False))
         recheck_signal = str(full_analysis_data.get("signal") or "UNKNOWN")
         recheck_decision = "ENTER" if recheck_approved else "SKIP"
         block_reasons = self._extract_blocking_reasons(full_analysis_data)
+        advisory = self._build_opportunity_watch_advisory(full_analysis_data)
 
         if initial_decision in ("ENTER", "SKIP") and recheck_decision != initial_decision:
             note = (
@@ -608,6 +610,7 @@ class MessageMonitor(commands.Cog):
                 "signal": initial_signal or recheck_signal,
                 "locked": True,
                 "note": note,
+                "advisory": advisory,
             }
 
         return {
@@ -615,7 +618,29 @@ class MessageMonitor(commands.Cog):
             "signal": recheck_signal,
             "locked": False,
             "note": "",
+            "advisory": advisory,
         }
+
+    def _build_opportunity_watch_advisory(self, full_analysis_data: Dict[str, Any]) -> str:
+        """Format advisory-only watch context for blocked high-opportunity setups."""
+        if not isinstance(full_analysis_data, dict):
+            return ""
+        watch = full_analysis_data.get("opportunity_watch")
+        if not isinstance(watch, dict) or not watch.get("enabled"):
+            return ""
+
+        watch_class = str(watch.get("class") or "HIGH_OPPORTUNITY_WATCH").replace("_", " ")
+        lines: List[str] = [
+            "👀 **HIGH OPPORTUNITY WATCH** (not an entry signal)",
+            f"Class: {watch_class}",
+        ]
+        triggers = watch.get("trigger_recheck")
+        if isinstance(triggers, list) and triggers:
+            lines.append("Trigger recheck:")
+            for trigger in triggers[:3]:
+                if isinstance(trigger, str) and trigger.strip():
+                    lines.append(f"• {trigger.strip()}")
+        return "\n".join(lines)
 
     def _format_thread_followup_message(
         self,
@@ -623,6 +648,7 @@ class MessageMonitor(commands.Cog):
         decision: str,
         signal: str,
         note: str = "",
+        advisory: str = "",
     ) -> str:
         """
         Compose final thread follow-up message.
@@ -638,6 +664,8 @@ class MessageMonitor(commands.Cog):
         parts.append(decision_line)
         if note:
             parts.append(note)
+        if advisory:
+            parts.append(advisory)
         return "\n\n".join(parts)
 
     async def _recover_thread_setup(self, thread: discord.Thread) -> Optional[Dict[str, Any]]:
@@ -695,6 +723,7 @@ class MessageMonitor(commands.Cog):
                 decision=resolved["decision"],
                 signal=resolved["signal"],
                 note=resolved["note"],
+                advisory=resolved.get("advisory", ""),
             )
             await thread.send(combined)
             self.thread_decision_sent[thread_id] = True
@@ -724,6 +753,7 @@ class MessageMonitor(commands.Cog):
                 decision=resolved["decision"],
                 signal=resolved["signal"],
                 note=resolved["note"],
+                advisory=resolved.get("advisory", ""),
             )
             await thread.send(combined)
             self.thread_decision_sent[thread_id] = True
