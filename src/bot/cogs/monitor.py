@@ -120,6 +120,11 @@ class MessageMonitor(commands.Cog):
         self.enable_thread_bq_followup = (
             os.getenv("ENABLE_MONITOR_THREAD_BQ_FOLLOWUP", "false").strip().lower() == "true"
         )
+        # Node trade-router is canonical for #trades execution routing.
+        # Keep Python monitor routing disabled by default to avoid dual decision paths.
+        self.enable_monitor_trade_routing = (
+            os.getenv("ENABLE_MONITOR_TRADE_ROUTING", "false").strip().lower() == "true"
+        )
         try:
             self.thread_bq_cache_ttl_seconds = int(
                 os.getenv("MONITOR_THREAD_BQ_CACHE_TTL_SECONDS", "300")
@@ -574,7 +579,7 @@ class MessageMonitor(commands.Cog):
             if isinstance(pre_trade_approved, bool):
                 initial_decision = "ENTER" if pre_trade_approved else "SKIP"
                 if not initial_signal:
-                    initial_signal = "APPROVED" if pre_trade_approved else "BLOCKED"
+                    initial_signal = "WEAK — MONITOR ONLY" if pre_trade_approved else "BLOCKED"
 
         if not full_analysis_data:
             decision = initial_decision or "SKIP"
@@ -832,8 +837,17 @@ class MessageMonitor(commands.Cog):
                 f"(mention ID: {mention['id']}, score: {conviction_score.final_score}/10)"
             )
 
-            # Automatic Workflow Trigger for high-conviction mentions
-            if (conviction_score.final_score >= 7.0 or force_trigger) and symbol:
+            skip_trade_routing = bool(trade_setup) and not self.enable_monitor_trade_routing
+            if skip_trade_routing:
+                logger.info(
+                    "Skipping monitor trade routing for structured setup %s — "
+                    "Node trade-router is canonical.",
+                    symbol,
+                )
+
+            # Automatic Workflow Trigger for high-conviction mentions.
+            # Structured #trades routing is blocked by default unless explicitly enabled.
+            if (conviction_score.final_score >= 7.0 or force_trigger) and symbol and not skip_trade_routing:
                 async def run_and_report(target_channel: Optional[discord.abc.Messageable] = None):
                     # Deduplication - skip only when NOT a structured trade setup
                     if not trade_setup:
@@ -936,7 +950,7 @@ class MessageMonitor(commands.Cog):
                                         initial_approved = bool(data.get("data", {}).get("approved", False))
                                         initial_signal = str(
                                             data.get("data", {}).get("signal")
-                                            or ("APPROVED" if initial_approved else "BLOCKED")
+                                            or ("WEAK — MONITOR ONLY" if initial_approved else "BLOCKED")
                                         )
                                         payload_hash = self._execution_payload_hash(cached_setup)
                                         self._set_initial_thread_decision(
