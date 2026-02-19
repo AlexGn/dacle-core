@@ -475,6 +475,19 @@ def count_relevant_stale(
     return count
 
 
+def assess_discovery_pipeline_health(
+    relevant_stale_count: int,
+    stale_threshold: int = STALENESS_THRESHOLD,
+) -> str:
+    """Compute discovery pipeline health from relevant stale count.
+
+    Keeps summary behavior aligned with staleness alerting:
+    - relevant_stale_count > threshold => DEGRADED
+    - otherwise => HEALTHY
+    """
+    return "DEGRADED" if relevant_stale_count > stale_threshold else "HEALTHY"
+
+
 def check_data_staleness(
     unified_tokens: List[dict],
     market_bias: str = "NEUTRAL",
