@@ -243,21 +243,23 @@ class DACLEBot(commands.Bot):
         kb = get_knowledge_base()
         self.loop.create_task(run_periodic_health_checks(kb.client, redis_client=None))
 
-        # --- NEW: The Watcher (Capital Protection) ---
-        self.loop.create_task(self._run_watcher_loop())
-        
-        # --- NEW: Master Sentinel Orchestration (Macro Mastery) ---
+        # --- NEW: Master Sentinel Orchestration (Watcher + Macro Mastery) ---
         self.loop.create_task(self._run_sentinel_pulse())
 
     async def _run_sentinel_pulse(self) -> None:
         """
-        Master Sentinel Loop: Coordinates Macro Mastery tasks internally.
-        Ensures system remains 'Self-Conscious' and 'Lead' at all times.
+        Master Sentinel Loop: Coordinates capital protection and Macro Mastery.
         """
-        logger.info("🛡️ THE SENTINEL: Active and taking the lead.")
+        from src.monitoring.the_watcher import TheWatcher
+        watcher = TheWatcher(dry_run=False)
+        logger.info("🛡️ THE SENTINEL: Active and taking the lead (Capital Shield + Macro Mastery engaged).")
         
         while not self.is_closed():
             try:
+                # A. Watcher: Sweep positions (Every cycle)
+                await watcher.watch_cycle()
+                
+                # B. Sentinel: Scheduled tasks
                 now = datetime.now(timezone.utc)
                 
                 # 1. Macro Refresh (Every 4 hours at :00)
@@ -283,7 +285,7 @@ class DACLEBot(commands.Bot):
             except Exception as e:
                 logger.error(f"🛡️ THE SENTINEL PULSE ERROR: {e}")
             
-            # Pulse every 5 minutes to check schedules
+            # Pulse every 5 minutes
             await asyncio.sleep(300)
 
     async def _memory_watchdog(self) -> None:
