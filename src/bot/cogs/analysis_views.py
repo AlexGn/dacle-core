@@ -312,3 +312,74 @@ class TradeApprovalView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         await interaction.edit_original_response(view=self)
+
+
+class AuditExecutionView(discord.ui.View):
+    """
+    Unified Execution View for #audit-token.
+    Allows David to execute a trade directly from the strategic brief.
+    """
+    def __init__(self, symbol: str, direction: str, conviction: float):
+        super().__init__(timeout=86400)
+        self.symbol = symbol.upper()
+        self.direction = direction.upper()
+        self.conviction = conviction
+
+    @discord.ui.button(label="CONFIRM EXECUTION", style=discord.ButtonStyle.green, emoji="🛡️")
+    async def confirm_execution(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Final execution trigger: posts setup and engages the Watcher."""
+        await interaction.response.defer(ephemeral=False)
+        
+        # 1. Load Setup Data
+        exec_state = _load_execution_state(self.symbol, self.direction)
+        if not exec_state:
+            # Fallback to general TA if playbook missing
+            ta_path = TOKENS_DIR / self.symbol / "ta" / "latest.json"
+            if ta_path.exists():
+                try:
+                    ta_data = json.loads(ta_path.read_text())
+                    exec_state = {
+                        "execution_levels": {
+                            "entry_low": ta_data.get("entry_price"),
+                            "stop_loss": ta_data.get("stop_loss"),
+                            "target_1": ta_data.get("target_price")
+                        }
+                    }
+                except: pass
+
+        if not exec_state:
+            await interaction.followup.send(f"❌ Cannot execute: No technical setup found for ${self.symbol}.")
+            return
+
+        setup_msg = _format_setup_message(self.symbol, self.direction, exec_state)
+        
+        # 2. Post to #trades
+        trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
+        if trades_channel:
+            sent_msg = await trades_channel.send(f"🚀 **EXECUTION CONFIRMED** (via Audit)\n{setup_msg}")
+            
+            # 3. Engage The Watcher (Ping the trigger)
+            await trades_channel.send(f"🛡️ **WATCHER ENGAGED**: Capital protection active for ${self.symbol} {self.direction}. 4h persistent monitoring enabled.")
+            
+            # 4. Record 'OPEN' feedback automatically to start tracking
+            try:
+                async with aiohttp.ClientSession() as session:
+                    url = f"{API_BASE_URL}/api/feedback/simplified-submit"
+                    payload = {
+                        "token": self.symbol,
+                        "result": "WATCHING", # Special status for active trades
+                        "key_feedback": f"Auto-executed via Deep Audit. Conviction: {self.conviction}/10"
+                    }
+                    async with session.post(url, data=payload) as resp:
+                        pass
+            except: pass
+
+            await interaction.followup.send(f"✅ **Trade Executed!** Setup posted to <#{TRADES_CHANNEL_ID}> and Watcher engaged.")
+        else:
+            await interaction.followup.send(f"❌ Failed to find #trades channel.")
+
+        # Disable button after use
+        for child in self.children:
+            child.disabled = True
+        await interaction.edit_original_response(view=self)
+

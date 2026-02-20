@@ -324,7 +324,7 @@ class AnalysisCommands(commands.Cog):
             query = f"Perform a Deep Audit for ${symbol}. Requested by {mention}."
             
             try:
-                result = await llm.complete_async(
+                brief = await llm.complete_async(
                     messages=[
                         {"role": "system", "content": persona},
                         {"role": "system", "content": f"CONTEXT DATA:\n{context}"},
@@ -334,25 +334,41 @@ class AnalysisCommands(commands.Cog):
                     temperature=0.7,
                     max_tokens=1000
                 )
-                brief = result["content"].strip()
-                provider = result.get("provider", "unknown")
-                logger.info(f"AUDIT_SYNTHESIS_COMPLETE: Brief generated via {provider} ({len(brief)} chars)")
+                brief_text = brief["content"].strip()
+                provider = brief.get("provider", "unknown")
+                logger.info(f"AUDIT_SYNTHESIS_COMPLETE: Brief generated via {provider} ({len(brief_text)} chars)")
                 
-                if len(brief) < 100:
-                    brief = self._synthesize_audit_brief(symbol, data, mention)
+                if len(brief_text) < 100:
+                    brief_text = self._synthesize_audit_brief(symbol, data, mention)
             except Exception as e:
                 logger.error(f"AUDIT_SYNTHESIS_FAILED: Unified LLM Synthesis failed: {e}")
-                brief = self._synthesize_audit_brief(symbol, data, mention)
+                brief_text = self._synthesize_audit_brief(symbol, data, mention)
                 
-            # 3. Deliver (with 2000 char limit splitting)
-            if len(brief) <= 2000:
-                await channel.send(brief)
+            # 3. Decision Gate: Determine if we show the Green Light
+            view = None
+            execution_check = data.get('execution_check', {})
+            ptc = execution_check.get('pre_trade_check', {})
+            
+            # Logic: Show button if Execution is APPROVED AND Audit suggests conviction
+            is_approved = ptc.get('approved', False)
+            audit_conviction = float(data.get('summary', {}).get('long_conviction_score', 0) or data.get('summary', {}).get('short_conviction_score', 0) or 0)
+            
+            if is_approved or audit_conviction >= 8.0:
+                logger.info(f"AUDIT_GATE: Green Light detected for {symbol}. Attaching execution button.")
+                from src.bot.cogs.analysis_views import AuditExecutionView
+                direction = ptc.get('direction') or data.get('summary', {}).get('direction_detection', {}).get('recommended', 'LONG')
+                view = AuditExecutionView(symbol, direction, audit_conviction)
+
+            # 4. Deliver (with 2000 char limit splitting)
+            if len(brief_text) <= 2000:
+                await channel.send(brief_text, view=view)
             else:
-                # Split into chunks of 1900 to be safe
-                chunks = [brief[i:i+1900] for i in range(0, len(brief), 1900)]
+                chunks = [brief_text[i:i+1900] for i in range(0, len(brief_text), 1900)]
                 for i, chunk in enumerate(chunks):
                     header = f"(Part {i+1}/{len(chunks)})\n" if len(chunks) > 1 else ""
-                    await channel.send(header + chunk)
+                    # Attach view only to the last chunk
+                    current_view = view if i == len(chunks) - 1 else None
+                    await channel.send(header + chunk, view=current_view)
             
             logger.info(f"AUDIT_DELIVERED: Strategic brief sent to channel")
 

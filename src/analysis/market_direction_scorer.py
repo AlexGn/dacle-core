@@ -464,6 +464,7 @@ async def calculate_direction_bias() -> DirectionUpdate:
     btcdom_value = btcdom_change_24h = None
     usdt_d_value = usdt_d_change_24h = None
     total3_value_b = total3_change_24h = None
+    cp_global = {"btc_mc": 0, "total_mc": 0, "btcdom": 0}
     # Context indicators
     total1_t = total1_change = None
     total2_b = total2_change = None
@@ -496,6 +497,11 @@ async def calculate_direction_bias() -> DirectionUpdate:
                     btc_mc = btc_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
                 if not btc_mc and btcdom_value:
                     btc_mc = total_mc * (btcdom_value / 100)  # fallback
+                cp_global = {
+                    "btc_mc": btc_mc or 0,
+                    "total_mc": total_mc or 0,
+                    "btcdom": btcdom_value or 0,
+                }
 
                 # BTCDOM change: BTC outperforms market → dominance rises
                 btcdom_change_24h = btc_pct_change - mc_change_24h
