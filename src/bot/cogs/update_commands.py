@@ -44,6 +44,21 @@ class UpdateCommands(commands.Cog):
         self.bot = bot
         self.api_url = os.getenv("DACLE_API_URL", "http://localhost:8000").rstrip("/")
         self.api_key = os.getenv("DACLE_API_KEY", "").strip()
+        self.api_post_attempts = max(
+            1,
+            self._parse_int(os.getenv("MANUAL_REFRESH_API_POST_ATTEMPTS"), default=3),
+        )
+        self.api_get_attempts = max(
+            1,
+            self._parse_int(os.getenv("MANUAL_REFRESH_API_GET_ATTEMPTS"), default=2),
+        )
+        self.api_retry_backoff_seconds = max(
+            0.0,
+            self._parse_float(
+                os.getenv("MANUAL_REFRESH_API_RETRY_BACKOFF_SECONDS"),
+                default=1.0,
+            ),
+        )
         self.owner_id = self._parse_int(os.getenv("DISCORD_OWNER_ID"))
         self.discovery_channel_id = self._resolve_discovery_channel_id()
         self.poll_interval_seconds = self._parse_int(
@@ -59,6 +74,15 @@ class UpdateCommands(commands.Cog):
             return default
         try:
             return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _parse_float(value: Optional[str], default: float = 0.0) -> float:
+        if not value:
+            return default
+        try:
+            return float(value)
         except (TypeError, ValueError):
             return default
 
@@ -112,33 +136,155 @@ class UpdateCommands(commands.Cog):
             headers["X-API-Key"] = self.api_key
         return headers
 
+    @staticmethod
+    def _is_transient_http_status(status_code: int) -> bool:
+        return status_code >= 500
+
+    def _retry_delay(self, attempt: int) -> float:
+        return self.api_retry_backoff_seconds * max(1, attempt)
+
     async def _api_post(self, path: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         url = f"{self.api_url}{path}"
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.post(url, json=payload, headers=self._headers())
+        for attempt in range(1, self.api_post_attempts + 1):
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    resp = await client.post(url, json=payload, headers=self._headers())
                 if resp.status_code == 200:
                     data = resp.json()
                     return data if isinstance(data, dict) else None
-                logger.warning(f"/update POST {path} failed: HTTP {resp.status_code}")
+
+                transient = self._is_transient_http_status(resp.status_code)
+                logger.warning(
+                    "/update POST %s failed (attempt %s/%s): HTTP %s",
+                    path,
+                    attempt,
+                    self.api_post_attempts,
+                    resp.status_code,
+                )
+                if transient and attempt < self.api_post_attempts:
+                    await asyncio.sleep(self._retry_delay(attempt))
+                    continue
                 return None
-        except Exception as e:
-            logger.warning(f"/update POST {path} failed: {e}")
-            return None
+            except Exception as e:
+                logger.warning(
+                    "/update POST %s failed (attempt %s/%s): %s",
+                    path,
+                    attempt,
+                    self.api_post_attempts,
+                    e,
+                )
+                if attempt < self.api_post_attempts:
+                    await asyncio.sleep(self._retry_delay(attempt))
+                    continue
+                return None
+        return None
 
     async def _api_get(self, path: str) -> Optional[Dict[str, Any]]:
         url = f"{self.api_url}{path}"
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.get(url, headers=self._headers())
+        for attempt in range(1, self.api_get_attempts + 1):
+            try:
+                async with httpx.AsyncClient(timeout=20) as client:
+                    resp = await client.get(url, headers=self._headers())
                 if resp.status_code == 200:
                     data = resp.json()
                     return data if isinstance(data, dict) else None
-                logger.warning(f"/update GET {path} failed: HTTP {resp.status_code}")
+
+                transient = self._is_transient_http_status(resp.status_code)
+                logger.warning(
+                    "/update GET %s failed (attempt %s/%s): HTTP %s",
+                    path,
+                    attempt,
+                    self.api_get_attempts,
+                    resp.status_code,
+                )
+                if transient and attempt < self.api_get_attempts:
+                    await asyncio.sleep(self._retry_delay(attempt))
+                    continue
                 return None
-        except Exception as e:
-            logger.warning(f"/update GET {path} failed: {e}")
-            return None
+            except Exception as e:
+                logger.warning(
+                    "/update GET %s failed (attempt %s/%s): %s",
+                    path,
+                    attempt,
+                    self.api_get_attempts,
+                    e,
+                )
+                if attempt < self.api_get_attempts:
+                    await asyncio.sleep(self._retry_delay(attempt))
+                    continue
+                return None
+        return None
+
+    @staticmethod
+    def _remaining_cooldown_seconds(run: Dict[str, Any]) -> int:
+        try:
+            remaining = int(run.get("remaining_cooldown_seconds") or 0)
+        except (TypeError, ValueError):
+            remaining = 0
+        if remaining > 0:
+            return remaining
+        cooldown_until = _parse_iso(run.get("cooldown_until"))
+        if not cooldown_until:
+            return 0
+        return int(max(0.0, (cooldown_until - datetime.now(timezone.utc)).total_seconds()))
+
+    async def _defer_interaction(self, interaction: discord.Interaction) -> bool:
+        try:
+            if interaction.response.is_done():
+                return True
+            await interaction.response.defer(ephemeral=False, thinking=True)
+            return True
+        except discord.NotFound as e:
+            logger.warning("/update interaction expired before defer: %s", e)
+            return False
+        except discord.HTTPException as e:
+            logger.warning("/update defer failed: %s", e)
+            return False
+
+    async def _send_followup(
+        self,
+        interaction: discord.Interaction,
+        content: str,
+        *,
+        ephemeral: bool = False,
+    ) -> bool:
+        try:
+            await interaction.followup.send(content, ephemeral=ephemeral)
+            return True
+        except discord.NotFound as e:
+            logger.warning("/update followup failed (interaction expired): %s", e)
+            return False
+        except discord.HTTPException as e:
+            logger.warning("/update followup failed: %s", e)
+            return False
+
+    async def _handle_start_failure(self, interaction: discord.Interaction) -> None:
+        latest_payload = await self._api_get("/api/futures/refresh/latest")
+        run = latest_payload.get("run") if isinstance(latest_payload, dict) else None
+        if isinstance(run, dict):
+            status = str(run.get("status") or "").upper()
+            if status == "RUNNING":
+                await self._send_followup(interaction, self._already_running_message(run))
+                return
+
+            if self._remaining_cooldown_seconds(run) > 0:
+                await self._send_followup(interaction, self._cooldown_message(run, run))
+                channel = interaction.channel
+                if channel is not None:
+                    report = await self._build_discovery_report_message()
+                    if report:
+                        await self._send_report_chunks(
+                            channel,
+                            report,
+                            prefix="📌 Latest available Futures Movers report (refresh cooldown active):",
+                        )
+                return
+
+        await self._send_followup(
+            interaction,
+            "❌ Failed to start refresh. API unavailable or rejected request.",
+            ephemeral=True,
+        )
 
     def _started_message(self, run: Dict[str, Any]) -> str:
         return (
@@ -341,7 +487,8 @@ class UpdateCommands(commands.Cog):
             )
             return
 
-        await interaction.response.defer(ephemeral=False, thinking=True)
+        if not await self._defer_interaction(interaction):
+            return
 
         payload = {
             "triggered_by": str(interaction.user),
@@ -349,17 +496,14 @@ class UpdateCommands(commands.Cog):
         }
         result = await self._api_post("/api/futures/refresh/run", payload)
         if not result:
-            await interaction.followup.send(
-                "❌ Failed to start refresh. API unavailable or rejected request.",
-                ephemeral=True,
-            )
+            await self._handle_start_failure(interaction)
             return
 
         request_status = str(result.get("request_status", "")).lower()
         run = result.get("run") if isinstance(result.get("run"), dict) else {}
 
         if request_status == "started":
-            await interaction.followup.send(self._started_message(run))
+            await self._send_followup(interaction, self._started_message(run))
             channel = interaction.channel
             if channel is not None:
                 safe_create_task(
@@ -371,11 +515,11 @@ class UpdateCommands(commands.Cog):
             return
 
         if request_status == "already_running":
-            await interaction.followup.send(self._already_running_message(run))
+            await self._send_followup(interaction, self._already_running_message(run))
             return
 
         if request_status == "cooldown":
-            await interaction.followup.send(self._cooldown_message(run, result))
+            await self._send_followup(interaction, self._cooldown_message(run, result))
             channel = interaction.channel
             if channel is not None:
                 report = await self._build_discovery_report_message()
@@ -387,7 +531,7 @@ class UpdateCommands(commands.Cog):
                     )
             return
 
-        await interaction.followup.send("⚠️ Unexpected refresh response. Please try again.")
+        await self._send_followup(interaction, "⚠️ Unexpected refresh response. Please try again.")
 
     async def cog_app_command_error(self, interaction, error):
         logger.error(f"[UpdateCommands] {error}", exc_info=error)
