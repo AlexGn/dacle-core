@@ -270,6 +270,20 @@ class UpdateCommands(commands.Cog):
             chunks.append("".join(current).rstrip())
         return chunks
 
+    async def _send_report_chunks(
+        self,
+        channel: discord.abc.Messageable,
+        report: str,
+        prefix: Optional[str] = None,
+    ) -> None:
+        chunks = self._chunk_discord_message(report)
+        if not chunks:
+            return
+        if prefix:
+            await channel.send(prefix)
+        for chunk in chunks:
+            await channel.send(chunk)
+
     def _build_failure_message(self, run: Dict[str, Any]) -> str:
         return (
             f"❌ **/update failed**\n"
@@ -290,8 +304,7 @@ class UpdateCommands(commands.Cog):
                     if status == "COMPLETED":
                         report = await self._build_discovery_report_message()
                         if report:
-                            for chunk in self._chunk_discord_message(report):
-                                await channel.send(chunk)
+                            await self._send_report_chunks(channel, report)
                         else:
                             await channel.send(
                                 f"✅ **/update completed**\n"
@@ -363,6 +376,15 @@ class UpdateCommands(commands.Cog):
 
         if request_status == "cooldown":
             await interaction.followup.send(self._cooldown_message(run, result))
+            channel = interaction.channel
+            if channel is not None:
+                report = await self._build_discovery_report_message()
+                if report:
+                    await self._send_report_chunks(
+                        channel,
+                        report,
+                        prefix="📌 Latest available Futures Movers report (refresh cooldown active):",
+                    )
             return
 
         await interaction.followup.send("⚠️ Unexpected refresh response. Please try again.")
