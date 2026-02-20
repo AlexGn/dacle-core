@@ -24,6 +24,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import List, Optional, Set
 
+from src.data.fetchers.blofin_fetcher import BlofinFetcher
+
 logger = logging.getLogger(__name__)
 
 
@@ -79,6 +81,13 @@ class FuturesMoversFetcher:
             "User-Agent": "DACLE-Futures-Movers/1.0",
         })
         self._blofin_symbols: Optional[Set[str]] = None
+        self._blofin_fetcher: Optional[BlofinFetcher] = None
+
+    @property
+    def blofin_fetcher(self) -> BlofinFetcher:
+        if self._blofin_fetcher is None:
+            self._blofin_fetcher = BlofinFetcher()
+        return self._blofin_fetcher
 
     def _get_blofin_symbols(self) -> Set[str]:
         """
@@ -131,7 +140,9 @@ class FuturesMoversFetcher:
         self,
         min_change_pct: float = 10.0,
         min_volume_usd: float = 5_000_000,
+        min_trade_count: int = 0,
         limit: int = 30,
+        source_mode: str = "blofin_native_first",
     ) -> List[FuturesMover]:
         """
         Get top movers filtered by absolute 24h change and volume.
@@ -144,6 +155,19 @@ class FuturesMoversFetcher:
         Returns:
             List of FuturesMover sorted by absolute change descending
         """
+        if source_mode in ("blofin_native", "blofin_native_first"):
+            blofin_movers = self._get_top_movers_blofin_native(
+                min_change_pct=min_change_pct,
+                min_volume_usd=min_volume_usd,
+                min_trade_count=min_trade_count,
+                limit=limit,
+            )
+            if blofin_movers:
+                return blofin_movers
+            if source_mode == "blofin_native":
+                logger.warning("Blofin-native mode produced no movers.")
+                return []
+
         raw_tickers = self.get_all_tickers()
         if not raw_tickers:
             return []
@@ -183,6 +207,8 @@ class FuturesMoversFetcher:
                 continue
             if volume < min_volume_usd:
                 continue
+            if min_trade_count and int(ticker.get("count") or 0) < min_trade_count:
+                continue
 
             try:
                 mover = FuturesMover(
@@ -211,6 +237,66 @@ class FuturesMoversFetcher:
             f"and volume >= ${min_volume_usd/1e6:.0f}M (from {len(raw_tickers)} total{blofin_msg})"
         )
 
+        return movers[:limit]
+
+    def _get_top_movers_blofin_native(
+        self,
+        min_change_pct: float = 10.0,
+        min_volume_usd: float = 5_000_000,
+        min_trade_count: int = 0,
+        limit: int = 30,
+    ) -> List[FuturesMover]:
+        """
+        Blofin-native mover extraction.
+
+        Uses public Blofin data (via BlofinFetcher) as primary source and keeps the
+        same FuturesMover contract used by downstream scoring.
+        """
+        try:
+            listings = self.blofin_fetcher.fetch_new_listings()
+        except Exception as e:
+            logger.warning(f"Blofin-native mover fetch failed: {e}")
+            return []
+
+        now = datetime.now(timezone.utc).isoformat()
+        movers: List[FuturesMover] = []
+        for row in listings:
+            symbol = str(row.get("symbol") or "").upper().strip()
+            if not symbol:
+                continue
+            change_pct = float(row.get("change_24h_pct") or 0.0)
+            volume = float(row.get("volume_24h_usd") or 0.0)
+            trade_count = int(row.get("trade_count") or 0)
+            if abs(change_pct) < min_change_pct:
+                continue
+            if volume < min_volume_usd:
+                continue
+            if min_trade_count and trade_count < min_trade_count:
+                continue
+
+            price = float(row.get("price") or 0.0)
+            movers.append(
+                FuturesMover(
+                    symbol=f"{symbol}USDT",
+                    clean_symbol=symbol,
+                    price=price,
+                    change_24h_pct=change_pct,
+                    volume_24h_usd=volume,
+                    high_24h=price,
+                    low_24h=price,
+                    trade_count=trade_count,
+                    direction="DUMP" if change_pct < 0 else "PUMP",
+                    fetched_at=now,
+                )
+            )
+
+        movers.sort(key=lambda m: abs(m.change_24h_pct), reverse=True)
+        logger.info(
+            "Blofin-native futures movers: %s pairs with |change| >= %.1f%% and volume >= $%.1fM",
+            len(movers),
+            min_change_pct,
+            min_volume_usd / 1e6,
+        )
         return movers[:limit]
 
     def get_dumpers(self, min_dump_pct: float = 10.0, **kwargs) -> List[FuturesMover]:

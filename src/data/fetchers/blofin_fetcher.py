@@ -50,6 +50,7 @@ class BlofinFetcher:
     """
 
     INSTRUMENTS_URL = "https://openapi.blofin.com/api/v1/market/instruments"
+    TICKERS_URL = "https://openapi.blofin.com/api/v1/market/tickers"
 
     def __init__(self):
         self._exchange: Optional[ccxt.blofin] = None
@@ -114,6 +115,14 @@ class BlofinFetcher:
         Returns:
             List of standardized discovery dicts.
         """
+        # Prefer direct Blofin REST ticker feed in real runtime for better
+        # symbol/volume consistency. Skip this path in unit tests where
+        # exchange is usually injected/mocked.
+        if self._exchange is None:
+            rest_results = self._fetch_new_listings_from_rest()
+            if rest_results:
+                return rest_results
+
         try:
             self.exchange.load_markets()
             tickers = self.exchange.fetch_tickers()
@@ -121,7 +130,7 @@ class BlofinFetcher:
             results = []
             for symbol, ticker in tickers.items():
                 # Only SWAP perpetuals with USDT settlement
-                if ":USDT" not in symbol:
+                if "/USDT" not in symbol and ":USDT" not in symbol:
                     continue
 
                 # Extract base currency (e.g., "MONAD" from "MONAD/USDT:USDT")
@@ -130,7 +139,7 @@ class BlofinFetcher:
                 if base in EXCLUDED_SYMBOLS:
                     continue
 
-                volume_usd = float(ticker.get("quoteVolume") or 0)
+                volume_usd = self._extract_volume_usd_from_ccxt_ticker(ticker)
                 if volume_usd < MIN_VOLUME_USD:
                     continue
 
@@ -145,7 +154,7 @@ class BlofinFetcher:
                     "data_source": "blofin_ccxt",
                     "volume_24h_usd": volume_usd,
                     "price": float(ticker.get("last") or 0),
-                    "change_24h_pct": float(ticker.get("percentage") or 0),
+                    "change_24h_pct": self._extract_change_pct_from_ccxt_ticker(ticker),
                 })
 
             # Sort by volume descending
@@ -157,6 +166,116 @@ class BlofinFetcher:
         except Exception as e:
             logger.error(f"Blofin fetch_new_listings failed: {e}")
             return []
+
+    def _fetch_new_listings_from_rest(self) -> List[Dict[str, Any]]:
+        """Fetch high-volume SWAP movers from Blofin REST tickers endpoint."""
+        try:
+            # Build live instrument map to ensure we're only using live USDT SWAPs.
+            req_inst = urllib.request.Request(
+                f"{self.INSTRUMENTS_URL}?instType=SWAP",
+                headers={"User-Agent": "DACLE-Bot/1.0"},
+            )
+            with urllib.request.urlopen(req_inst, timeout=10) as resp:
+                inst_data = json.loads(resp.read())
+            instruments = inst_data.get("data", [])
+            live_usdt_inst_ids = {
+                i.get("instId")
+                for i in instruments
+                if i.get("state") == "live" and i.get("quoteCurrency") == "USDT"
+            }
+
+            req_tick = urllib.request.Request(
+                f"{self.TICKERS_URL}?instType=SWAP",
+                headers={"User-Agent": "DACLE-Bot/1.0"},
+            )
+            with urllib.request.urlopen(req_tick, timeout=10) as resp:
+                tick_data = json.loads(resp.read())
+            rows = tick_data.get("data", [])
+
+            results: List[Dict[str, Any]] = []
+            for row in rows:
+                inst_id = row.get("instId")
+                if not inst_id or inst_id not in live_usdt_inst_ids:
+                    continue
+                base = inst_id.split("-")[0]
+                if base in EXCLUDED_SYMBOLS:
+                    continue
+
+                price = float(row.get("last") or 0)
+                if price <= 0:
+                    continue
+
+                # volCurrency24h is base-asset volume; convert to quote notional.
+                base_vol_24h = float(row.get("volCurrency24h") or 0)
+                vol_24h_usd = base_vol_24h * price
+                if vol_24h_usd < MIN_VOLUME_USD:
+                    continue
+
+                open_24h = float(row.get("open24h") or 0)
+                change_pct = ((price - open_24h) / open_24h * 100) if open_24h > 0 else 0.0
+
+                results.append(
+                    {
+                        "symbol": base,
+                        "name": base,
+                        "listing_date": None,
+                        "trading_pairs": [f"{base}/USDT"],
+                        "exchange": "blofin",
+                        "announcement_url": "https://blofin.com",
+                        "confidence": "MEDIUM",
+                        "data_source": "blofin_rest",
+                        "volume_24h_usd": vol_24h_usd,
+                        "price": price,
+                        "change_24h_pct": change_pct,
+                    }
+                )
+
+            results.sort(key=lambda x: x["volume_24h_usd"], reverse=True)
+            logger.info(f"Blofin REST: {len(results)} USDT SWAP tokens above ${MIN_VOLUME_USD:,} volume")
+            return results
+        except Exception as e:
+            logger.warning(f"Blofin REST listings fetch failed: {e}")
+            return []
+
+    def _extract_volume_usd_from_ccxt_ticker(self, ticker: Dict[str, Any]) -> float:
+        """
+        Best-effort 24h notional volume extraction across CCXT variants.
+        """
+        quote_volume = float(ticker.get("quoteVolume") or 0)
+        if quote_volume > 0:
+            return quote_volume
+
+        last = float(ticker.get("last") or 0)
+        base_volume = float(ticker.get("baseVolume") or 0)
+        if last > 0 and base_volume > 0:
+            return last * base_volume
+
+        info = ticker.get("info") or {}
+        if isinstance(info, dict):
+            info_quote = float(info.get("vol24h") or info.get("turnover24h") or 0)
+            if info_quote > 0:
+                # Many exchanges expose contract volume; prefer base-volume conversion when present.
+                base_24h = float(info.get("volCurrency24h") or 0)
+                if last > 0 and base_24h > 0:
+                    return last * base_24h
+                return info_quote
+            info_base = float(info.get("volCurrency24h") or 0)
+            if last > 0 and info_base > 0:
+                return last * info_base
+        return 0.0
+
+    def _extract_change_pct_from_ccxt_ticker(self, ticker: Dict[str, Any]) -> float:
+        """Best-effort 24h percentage change extraction."""
+        pct = ticker.get("percentage")
+        if pct is not None:
+            return float(pct)
+        info = ticker.get("info") or {}
+        if isinstance(info, dict):
+            last = float(ticker.get("last") or info.get("last") or 0)
+            open_24h = float(info.get("open24h") or 0)
+            if last > 0 and open_24h > 0:
+                return (last - open_24h) / open_24h * 100
+        return 0.0
 
     def fetch_funding_rates(self, limit: int = 50) -> List[Dict[str, Any]]:
         """
