@@ -2,6 +2,7 @@
 Owner-only slash command to sync guild commands.
 """
 
+import asyncio
 import os
 from src.utils.logger import get_logger
 from typing import Optional
@@ -41,18 +42,37 @@ class SyncCommands(commands.Cog):
             await interaction.response.send_message("❌ You are not authorized to run /sync outside of #audit-token.", ephemeral=True)
             return
 
-        await interaction.response.send_message("🔄 Syncing commands...", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        logger.info(
+            "SYNC_COMMAND_STARTED user=%s guild=%s channel=%s",
+            interaction.user.id,
+            interaction.guild.id if interaction.guild else "none",
+            interaction.channel_id,
+        )
         try:
             guild = interaction.guild
             if guild is None:
-                await interaction.followup.send("❌ Sync must be run in a server.", ephemeral=True)
+                await interaction.edit_original_response(content="❌ Sync must be run in a server.")
                 return
             self.bot.tree.copy_global_to(guild=guild)
-            synced = await self.bot.tree.sync(guild=guild)
-            await interaction.followup.send(f"✅ Synced {len(synced)} commands to this server.", ephemeral=True)
+            synced = await asyncio.wait_for(self.bot.tree.sync(guild=guild), timeout=30)
+            await interaction.edit_original_response(
+                content=f"✅ Synced {len(synced)} commands to this server."
+            )
+            logger.info(
+                "SYNC_COMMAND_COMPLETED user=%s guild=%s synced=%s",
+                interaction.user.id,
+                guild.id,
+                len(synced),
+            )
+        except asyncio.TimeoutError:
+            logger.error("SYNC_COMMAND_TIMEOUT user=%s", interaction.user.id)
+            await interaction.edit_original_response(
+                content="⚠️ Sync timed out after 30s. Try again in a few seconds."
+            )
         except Exception as e:
             logger.error(f"Sync failed: {e}", exc_info=True)
-            await interaction.followup.send(f"❌ Sync failed: {e}", ephemeral=True)
+            await interaction.edit_original_response(content=f"❌ Sync failed: {e}")
 
 
     async def cog_app_command_error(self, interaction, error):

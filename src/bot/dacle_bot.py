@@ -119,6 +119,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load sync_commands cog: {e}")
 
+        # Load manual refresh command (/update)
+        try:
+            await self.load_extension("src.bot.cogs.update_commands")
+            logger.info("✅ Loaded update_commands cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load update_commands cog: {e}")
+
         # Trade Router cog: on_message parsing is handled by Node.js (Session 408).
         # Python cog re-enabled for /rerun slash command only (no on_message listener).
         try:
@@ -443,9 +450,22 @@ class DACLEBot(commands.Bot):
             return
 
         # If the bot is mentioned, clean up extra spaces after the mention
-        if self.user.mentioned_in(message):
+        if self.user.mentioned_in(message) or message.content.startswith("!audit "):
             mention_command = self._extract_mention_command(message.content)
             audit_channel_id = 1474325144913838232
+
+            # Instant Fallback for Audit
+            if message.content.startswith("!audit "):
+                symbol = message.content.replace("!audit ", "").strip().upper()
+                if not symbol:
+                    await message.channel.send("❌ Please specify a token (e.g., `!audit MONAD`)")
+                    return
+                analysis_cog = self.get_cog("AnalysisCommands")
+                if analysis_cog:
+                    logger.info(f"AUDIT_TRIGGER: Manual !audit for {symbol} by {message.author}")
+                    # Use create_task so it doesn't block the on_message handler
+                    self.loop.create_task(analysis_cog._run_native_audit(message.channel, symbol, message.author.mention))
+                return
 
             if "sync" in message.content.lower():
                 is_owner = self._is_owner(message.author.id)
@@ -457,7 +477,7 @@ class DACLEBot(commands.Bot):
                         await message.channel.send("🔄 Audit-channel sync triggered...")
                         try:
                             await self._sync_guild_commands(private_server)
-                            await message.channel.send("✅ Sync complete. /audit should be visible shortly.")
+                            await message.channel.send("✅ Sync complete. /audit-team should be visible shortly.")
                         except Exception as e:
                             await message.channel.send(f"❌ Sync failed: {e}")
                     return
@@ -477,7 +497,7 @@ class DACLEBot(commands.Bot):
                 content = re.sub(rf"^{re.escape(mention_nick_str)}\s+", f"{mention_nick_str} ", content)
                 message.content = content
 
-            known_text_commands = {"analyze", "ping", "sync", "status", "audit"}
+            known_text_commands = {"analyze", "ping", "sync", "status"}
             if mention_command not in known_text_commands:
                 query_text = self._strip_leading_mention(message.content)
                 
