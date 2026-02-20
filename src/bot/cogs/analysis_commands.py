@@ -314,8 +314,9 @@ class AnalysisCommands(commands.Cog):
                 "Your goal is to be AGGRESSIVE, DATA-HUNGRY, and CRITICAL. "
                 "Specifically: "
                 "1. DATA INTEGRITY: If any field is 'N/A' or 'Unknown' (like FDV or VC backing), flag this as a 'Critical Information Gap'. "
-                "2. SECTOR MASTER: Proactively identify the token's sector (e.g. RWA, AI, DePIN). Link this to the macro context. "
-                "3. MACRO VELOCITY: You must explain the 'Why' behind the Macro Risk Rating. Link BTC Structure, DXY Trend, and Social Divergence. "
+                "2. ROCKET MODE (MOMENTUM): If RVOL > 3.0 and Price > EMA200, lead with '[ROCKET MODE DETECTED]'. Analyze the decoupling strength from broad macro. "
+                "3. SECTOR MASTER: Proactively identify the token's sector (e.g. RWA, AI, DePIN). Link this to the macro context. "
+                "4. MACRO VELOCITY: You must explain the 'Why' behind the Macro Risk Rating. Link BTC Structure, DXY Trend, and Social Divergence. "
                 "4. CONTRARIAN: If price is up but social mindshare is down, you MUST warn of an 'Exhaustion Trap'. "
                 "Structure: [STRATEGIC BRIEF] TOKEN - Deep Audit Result, followed by the 6 specialist sections and a Final Verdict with a 'Macro Risk Rating' (1-10)."
             )

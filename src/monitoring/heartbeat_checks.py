@@ -210,11 +210,14 @@ def check_high_conviction_discoveries(
         if score is not None and score >= HIGH_CONVICTION_THRESHOLD:
             symbol = t.get("symbol", "???")
             direction = t.get("direction", "N/A")
+            rvol = t.get("volume_ratio", 1.0)
             token_str = f"{symbol} {score}/10 {direction}"
+            if rvol >= 5.0:
+                token_str += f" \U0001f680 {rvol:.1f}x"
             all_high.append(token_str)
             
             if symbol not in prior_tokens:
-                new_high.append(symbol)
+                new_high.append({"symbol": symbol, "score": score, "rvol": rvol})
 
     if not all_high:
         return []
@@ -222,12 +225,16 @@ def check_high_conviction_discoveries(
     alerts = []
     
     # 1. NEW Discovery Alerts (T3.2: High priority focus cards)
-    for symbol in new_high:
+    for data in new_high:
+        symbol = data["symbol"]
+        rvol = data["rvol"]
+        rocket = " \U0001f680" if rvol >= 5.0 else ""
         alerts.append(HeartbeatAlert(
             check_name=f"new_discovery_{symbol}",
             channel="discovery",
-            message=f"\U0001f3af **NEW HIGH CONVICTION: {symbol}**\nPreparing trade setup card...",
-            severity="critical"
+            message=f"\U0001f3af **NEW HIGH CONVICTION: {symbol}**{rocket}\nPreparing trade setup card...",
+            severity="critical",
+            meta={"token": symbol, "score": data["score"], "rvol": rvol}
         ))
 
     # 2. General Discovery Summary (Regular update)
