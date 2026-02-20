@@ -228,7 +228,7 @@ class AnalysisCommands(commands.Cog):
             
             # 1. Gather Data (The Specialists)
             data = {}
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with httpx.AsyncClient(timeout=25.0) as client:
                 try:
                     logger.info(f"AUDIT_FETCH: Calling Market Specialist API")
                     r = await client.get(f"{api_base}/api/macro/market-direction")
@@ -258,6 +258,12 @@ class AnalysisCommands(commands.Cog):
                     logger.info(f"AUDIT_FETCH: Calling Institutional Scout API for {symbol}")
                     r = await client.get(f"{api_base}/api/tokens/{symbol}/bot-summary")
                     data['token_summary'] = r.json() if r.status_code == 200 else {"error": "Token not found or API Down"}
+                    
+                    # --- UNIFIED INTELLIGENCE BRIDGE: Execution Check ---
+                    logger.info(f"AUDIT_FETCH: Running Execution Specialist (Silent Pre-Trade Check)")
+                    r_ptc = await client.get(f"{api_base}/api/execution/pre-trade-check-summary/{symbol}")
+                    if r_ptc.status_code == 200:
+                        data['execution_check'] = r_ptc.json()
                     
                     logger.info(f"AUDIT_FETCH: Calling Alpha Specialist API")
                     r = await client.get(f"{api_base}/api/learning/effectiveness/feedback/report")
