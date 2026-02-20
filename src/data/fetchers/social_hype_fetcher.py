@@ -48,7 +48,8 @@ PROVIDER_HEALTH_DAILY_RETENTION_DAYS = 14
 # Focused aliases include SUPRA path that was intermittently failing on primary symbol-only lookups.
 TOKEN_PROVIDER_ALIASES: Dict[str, Dict[str, list[str]]] = {
     "SUPRA": {
-        "cryptorank_slugs": ["supra", "supra-labs", "supra-oracles", "supralabs"],
+        "cryptorank_symbols": ["SUPRA"],
+        "cryptorank_names": ["supra", "supra oracles", "supra labs"],
         "coingecko_queries": ["SUPRA", "Supra", "Supra Labs", "Supra Oracles"],
         "coingecko_names": ["supra", "supra labs", "supra oracles"],
         "coingecko_symbols": ["supra"],
@@ -263,7 +264,8 @@ class SocialHypeFetcher:
         token_upper = token_symbol.upper()
         custom = TOKEN_PROVIDER_ALIASES.get(token_upper, {})
         return {
-            "cryptorank_slugs": [token_symbol.lower()] + list(custom.get("cryptorank_slugs", [])),
+            "cryptorank_symbols": [token_upper] + [s.upper() for s in custom.get("cryptorank_symbols", [])],
+            "cryptorank_names": [token_symbol.lower()] + list(custom.get("cryptorank_names", [])),
             "coingecko_queries": [token_symbol] + list(custom.get("coingecko_queries", [])),
             "coingecko_names": [token_symbol.lower()] + list(custom.get("coingecko_names", [])),
             "coingecko_symbols": [token_upper] + [s.upper() for s in custom.get("coingecko_symbols", [])],
@@ -316,37 +318,93 @@ class SocialHypeFetcher:
             Dict with social_score, twitter_followers, etc.
         """
         aliases = self._provider_aliases(token_symbol)
-        slug_candidates = self._dedupe_preserve(aliases["cryptorank_slugs"])
+        symbol_candidates = self._dedupe_preserve(aliases["cryptorank_symbols"])
         failures: list[str] = []
 
         params = {}
         if self.cryptorank_api_key:
             params["api_key"] = self.cryptorank_api_key
 
-        for idx, slug in enumerate(slug_candidates):
+        for idx, symbol in enumerate(symbol_candidates):
             try:
-                url = f"https://api.cryptorank.io/v1/currencies/{slug.lower()}"
-                response = self.session.get(url, params=params, timeout=10)
-                if response.status_code != 200:
-                    failures.append(f"{slug}:{response.status_code}")
+                list_url = "https://api.cryptorank.io/v1/currencies"
+                list_params = dict(params)
+                list_params["symbols"] = symbol
+                list_resp = self.session.get(list_url, params=list_params, timeout=10)
+                if list_resp.status_code != 200:
+                    failures.append(f"{symbol}:lookup:{list_resp.status_code}")
                     continue
 
-                data = response.json()
-                social_data = {
-                    "social_score": data.get("data", {}).get("socialScore", 0),
-                    "twitter_followers": data.get("data", {}).get("twitterFollowers", 0),
-                    "telegram_members": data.get("data", {}).get("telegramMembers", 0),
-                    "reddit_subscribers": data.get("data", {}).get("redditSubscribers", 0),
+                rows = list_resp.json().get("data", [])
+                if not isinstance(rows, list) or not rows:
+                    failures.append(f"{symbol}:lookup:no_results")
+                    continue
+
+                currency_id = None
+                expected_names = {name.lower() for name in aliases.get("cryptorank_names", [])}
+                expected_symbols = {s.upper() for s in aliases.get("cryptorank_symbols", [])}
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    row_symbol = str(row.get("symbol", "")).upper()
+                    row_name = str(row.get("name", "")).lower()
+                    if row_symbol in expected_symbols and (
+                        row_name in expected_names or token_symbol.lower() in row_name
+                    ):
+                        row_id = row.get("id")
+                        if str(row_id).isdigit():
+                            currency_id = int(str(row_id))
+                            break
+                if currency_id is None:
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        row_symbol = str(row.get("symbol", "")).upper()
+                        row_id = row.get("id")
+                        if row_symbol in expected_symbols and str(row_id).isdigit():
+                            currency_id = int(str(row_id))
+                            break
+                if currency_id is None:
+                    failures.append(f"{symbol}:lookup:no_symbol_match")
+                    continue
+
+                detail_url = f"https://api.cryptorank.io/v1/currencies/{currency_id}"
+                detail_resp = self.session.get(detail_url, params=params, timeout=10)
+                if detail_resp.status_code != 200:
+                    failures.append(f"{symbol}:detail:{detail_resp.status_code}")
+                    continue
+
+                data = detail_resp.json().get("data", {})
+                social_raw = {
+                    "socialScore": data.get("socialScore"),
+                    "twitterFollowers": data.get("twitterFollowers"),
+                    "telegramMembers": data.get("telegramMembers"),
+                    "redditSubscribers": data.get("redditSubscribers"),
                 }
-                source = "cached" if idx == 0 else "fallback"
+                no_social_metrics = all(value is None for value in social_raw.values())
+                social_data = {
+                    "social_score": int(social_raw.get("socialScore") or 0),
+                    "twitter_followers": int(social_raw.get("twitterFollowers") or 0),
+                    "telegram_members": int(social_raw.get("telegramMembers") or 0),
+                    "reddit_subscribers": int(social_raw.get("redditSubscribers") or 0),
+                }
+                source = "unavailable" if no_social_metrics else ("cached" if idx == 0 else "fallback")
                 fetched_at = _utc_now_iso()
                 notes = []
                 if idx > 0:
                     notes.append(
                         self._build_data_unavailable_note(
                             "cryptorank",
-                            f"primary slug '{slug_candidates[0]}' unavailable; used fallback slug '{slug}'",
+                            f"primary symbol '{symbol_candidates[0]}' unavailable; used fallback symbol '{symbol}'",
                             resolved_by_fallback=True,
+                        )
+                    )
+                if no_social_metrics:
+                    notes.append(
+                        self._build_data_unavailable_note(
+                            "cryptorank",
+                            "provider returned no social metrics for matched currency",
+                            resolved_by_fallback=False,
                         )
                     )
 
@@ -355,14 +413,15 @@ class SocialHypeFetcher:
                         "_source": source,
                         "_fetched_at": fetched_at,
                         "_notes": notes,
-                        "_matched_alias": slug,
+                        "_matched_symbol": symbol,
+                        "_matched_id": currency_id,
                     }
                 )
                 self._record_provider_health("cryptorank", token_symbol, source, True, None)
                 logger.info(f"CryptoRank social score for {token_symbol}: {social_data['social_score']}/100")
                 return social_data
             except Exception as exc:
-                failures.append(f"{slug}:exception:{exc}")
+                failures.append(f"{symbol}:exception:{exc}")
 
         detail = "all aliases failed"
         if failures:
