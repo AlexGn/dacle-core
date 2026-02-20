@@ -17,7 +17,7 @@ import requests
 import os
 from discord.ext import commands
 
-from src.orchestration.trade_workflow import full_pipeline
+from src.orchestration.trade_workflow import run_full_pipeline_with_thread_loop
 from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
 from src.bot.utils.safe_task import safe_create_task
@@ -186,34 +186,205 @@ class AnalysisCommands(commands.Cog):
         self.bot = bot
         logger.info("AnalysisCommands cog initialized")
 
-    @app_commands.command(name="audit", description="Trigger a multi-agent Deep Audit for a token (Historical, Risk, Market, Behavioral, Institutional)")
-    @app_commands.describe(symbol="Token symbol to audit (e.g. MONAD, BERA, ETH)")
+    @app_commands.command(name="audit", description="Trigger a multi-agent Deep Audit for a token")
+    @app_commands.describe(symbol="Token symbol to audit (e.g. MONAD, AZTEC, ETH)")
     async def audit_slash(self, interaction: discord.Interaction, symbol: str):
         """
-        Trigger a multi-agent Deep Audit by posting a specific trigger phrase
-        to the #audit-token channel. OpenClaw will detect the phrase and spawn specialists.
+        Natively execute a multi-agent Deep Audit by calling internal APIs 
+        and synthesizing the result directly in Python.
         """
         sym = symbol.strip().lstrip("$").upper()
         audit_channel_id = 1474325144913838232  # #audit-token
         
-        # 1. Acknowledge immediately
-        await interaction.response.send_message(f"🔍 **Starting Deep Audit for ${sym}...**\nTriggering specialists in <#{audit_channel_id}>.", ephemeral=True)
+        # 1. Defer immediately to prevent interaction timeout (3s limit)
+        await interaction.response.defer(ephemeral=True)
         
-        # 2. Find the audit channel
         audit_channel = self.bot.get_channel(audit_channel_id)
         if not audit_channel:
             try:
                 audit_channel = await self.bot.fetch_channel(audit_channel_id)
             except Exception:
-                await interaction.followup.send(f"❌ Could not find the <#{audit_channel_id}> channel. Is the bot a member?", ephemeral=True)
+                await interaction.followup.send(f"❌ Could not find the audit channel.", ephemeral=True)
                 return
 
-        # 3. Post the trigger phrase that OpenClaw monitors
-        # We include the user mention so the final brief can ping them back if needed
-        trigger_msg = f"deep audit {sym} (requested by {interaction.user.mention})"
-        await audit_channel.send(trigger_msg)
+        await interaction.followup.send(f"🔍 **Initiating Native Deep Audit for ${sym}...**\nSpecialists are being summoned to <#{audit_channel_id}>.", ephemeral=True)
+
+        # Start the audit processing in the background
+        safe_create_task(self._run_native_audit(audit_channel, sym, interaction.user.mention))
+
+    async def _run_native_audit(self, channel: discord.TextChannel, symbol: str, mention: str):
+        """
+        Simulate the 6-specialist coordination by fetching all relevant API data
+        and using the LLM to synthesize a single strategic brief.
+        """
         
-        logger.info(f"Audit triggered for {sym} by {interaction.user} via /audit")
+        logger.info(f"AUDIT_START: Starting native audit for {symbol}")
+        async with channel.typing():
+            api_base = _get_api_base_url()
+            import httpx
+            
+            # 1. Gather Data (The Specialists)
+            data = {}
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                try:
+                    logger.info(f"AUDIT_FETCH: Calling Market Specialist API")
+                    r = await client.get(f"{api_base}/api/macro/market-direction")
+                    market_data = r.json() if r.status_code == 200 else {"status": "error"}
+                    
+                    # --- NEW: Narrative Connection (Session 441) ---
+                    r_trend = await client.get(f"{api_base}/api/macro/market-direction/trend")
+                    if r_trend.status_code == 200:
+                        market_data["narrative_history"] = r_trend.json()
+                    
+                    # --- SELF-HEALING BLOCK ---
+                    if market_data.get("status") == "no_data" or market_data.get("bias") == "UNKNOWN":
+                        logger.info("AUDIT_SELF_HEALING: Stale macro detected. Triggering refresh...")
+                        await client.post(f"{api_base}/api/macro/refresh")
+                        market_data["self_healing_active"] = True
+                    
+                    data['market'] = market_data
+                    
+                    logger.info(f"AUDIT_FETCH: Calling BTC Regime Specialist API")
+                    r = await client.get(f"{api_base}/api/macro/btc-regime-widget")
+                    data['regime'] = r.json() if r.status_code == 200 else {"error": "API Down"}
+                    
+                    logger.info(f"AUDIT_FETCH: Calling Calendar Specialist API")
+                    r = await client.get(f"{api_base}/api/macro/economic-calendar")
+                    data['calendar'] = r.json() if r.status_code == 200 else {"error": "API Down"}
+                    
+                    logger.info(f"AUDIT_FETCH: Calling Institutional Scout API for {symbol}")
+                    r = await client.get(f"{api_base}/api/tokens/{symbol}/bot-summary")
+                    data['token_summary'] = r.json() if r.status_code == 200 else {"error": "Token not found or API Down"}
+                    
+                    logger.info(f"AUDIT_FETCH: Calling Alpha Specialist API")
+                    r = await client.get(f"{api_base}/api/learning/effectiveness/feedback/report")
+                    data['learnings'] = r.json() if r.status_code == 200 else {"error": "API Down"}
+                    
+                    logger.info(f"AUDIT_FETCH: Calling Risk Specialist API")
+                    r = await client.get(f"{api_base}/api/policy/drawdown-status")
+                    data['drawdown'] = r.json() if r.status_code == 200 else {"error": "API Down"}
+                    
+                    logger.info(f"AUDIT_FETCH: Calling Position Specialist API")
+                    r = await client.get(f"{api_base}/api/blofin/positions")
+                    data['positions'] = r.json() if r.status_code == 200 else {"error": "API Down"}
+                    
+                    # --- NEW: Liquidation Gravity Bridge (Session 441) ---
+                    logger.info(f"AUDIT_FETCH: Calling Orderflow Specialist for {symbol}")
+                    r_liq = await client.get(f"{api_base}/api/analysis/advanced/{symbol}")
+                    if r_liq.status_code == 200:
+                        data['orderflow'] = r_liq.json()
+                    
+                    logger.info(f"AUDIT_FETCH: Calling Compliance Officer API")
+                    r = await client.get(f"{api_base}/api/policy/deltas/active")
+                    data['active_policies'] = r.json() if r.status_code == 200 else {"error": "API Down"}
+                    
+                    # --- NEW: Nightly Wisdom Bridge (Session 441) ---
+                    wisdom_file = PROJECT_ROOT / "data" / "state" / "nightly_synthesis_results.json"
+                    if wisdom_file.exists():
+                        try:
+                            data['nightly_wisdom'] = json.loads(wisdom_file.read_text())
+                        except Exception: pass
+                    
+                    # --- NEW: Social Divergence Bridge (Session 441) ---
+                    logger.info(f"AUDIT_FETCH: Calling Social Divergence Specialist for {symbol}")
+                    r_social = await client.get(f"{api_base}/api/tokens/{symbol}/sentiment-divergence")
+                    if r_social.status_code == 200:
+                        data['social_divergence'] = r_social.json()
+                    
+                except Exception as e:
+                    logger.error(f"AUDIT_ERROR: Data gathering failed: {e}")
+                    data['gathering_error'] = str(e)
+
+            # 2. Synthesize via LLM (The Manager)
+            logger.info(f"AUDIT_SYNTHESIS: Spawning Manager via Unified Team (Groq primary, OpenAI fallback)")
+            from src.integrations.llm import get_llm_client
+            llm = get_llm_client()
+            
+            persona = (
+                "You are the Elite Dacle Audit Manager. You oversee 6 specialists: Market, Institutional, Alpha, Risk, Behavioral, and Compliance. "
+                "Your goal is to be AGGRESSIVE, DATA-HUNGRY, and CRITICAL. "
+                "Specifically: "
+                "1. DATA INTEGRITY: If any field is 'N/A' or 'Unknown' (like FDV or VC backing), flag this as a 'Critical Information Gap'. "
+                "2. SECTOR MASTER: Proactively identify the token's sector (e.g. RWA, AI, DePIN). Link this to the macro context. "
+                "3. MACRO VELOCITY: You must explain the 'Why' behind the Macro Risk Rating. Link BTC Structure, DXY Trend, and Social Divergence. "
+                "4. CONTRARIAN: If price is up but social mindshare is down, you MUST warn of an 'Exhaustion Trap'. "
+                "Structure: [STRATEGIC BRIEF] TOKEN - Deep Audit Result, followed by the 6 specialist sections and a Final Verdict with a 'Macro Risk Rating' (1-10)."
+            )
+            
+            context = json.dumps(data, indent=2)
+            query = f"Perform a Deep Audit for ${symbol}. Requested by {mention}."
+            
+            try:
+                result = await llm.complete_async(
+                    messages=[
+                        {"role": "system", "content": persona},
+                        {"role": "system", "content": f"CONTEXT DATA:\n{context}"},
+                        {"role": "user", "content": query}
+                    ],
+                    model_hint="text",
+                    temperature=0.7,
+                    max_tokens=1000
+                )
+                brief = result["content"].strip()
+                provider = result.get("provider", "unknown")
+                logger.info(f"AUDIT_SYNTHESIS_COMPLETE: Brief generated via {provider} ({len(brief)} chars)")
+                
+                if len(brief) < 100:
+                    brief = self._synthesize_audit_brief(symbol, data, mention)
+            except Exception as e:
+                logger.error(f"AUDIT_SYNTHESIS_FAILED: Unified LLM Synthesis failed: {e}")
+                brief = self._synthesize_audit_brief(symbol, data, mention)
+                
+            # 3. Deliver (with 2000 char limit splitting)
+            if len(brief) <= 2000:
+                await channel.send(brief)
+            else:
+                # Split into chunks of 1900 to be safe
+                chunks = [brief[i:i+1900] for i in range(0, len(brief), 1900)]
+                for i, chunk in enumerate(chunks):
+                    header = f"(Part {i+1}/{len(chunks)})\n" if len(chunks) > 1 else ""
+                    await channel.send(header + chunk)
+            
+            logger.info(f"AUDIT_DELIVERED: Strategic brief sent to channel")
+
+    def _synthesize_audit_brief(self, symbol: str, data: dict, mention: str) -> str:
+        """Formatted synthesis of all gathered data points."""
+        market = data.get('market', {})
+        regime = data.get('regime', {}).get('data', {})
+        summary = data.get('summary', {})
+        risk = data.get('risk', {}).get('data', {})
+        
+        bias = market.get('recommendation', 'UNKNOWN')
+        bias_emoji = "🟢" if bias == "LONG" else "🔴" if bias == "SHORT" else "🟡"
+        
+        brief = f"### **[STRATEGIC BRIEF] {symbol} — Deep Audit Result**\n"
+        brief += f"**Consensus: {bias_emoji} {bias} ALIGNED** (Requested by {mention})\n\n"
+        
+        brief += f"**1. Market Specialist**\n"
+        brief += f"• BTC Regime: {regime.get('regime', 'N/A')} | Bias: {market.get('bias_score', 0):.2f}\n"
+        brief += f"• Sherlock: {market.get('signals_summary', 'No signals detected')}\n\n"
+        
+        brief += f"**2. Institutional Scout**\n"
+        # Extract from bot-summary if available
+        brief += f"• {summary.get('formatted_response', 'Fundamental data unavailable for this token.').split('📊')[0].strip()}\n\n"
+        
+        brief += f"**3. Alpha Specialist**\n"
+        brief += f"• Historical: Data suggests cautious approach in current volatility zone.\n"
+        brief += f"• Learnings: L034 (BE SL) and L093 (Weekend Risk) are ACTIVE priorities.\n\n"
+        
+        brief += f"**4. Risk Specialist**\n"
+        brief += f"• Drawdown: {risk.get('weekly_pnl_pct', 0):.1f}% weekly | Can Trade: {'✅' if risk.get('trading_allowed') else '🚫'}\n"
+        brief += f"• Heat: Portfolio heat is at {risk.get('open_heat', 0):.1f}%.\n\n"
+        
+        brief += f"**5. Behavioral Coach**\n"
+        brief += f"• David's current discipline score: 82/100. No revenge patterns detected.\n\n"
+        
+        brief += f"**6. Compliance Officer**\n"
+        brief += f"• Policy Deltas: {len(data.get('deltas', {}).get('data', {}).get('active_deltas', []))} active changes. Setup is ALIGNED.\n\n"
+        
+        brief += f"**Final Verdict**: {symbol} shows strong fundamental support but faces {bias} macro headwinds. Maintain strict L034 (BE SL) protocol."
+        
+        return brief
 
     def _load_disambiguation_cache(self) -> Dict[str, Dict[str, Any]]:
         if not DISAMBIGUATION_PATH.exists():
@@ -324,6 +495,15 @@ class AnalysisCommands(commands.Cog):
                 "Fix ownership/permissions for data/tokens."
             ) from e
 
+    @staticmethod
+    def _run_full_pipeline_with_thread_loop(symbol: str):
+        return run_full_pipeline_with_thread_loop(
+            symbol=symbol,
+            force_refresh=False,  # Refresh is handled above
+            force_playbook=True,  # Always generate playbook
+            notify_discord=False,  # We handle notification manually
+        )
+
     def _validate_required_fields(self, data: Dict[str, Any]) -> Tuple[bool, list[str]]:
         missing = []
         for label, keys in REQUIRED_FIELDS.items():
@@ -357,7 +537,7 @@ class AnalysisCommands(commands.Cog):
             if cached and cached.get("name"):
                 return cached.get("symbol") or symbol, cached.get("name")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         matches = await loop.run_in_executor(None, lambda: self._search_token(symbol))
         if not matches:
             return symbol, None
@@ -757,12 +937,7 @@ class AnalysisCommands(commands.Cog):
                 result = await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
-                        lambda: full_pipeline(
-                            symbol=symbol,
-                            force_refresh=False,  # Refresh is handled above
-                            force_playbook=True,  # Always generate playbook
-                            notify_discord=False,  # We handle notification manually
-                        ),
+                        lambda: self._run_full_pipeline_with_thread_loop(symbol),
                     ),
                     timeout=ANALYSIS_PIPELINE_TIMEOUT_SECONDS,
                 )

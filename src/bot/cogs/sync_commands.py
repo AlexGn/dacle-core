@@ -42,7 +42,7 @@ class SyncCommands(commands.Cog):
         owner_id = self._get_owner_id()
         return owner_id is not None and user_id == owner_id
 
-    @app_commands.command(name="sync", description="Force a Hard Sync of all commands (fixes invisible commands)")
+    @app_commands.command(name="sync", description="Total Command Purge & Fresh Re-sync (Fixes all /command issues)")
     async def sync_commands(self, interaction: discord.Interaction):
         # Allow owner ALWAYS, or allow in #audit-token / #discovery
         is_owner = self._is_owner(interaction.user.id)
@@ -62,27 +62,28 @@ class SyncCommands(commands.Cog):
         await interaction.response.defer(ephemeral=True, thinking=True)
         try:
             guild = interaction.guild
-            if guild is None:
-                await interaction.edit_original_response(content="❌ Sync must be run in a server.")
-                return
             
-            # 1. Clear the tree for this guild to force a full refresh
-            self.bot.tree.clear_commands(guild=guild)
+            # 1. Purge GLOBAL commands (the most aggressive fix)
+            self.bot.tree.clear_commands(guild=None)
+            await self.bot.tree.sync(guild=None)
             
-            # 2. Copy the new global commands to this guild
-            self.bot.tree.copy_global_to(guild=guild)
-            
-            # 3. Sync with a generous timeout
-            synced = await asyncio.wait_for(self.bot.tree.sync(guild=guild), timeout=60)
-            
-            await interaction.edit_original_response(
-                content=f"✅ **Hard Sync Complete!** {len(synced)} commands registered.\n\n**IMPORTANT**: Please restart your Discord client (Ctrl+R) to see `/audit-team`."
-            )
-            logger.info(f"HARD SYNC COMPLETED: {len(synced)} commands for guild {guild.id}")
-        except asyncio.TimeoutError:
-            await interaction.edit_original_response(content="⚠️ Sync timed out. Discord servers are busy. Try again in 1 minute.")
+            # 2. Clear this specific server's commands
+            if guild:
+                self.bot.tree.clear_commands(guild=guild)
+                await self.bot.tree.sync(guild=guild)
+                
+                # 3. Re-register everything to the server
+                self.bot.tree.copy_global_to(guild=guild)
+                synced = await asyncio.wait_for(self.bot.tree.sync(guild=guild), timeout=60)
+                
+                await interaction.edit_original_response(
+                    content=f"🚀 **TOTAL PURGE COMPLETE!** {len(synced)} fresh commands registered.\n\n**NEXT STEP**: Restart your Discord App (Ctrl+R) and `/audit` should be visible."
+                )
+            else:
+                await interaction.edit_original_response(content="❌ Could not find server for sync.")
+                
         except Exception as e:
-            logger.error(f"Hard Sync failed: {e}", exc_info=True)
+            logger.error(f"Global Purge failed: {e}", exc_info=True)
             await interaction.edit_original_response(content=f"❌ Sync failed: {e}")
 
 

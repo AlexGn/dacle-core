@@ -40,6 +40,12 @@ except RuntimeError:
 # Logger will be initialized in run_bot() after config is loaded
 logger = None
 
+STOP_WORDS = {
+    "the", "and", "for", "with", "that", "this", "from", "what", "when", "where",
+    "which", "into", "about", "have", "how", "your", "does", "will", "would", "can",
+    "could", "should", "are", "was", "were", "but", "you", "all", "any", "not", "use",
+    "those", "these", "them", "then", "run", "do", "workflow", "process", "check",
+}
 
 class DACLEBot(commands.Bot):
     """
@@ -163,10 +169,10 @@ class DACLEBot(commands.Bot):
             logger.error(f"❌ Failed to load ta_commands cog: {e}")
 
         # Log app commands discovered (sync happens on_ready when guild is available)
-        app_commands = list(self.tree.get_commands())
-        logger.info(f"🔎 App commands discovered: {len(app_commands)}")
-        if app_commands:
-            names = ", ".join(cmd.name for cmd in app_commands)
+        app_commands_list = list(self.tree.get_commands())
+        logger.info(f"🔎 App commands discovered: {len(app_commands_list)}")
+        if app_commands_list:
+            names = ", ".join(cmd.name for cmd in app_commands_list)
             logger.info(f"🔎 App command names: {names}")
         else:
             logger.warning("⚠️ No app commands registered before sync")
@@ -219,7 +225,7 @@ class DACLEBot(commands.Bot):
             for channel in private_server.text_channels:
                 perms = channel.permissions_for(private_server.me)
                 logger.info(
-                    f"  - #{channel.name}: "
+                    f"  - #{channel.name} (ID: {channel.id}): "
                     f"view={perms.view_channel}, "
                     f"read_history={perms.read_message_history}, "
                     f"send={perms.send_messages}"
@@ -236,6 +242,49 @@ class DACLEBot(commands.Bot):
         logger.info("Starting periodic health checks...")
         kb = get_knowledge_base()
         self.loop.create_task(run_periodic_health_checks(kb.client, redis_client=None))
+
+        # --- NEW: The Watcher (Capital Protection) ---
+        self.loop.create_task(self._run_watcher_loop())
+        
+        # --- NEW: Master Sentinel Orchestration (Macro Mastery) ---
+        self.loop.create_task(self._run_sentinel_pulse())
+
+    async def _run_sentinel_pulse(self) -> None:
+        """
+        Master Sentinel Loop: Coordinates Macro Mastery tasks internally.
+        Ensures system remains 'Self-Conscious' and 'Lead' at all times.
+        """
+        logger.info("🛡️ THE SENTINEL: Active and taking the lead.")
+        
+        while not self.is_closed():
+            try:
+                now = datetime.now(timezone.utc)
+                
+                # 1. Macro Refresh (Every 4 hours at :00)
+                if now.hour % 4 == 0 and now.minute < 5:
+                    logger.info("🛡️ SENTINEL: Refreshing 10-signal macro engine...")
+                    subprocess.Popen(["python3", "scripts/ops/refresh_macro_levels.py"])
+                
+                # 2. Direction Shift Sentinel (Every hour at :05)
+                if now.minute >= 5 and now.minute < 10:
+                    logger.info("🛡️ SENTINEL: Checking for Macro-confirmed direction shifts...")
+                    subprocess.Popen(["python3", "scripts/monitors/direction_shift_sentinel.py", "--post"])
+                
+                # 3. Nightly Synthesis (Once daily at 00:00)
+                if now.hour == 0 and now.minute < 5:
+                    logger.info("🛡️ SENTINEL: Starting Nightly Cognitive Synthesis...")
+                    subprocess.Popen(["python3", "scripts/scheduled/nightly_synthesis.py"])
+                
+                # 4. Morning Intelligence (Once daily at 06:00)
+                if now.hour == 6 and now.minute < 5:
+                    logger.info("🛡️ SENTINEL: Generating Macro-Aware Morning picks...")
+                    subprocess.Popen(["python3", "scripts/scheduled/macro_morning_pipeline.py", "--post"])
+
+            except Exception as e:
+                logger.error(f"🛡️ THE SENTINEL PULSE ERROR: {e}")
+            
+            # Pulse every 5 minutes to check schedules
+            await asyncio.sleep(300)
 
     async def _memory_watchdog(self) -> None:
         """Periodic memory watchdog with optional Telegram alert."""
@@ -445,28 +494,33 @@ class DACLEBot(commands.Bot):
         Custom on_message handler to handle double spaces after mentions
         and other formatting issues that break command parsing.
         """
-        # Ignore bot messages
-        if message.author.bot:
-            return
-
-        # If the bot is mentioned, clean up extra spaces after the mention
-        if self.user.mentioned_in(message) or message.content.startswith("!audit "):
-            mention_command = self._extract_mention_command(message.content)
-            audit_channel_id = 1474325144913838232
-
-            # Instant Fallback for Audit
+        # --- 1. AUDIT INTERCEPT (Works for bots too) ---
+        if message.content.startswith("!audit ") or message.content.lower().startswith("deep audit "):
             if message.content.startswith("!audit "):
                 symbol = message.content.replace("!audit ", "").strip().upper()
-                if not symbol:
-                    await message.channel.send("❌ Please specify a token (e.g., `!audit MONAD`)")
-                    return
+            else:
+                # Handle "deep audit SYMBOL ..."
+                parts = message.content.split(" ")
+                symbol = parts[2].upper() if len(parts) > 2 else ""
+                symbol = re.sub(r"[^A-Z0-9]", "", symbol)
+
+            if symbol and symbol not in STOP_WORDS:
                 analysis_cog = self.get_cog("AnalysisCommands")
                 if analysis_cog:
-                    logger.info(f"AUDIT_TRIGGER: Manual !audit for {symbol} by {message.author}")
-                    # Use create_task so it doesn't block the on_message handler
+                    logger.info(f"AUDIT_TRIGGER: Intercepted trigger for {symbol} from {message.author}")
                     self.loop.create_task(analysis_cog._run_native_audit(message.channel, symbol, message.author.mention))
                 return
 
+        # Ignore other bot messages
+        if message.author.bot:
+            return
+
+        # --- 2. MENTION & SYNC HANDLING ---
+        if self.user.mentioned_in(message):
+            mention_command = self._extract_mention_command(message.content)
+            audit_channel_id = 1474325144913838232
+
+            # Sync handling
             if "sync" in message.content.lower():
                 is_owner = self._is_owner(message.author.id)
                 is_audit_channel = message.channel.id == audit_channel_id
@@ -477,7 +531,7 @@ class DACLEBot(commands.Bot):
                         await message.channel.send("🔄 Audit-channel sync triggered...")
                         try:
                             await self._sync_guild_commands(private_server)
-                            await message.channel.send("✅ Sync complete. /audit-team should be visible shortly.")
+                            await message.channel.send("✅ Sync complete. /audit-full should be visible shortly.")
                         except Exception as e:
                             await message.channel.send(f"❌ Sync failed: {e}")
                     return
@@ -485,23 +539,21 @@ class DACLEBot(commands.Bot):
                     await message.channel.send("❌ Sync is restricted to owner or #audit-token channel.")
                     return
 
+            # Clean up mentions
             mention_str = f"<@{self.user.id}>"
             mention_nick_str = f"<@!{self.user.id}>"
-            
             content = message.content
             if content.startswith(mention_str):
-                # Replace mention + any number of spaces with mention + single space
                 content = re.sub(rf"^{re.escape(mention_str)}\s+", f"{mention_str} ", content)
                 message.content = content
             elif content.startswith(mention_nick_str):
                 content = re.sub(rf"^{re.escape(mention_nick_str)}\s+", f"{mention_nick_str} ", content)
                 message.content = content
 
+            # Handle non-command mentions via Agent Endpoint
             known_text_commands = {"analyze", "ping", "sync", "status"}
             if mention_command not in known_text_commands:
                 query_text = self._strip_leading_mention(message.content)
-                
-                # Session 408.3: Show typing indicator while AI reflects
                 async with message.channel.typing():
                     agent_result = await self._query_agent_endpoint(
                         query=query_text,
@@ -511,38 +563,20 @@ class DACLEBot(commands.Bot):
                     )
                 
                 trace_id = agent_result.get("trace_id", f"msg-{message.id}")
-                
                 if "answer" in agent_result:
                     answer = str(agent_result["answer"]).strip()
                     msg = await message.channel.send(f"{answer}\n\nTrace: `{trace_id}`")
-                    
-                    # Add feedback reactions for AI syntheses
                     if "intent:ai_synthesis" in agent_result.get("actions_taken", []):
                         try:
                             await msg.add_reaction("👍")
                             await msg.add_reaction("👎")
-                        except Exception:
-                            pass
-
-                    logger.info(
-                        f"Mention handled by agent endpoint | trace={trace_id} "
-                        f"user_id={message.author.id} status=success"
-                    )
+                        except Exception: pass
                 else:
                     error_msg = agent_result.get("error", "Unknown error")
-                    await message.channel.send(
-                        f"❌ **AI Unavailable**: {error_msg}\n\n"
-                        "Note: I can still help with deterministic commands. "
-                        "Use `/ping`, `/market`, or `/analyze <symbol>`. "
-                        f"Trace: `{trace_id}`"
-                    )
-                    logger.warning(
-                        f"Mention agent failure | trace={trace_id} "
-                        f"error={error_msg} user_id={message.author.id}"
-                    )
+                    await message.channel.send(f"❌ **AI Unavailable**: {error_msg}\n\nTrace: `{trace_id}`")
                 return
 
-        # Process commands
+        # --- 3. STANDARD COMMAND PROCESSING ---
         await self.process_commands(message)
 
     async def on_error(self, event: str, *args, **kwargs):

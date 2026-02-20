@@ -18,7 +18,7 @@ from src.knowledge.knowledge_base import KnowledgeBase
 from src.knowledge.supabase_client import get_knowledge_base
 from src.scoring.mention_conviction_scorer import MentionConvictionScorer
 from src.utils.logger import get_logger
-from src.orchestration.trade_workflow import full_pipeline
+from src.orchestration.trade_workflow import run_full_pipeline_with_thread_loop
 import asyncio
 from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
@@ -907,7 +907,7 @@ class MessageMonitor(commands.Cog):
                             except Exception as e:
                                 logger.warning(f"Failed to check staleness for {symbol}: {e}")
 
-                    loop = asyncio.get_event_loop()
+                    loop = asyncio.get_running_loop()
 
                     # If this is a structured trade setup, run execution pre-trade check
                     if trade_setup:
@@ -1018,7 +1018,11 @@ class MessageMonitor(commands.Cog):
                     logger.info(f"🚀 Triggering full pipeline for {symbol}...")
                     result = await loop.run_in_executor(
                         None,
-                        lambda: full_pipeline(symbol=symbol, force_refresh=True, notify_discord=False)
+                        lambda: run_full_pipeline_with_thread_loop(
+                            symbol=symbol,
+                            force_refresh=True,
+                            notify_discord=False,
+                        )
                     )
                     
                     

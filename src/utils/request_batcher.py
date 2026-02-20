@@ -285,7 +285,8 @@ class RequestBatcher:
         if executor_fn:
             # Use provided executor
             try:
-                batch_results = await asyncio.get_event_loop().run_in_executor(
+                loop = asyncio.get_running_loop()
+                batch_results = await loop.run_in_executor(
                     self._executor,
                     executor_fn,
                     batch
@@ -346,7 +347,8 @@ class RequestBatcher:
         for endpoint, reqs in by_endpoint.items():
             try:
                 if executor_fn:
-                    batch_result = await asyncio.get_event_loop().run_in_executor(
+                    loop = asyncio.get_running_loop()
+                    batch_result = await loop.run_in_executor(
                         self._executor,
                         executor_fn,
                         reqs

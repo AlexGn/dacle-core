@@ -137,6 +137,32 @@ class AnalysisFormatter:
             )
         
         # Warning if low conviction
+        short_reasons = getattr(result, "short_reasons", None) or []
+        long_reasons = getattr(result, "long_reasons", None) or []
+        if (is_neutral or is_skip) and (short_reasons or long_reasons):
+            def _fmt_reasons(items: list[str]) -> str:
+                if not items:
+                    return "• (none captured)"
+                lines = []
+                for reason in items[:3]:
+                    txt = str(reason).strip().replace("\n", " ")
+                    if len(txt) > 140:
+                        txt = txt[:137] + "..."
+                    lines.append(f"• {txt}")
+                return "\n".join(lines)
+
+            embed.add_field(
+                name="🧭 Direction Debug",
+                value=(
+                    "**SHORT blockers/reasons**\n"
+                    f"{_fmt_reasons(short_reasons)}\n\n"
+                    "**LONG blockers/reasons**\n"
+                    f"{_fmt_reasons(long_reasons)}"
+                ),
+                inline=False,
+            )
+
+        # Warning if low conviction
         if is_skip and (result.conviction_score or 0) < 7.0:
             embed.set_footer(text=f"⚠️ Conviction {result.conviction_score or 0} < 7.0 threshold.")
         else:
