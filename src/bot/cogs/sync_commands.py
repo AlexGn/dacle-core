@@ -30,10 +30,15 @@ class SyncCommands(commands.Cog):
         owner_id = self._get_owner_id()
         return owner_id is not None and user_id == owner_id
 
-    @app_commands.command(name="sync", description="[Owner] Sync slash commands for this server")
+    @app_commands.command(name="sync", description="Sync slash commands for this server")
     async def sync_commands(self, interaction: discord.Interaction):
-        if not self._is_owner(interaction.user.id):
-            await interaction.response.send_message("❌ You are not authorized to run /sync.", ephemeral=True)
+        # Allow owner ALWAYS, or allow ANYONE in the #audit-token channel for debugging
+        audit_channel_id = 1474325144913838232
+        is_owner = self._is_owner(interaction.user.id)
+        is_audit_channel = interaction.channel_id == audit_channel_id
+
+        if not (is_owner or is_audit_channel):
+            await interaction.response.send_message("❌ You are not authorized to run /sync outside of #audit-token.", ephemeral=True)
             return
 
         await interaction.response.send_message("🔄 Syncing commands...", ephemeral=True)

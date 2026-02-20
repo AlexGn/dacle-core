@@ -445,22 +445,25 @@ class DACLEBot(commands.Bot):
         # If the bot is mentioned, clean up extra spaces after the mention
         if self.user.mentioned_in(message):
             mention_command = self._extract_mention_command(message.content)
+            audit_channel_id = 1474325144913838232
 
-            if "sync" in message.content.lower() and self._is_owner(message.author.id):
-                private_server = self.get_guild(self.private_server_id)
-                if private_server:
-                    await message.channel.send("🔄 Owner sync triggered...")
-                    try:
-                        await self._sync_guild_commands(private_server)
-                        await message.channel.send("✅ Sync complete.")
-                    except Exception as e:
-                        await message.channel.send(f"❌ Sync failed: {e}")
-                return
             if "sync" in message.content.lower():
-                await message.channel.send(
-                    "❌ Sync is owner-only. Use `/ping` or `/market` to validate bot responsiveness."
-                )
-                return
+                is_owner = self._is_owner(message.author.id)
+                is_audit_channel = message.channel.id == audit_channel_id
+                
+                if is_owner or is_audit_channel:
+                    private_server = self.get_guild(self.private_server_id)
+                    if private_server:
+                        await message.channel.send("🔄 Audit-channel sync triggered...")
+                        try:
+                            await self._sync_guild_commands(private_server)
+                            await message.channel.send("✅ Sync complete. /audit should be visible shortly.")
+                        except Exception as e:
+                            await message.channel.send(f"❌ Sync failed: {e}")
+                    return
+                else:
+                    await message.channel.send("❌ Sync is restricted to owner or #audit-token channel.")
+                    return
 
             mention_str = f"<@{self.user.id}>"
             mention_nick_str = f"<@!{self.user.id}>"

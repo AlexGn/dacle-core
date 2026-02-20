@@ -186,6 +186,35 @@ class AnalysisCommands(commands.Cog):
         self.bot = bot
         logger.info("AnalysisCommands cog initialized")
 
+    @app_commands.command(name="audit", description="Trigger a multi-agent Deep Audit for a token (Historical, Risk, Market, Behavioral, Institutional)")
+    @app_commands.describe(symbol="Token symbol to audit (e.g. MONAD, BERA, ETH)")
+    async def audit_slash(self, interaction: discord.Interaction, symbol: str):
+        """
+        Trigger a multi-agent Deep Audit by posting a specific trigger phrase
+        to the #audit-token channel. OpenClaw will detect the phrase and spawn specialists.
+        """
+        sym = symbol.strip().lstrip("$").upper()
+        audit_channel_id = 1474325144913838232  # #audit-token
+        
+        # 1. Acknowledge immediately
+        await interaction.response.send_message(f"🔍 **Starting Deep Audit for ${sym}...**\nTriggering specialists in <#{audit_channel_id}>.", ephemeral=True)
+        
+        # 2. Find the audit channel
+        audit_channel = self.bot.get_channel(audit_channel_id)
+        if not audit_channel:
+            try:
+                audit_channel = await self.bot.fetch_channel(audit_channel_id)
+            except Exception:
+                await interaction.followup.send(f"❌ Could not find the <#{audit_channel_id}> channel. Is the bot a member?", ephemeral=True)
+                return
+
+        # 3. Post the trigger phrase that OpenClaw monitors
+        # We include the user mention so the final brief can ping them back if needed
+        trigger_msg = f"deep audit {sym} (requested by {interaction.user.mention})"
+        await audit_channel.send(trigger_msg)
+        
+        logger.info(f"Audit triggered for {sym} by {interaction.user} via /audit")
+
     def _load_disambiguation_cache(self) -> Dict[str, Dict[str, Any]]:
         if not DISAMBIGUATION_PATH.exists():
             return {}

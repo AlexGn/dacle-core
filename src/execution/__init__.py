@@ -12,10 +12,16 @@ from src.execution.permission_ladder import (
     get_permission_tier,
     load_permission_config,
 )
+from src.execution.execution_score import (
+    ExecutionScoreResult,
+    compute_execution_score,
+)
 
 __all__ = [
     "PermissionTier",
     "PermissionDecision",
     "get_permission_tier",
     "load_permission_config",
+    "ExecutionScoreResult",
+    "compute_execution_score",
 ]
