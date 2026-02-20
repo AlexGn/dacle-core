@@ -336,6 +336,11 @@ class SocialHypeFetcher:
         # CoinGecko API (free tier)
         self.coingecko_api_key = os.getenv("COINGECKO_API_KEY", "")  # Optional
 
+        # Source policy: disable unstable social providers by default.
+        # Re-enable explicitly with env flags if needed for experiments.
+        self.enable_coingecko_social = os.getenv("SOCIAL_HYPE_USE_COINGECKO", "0").strip().lower() in {"1", "true", "yes", "on"}
+        self.enable_twitter_mentions = os.getenv("SOCIAL_HYPE_USE_TWITTER", "0").strip().lower() in {"1", "true", "yes", "on"}
+
     def _provider_aliases(self, token_symbol: str) -> Dict[str, list[str]]:
         token_upper = token_symbol.upper()
         custom = TOKEN_PROVIDER_ALIASES.get(token_upper, {})
@@ -544,6 +549,24 @@ class SocialHypeFetcher:
         Returns:
             Dict with watchlist_count, upvotes, etc.
         """
+        if not self.enable_coingecko_social:
+            return {
+                "watchlist_count": 0,
+                "upvotes": 0,
+                "downvotes": 0,
+                "reddit_subscribers": 0,
+                "twitter_followers": 0,
+                "_source": "disabled",
+                "_fetched_at": _utc_now_iso(),
+                "_notes": [
+                    {
+                        "type": "source_disabled",
+                        "provider": "coingecko",
+                        "detail": "coingecko social input disabled by policy",
+                    }
+                ],
+            }
+
         aliases = self._provider_aliases(token_symbol)
         query_candidates = self._dedupe_preserve(aliases["coingecko_queries"])
         failures: list[str] = []
@@ -663,6 +686,20 @@ class SocialHypeFetcher:
         perplexity_data: Optional[Dict] = None,
         coingecko_data: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        if not self.enable_twitter_mentions:
+            return {
+                "twitter_mentions_7d": 0,
+                "_source": "disabled",
+                "_fetched_at": _utc_now_iso(),
+                "_notes": [
+                    {
+                        "type": "source_disabled",
+                        "provider": "twitter_mentions",
+                        "detail": "twitter mentions input disabled by policy",
+                    }
+                ],
+            }
+
         if (
             isinstance(perplexity_data, dict)
             and isinstance(perplexity_data.get("social_hype"), dict)
