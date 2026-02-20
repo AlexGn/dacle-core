@@ -210,7 +210,10 @@ class AnalysisCommands(commands.Cog):
         await interaction.followup.send(f"🔍 **Initiating Native Deep Audit for ${sym}...**\nSpecialists are being summoned to <#{audit_channel_id}>.", ephemeral=True)
 
         # Start the audit processing in the background
-        safe_create_task(self._run_native_audit(audit_channel, sym, interaction.user.mention))
+        safe_create_task(
+            self._run_native_audit(audit_channel, sym, interaction.user.mention),
+            logger=logger
+        )
 
     async def _run_native_audit(self, channel: discord.TextChannel, symbol: str, mention: str):
         """
