@@ -25,6 +25,7 @@ Data Sources (all free, no API keys):
 import asyncio
 import json
 import logging
+import os
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from enum import Enum
@@ -82,6 +83,8 @@ class DirectionUpdate:
     previous_bias: Optional[str] = None
     timestamp: str = ""
     btc_price: float = 0.0
+    signal_quality: dict = field(default_factory=dict)
+    data_quality: dict = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.timestamp:
@@ -123,6 +126,8 @@ class DirectionUpdate:
             "previous_bias": self.previous_bias,
             "timestamp": self.timestamp,
             "btc_price": self.btc_price,
+            "signal_quality": self.signal_quality,
+            "data_quality": self.data_quality,
             "narrative": generate_narrative_summary(self),
         }
         return d
@@ -396,7 +401,107 @@ def _build_key_levels(
 # Main Calculation
 # =============================================================================
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """Parse boolean env var flags with safe defaults."""
+    val = os.getenv(name)
+    if val is None:
+        return default
+    return str(val).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_iso8601(value: str) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_external_indices_snapshot() -> dict:
+    """Load external macro snapshot and compute staleness metadata."""
+    external_indices_path = DATA_DIR / "macro" / "external_indices.json"
+    snapshot = {
+        "available": False,
+        "stale": True,
+        "source": "UNAVAILABLE",
+        "dxy_change_pct": None,
+        "ndx_change_pct": None,
+        "dxy_trend": "UNAVAILABLE",
+        "ndx_trend": "UNAVAILABLE",
+        "fetched_at": None,
+        "stale_after_minutes": 300,
+    }
+    try:
+        if not external_indices_path.exists():
+            return snapshot
+
+        data = json.loads(external_indices_path.read_text())
+        fetched_at = _parse_iso8601(data.get("fetched_at", ""))
+        stale_after_minutes = int(data.get("stale_after_minutes", 300) or 300)
+        is_stale = True
+        if fetched_at:
+            age_s = (datetime.now(timezone.utc) - fetched_at).total_seconds()
+            is_stale = age_s > (stale_after_minutes * 60)
+
+        snapshot.update({
+            "available": True,
+            "stale": is_stale,
+            "source": data.get("source", "UNKNOWN"),
+            "dxy_change_pct": data.get("dxy_change_pct"),
+            "ndx_change_pct": data.get("ndx_change_pct"),
+            "dxy_trend": data.get("dxy_trend", "NEUTRAL"),
+            "ndx_trend": data.get("ndx_trend", "NEUTRAL"),
+            "fetched_at": data.get("fetched_at"),
+            "stale_after_minutes": stale_after_minutes,
+        })
+    except Exception:
+        return snapshot
+    return snapshot
+
+
+def _append_shadow_compare(baseline: DirectionUpdate, candidate: DirectionUpdate) -> None:
+    """Append baseline-vs-candidate comparison for shadow rollout gating."""
+    try:
+        shadow_compare_path = DATA_DIR / "state" / "market_direction_shadow_compare.jsonl"
+        shadow_compare_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "baseline_bias": baseline.bias.value,
+            "baseline_score": round(baseline.score, 4),
+            "baseline_confidence_pct": baseline.confidence_pct,
+            "candidate_bias": candidate.bias.value,
+            "candidate_score": round(candidate.score, 4),
+            "candidate_confidence_pct": candidate.confidence_pct,
+            "score_delta_abs": round(abs(candidate.score - baseline.score), 4),
+            "bias_mismatch": baseline.bias.value != candidate.bias.value,
+            "baseline_data_quality": baseline.data_quality or {},
+            "candidate_data_quality": candidate.data_quality or {},
+        }
+        with open(shadow_compare_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception as e:
+        logger.debug(f"Shadow compare write failed: {e}")
+
+
 async def calculate_direction_bias() -> DirectionUpdate:
+    """Entry point with optional shadow/candidate realism rollout flags."""
+    shadow_enabled = _env_flag("MARKET_DIRECTION_REALISM_SHADOW", default=False)
+    candidate_enabled = _env_flag("MARKET_DIRECTION_REALISM_CANDIDATE", default=False)
+
+    if shadow_enabled:
+        baseline = await _calculate_direction_bias_impl(use_realism=False)
+        candidate = await _calculate_direction_bias_impl(use_realism=True)
+        _append_shadow_compare(baseline, candidate)
+        return candidate if candidate_enabled else baseline
+
+    return await _calculate_direction_bias_impl(use_realism=candidate_enabled)
+
+
+async def _calculate_direction_bias_impl(use_realism: bool = False) -> DirectionUpdate:
     """
     Fetch all 8 signals and compute composite market direction bias.
 
@@ -464,7 +569,7 @@ async def calculate_direction_bias() -> DirectionUpdate:
     btcdom_value = btcdom_change_24h = None
     usdt_d_value = usdt_d_change_24h = None
     total3_value_b = total3_change_24h = None
-    cp_global = {"btc_mc": 0, "total_mc": 0, "btcdom": 0}
+    cp_global = {"btc_mc": 0, "total_mc": 0, "btcdom": 0, "stable_mc": 0}
     # Context indicators
     total1_t = total1_change = None
     total2_b = total2_change = None
@@ -501,6 +606,7 @@ async def calculate_direction_bias() -> DirectionUpdate:
                     "btc_mc": btc_mc or 0,
                     "total_mc": total_mc or 0,
                     "btcdom": btcdom_value or 0,
+                    "stable_mc": 0,
                 }
 
                 # BTCDOM change: BTC outperforms market → dominance rises
@@ -574,6 +680,7 @@ async def calculate_direction_bias() -> DirectionUpdate:
 
                 # STABLE.C.D: stablecoin dominance (USDT + USDC)
                 stables_mc = usdt_mc + usdc_mc
+                cp_global["stable_mc"] = stables_mc or 0
                 if total_mc and stables_mc > 0:
                     stable_d = (stables_mc / total_mc) * 100
                     usdt_mc_24h_ago = usdt_mc / (1 + usdt_pct_change / 100) if usdt_pct_change else usdt_mc
@@ -615,12 +722,13 @@ async def calculate_direction_bias() -> DirectionUpdate:
     ]
 
     # ---- Elite Macro Layer (Session 441: DXY/NDX Correlation) ----
-    external_macro = await _score_external_macro()
+    external_snapshot = _load_external_indices_snapshot()
+    external_macro = await _score_external_macro(use_realism=use_realism)
     if external_macro:
         signals.append(external_macro)
 
     # ---- Liquidity Fuel Layer (Session 441: Whale Flows & SSR) ----
-    liquidity_fuel = await _score_liquidity_fuel(btc_price, cp_global)
+    liquidity_fuel = await _score_liquidity_fuel(btc_price, cp_global, use_realism=use_realism)
     if liquidity_fuel:
         signals.append(liquidity_fuel)
 
@@ -635,7 +743,7 @@ async def calculate_direction_bias() -> DirectionUpdate:
     # ---- Composite score = weighted sum ----
     # Re-calculate total weight to include external macro if present
     total_weight = sum(s.weight for s in signals)
-    composite = sum(s.weight * s.score for s in signals) / total_weight
+    composite = sum(s.weight * s.score for s in signals) / max(total_weight, 0.01)
     composite = max(-1.0, min(1.0, composite))
 
     if composite > 0.30:
@@ -693,6 +801,43 @@ async def calculate_direction_bias() -> DirectionUpdate:
             "recommendation": "Both directions viable, smaller size",
         }
 
+    # ---- Data quality metadata (non-blocking, transparency only) ----
+    core_signal_names = {
+        "BTC Trend", "BTC RSI", "BTCDOM", "USDT.D", "TOTAL3",
+        "Fear & Greed", "Funding", "BTC Structure",
+    }
+    signal_quality = {}
+    for s in signals:
+        signal_quality[s.name] = {
+            "available": s.label != "N/A",
+            "stale": False,
+        }
+
+    signal_quality["External Macro"] = {
+        "available": external_macro is not None,
+        "stale": bool(external_snapshot.get("stale", True)),
+        "source": external_snapshot.get("source", "UNAVAILABLE"),
+    }
+    signal_quality["Liquidity Fuel"] = {
+        "available": liquidity_fuel is not None,
+        "stale": False,
+    }
+
+    core_available = sum(
+        1
+        for s in signals
+        if s.name in core_signal_names and s.label != "N/A"
+    )
+    optional_live = int(external_macro is not None) + int(liquidity_fuel is not None)
+    data_quality = {
+        "mode": "realism" if use_realism else "baseline",
+        "core_signals_total": len(core_signal_names),
+        "core_signals_available": core_available,
+        "optional_signals_total": 2,
+        "optional_signals_live": optional_live,
+        "optional_signals_missing": 2 - optional_live,
+    }
+
     return DirectionUpdate(
         bias=bias,
         score=composite,
@@ -702,6 +847,8 @@ async def calculate_direction_bias() -> DirectionUpdate:
         position_implications=position_impl,
         context_signals=context_signals,
         btc_price=btc_price or 0.0,
+        signal_quality=signal_quality,
+        data_quality=data_quality,
     )
 
 
@@ -730,82 +877,113 @@ _SIGNAL_RAW_KEYS = {
 }
 
 
-async def _score_external_macro() -> Optional[SignalResult]:
+def _trend_from_change(change_pct: Optional[float], threshold: float = 0.2) -> str:
+    """Normalize percent change into UPTREND/DOWNTREND/NEUTRAL/UNAVAILABLE."""
+    if change_pct is None:
+        return "UNAVAILABLE"
+    if change_pct > threshold:
+        return "UPTREND"
+    if change_pct < -threshold:
+        return "DOWNTREND"
+    return "NEUTRAL"
+
+
+async def _score_external_macro(use_realism: bool = False) -> Optional[SignalResult]:
     """
-    Elite Macro Layer: Score DXY and NDX correlations.
-    
-    DXY Rising = Bearish for Crypto
-    NDX Rising = Bullish for Crypto
-    
-    Weight: 15% (Dynamic adjustment to total)
+    External Macro Layer: score DXY and NDX correlations.
+
+    Baseline mode uses trend labels from cache.
+    Realism mode requires fresh numeric daily changes.
     """
     try:
-        # Use a reliable public source for macro indices (e.g. CoinPaprika or similar)
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            # We proxy these through current market prices or specialized endpoints if available
-            # For now, we use a trend-based check from Dacle's existing macro pipeline
-            # Fallback to local cache if live fetch fails
-            macro_file = DATA_DIR / "macro" / "external_indices.json"
-            if not macro_file.exists():
+        snapshot = _load_external_indices_snapshot()
+        if not snapshot.get("available"):
+            return None
+
+        score = 0.0
+        dxy_change = snapshot.get("dxy_change_pct")
+        ndx_change = snapshot.get("ndx_change_pct")
+        dxy_trend = snapshot.get("dxy_trend", "NEUTRAL")
+        ndx_trend = snapshot.get("ndx_trend", "NEUTRAL")
+
+        if use_realism:
+            if snapshot.get("stale"):
                 return None
-                
-            with open(macro_file) as f:
-                data = json.load(f)
-                
-            dxy_trend = data.get("dxy_trend", "NEUTRAL")
-            ndx_trend = data.get("ndx_trend", "NEUTRAL")
-            
-            score = 0.0
-            if dxy_trend == "UPTREND": score -= 0.5  # Dollar strength is bad
-            elif dxy_trend == "DOWNTREND": score += 0.5
-            
-            if ndx_trend == "UPTREND": score += 0.5  # Tech strength is good
-            elif ndx_trend == "DOWNTREND": score -= 0.5
-            
+            if dxy_change is None and ndx_change is None:
+                return None
+
+            if dxy_change is not None:
+                if dxy_change > 0.2:
+                    score -= 0.5
+                elif dxy_change < -0.2:
+                    score += 0.5
+                dxy_trend = _trend_from_change(dxy_change)
+
+            if ndx_change is not None:
+                if ndx_change > 0.2:
+                    score += 0.5
+                elif ndx_change < -0.2:
+                    score -= 0.5
+                ndx_trend = _trend_from_change(ndx_change)
+
+            dxy_txt = "N/A" if dxy_change is None else f"{dxy_change:+.2f}% ({dxy_trend})"
+            ndx_txt = "N/A" if ndx_change is None else f"{ndx_change:+.2f}% ({ndx_trend})"
+            label = f"DXY {dxy_txt} | NDX {ndx_txt}"
+        else:
+            if dxy_trend == "UPTREND":
+                score -= 0.5
+            elif dxy_trend == "DOWNTREND":
+                score += 0.5
+
+            if ndx_trend == "UPTREND":
+                score += 0.5
+            elif ndx_trend == "DOWNTREND":
+                score -= 0.5
+
             label = f"DXY {dxy_trend} | NDX {ndx_trend}"
-            emoji = "🟢" if score > 0 else "🔴" if score < 0 else "🟡"
-            
-            return SignalResult("External Macro", 0.15, score, None, label, emoji)
+
+        emoji = "🟢" if score > 0 else "🔴" if score < 0 else "🟡"
+        return SignalResult("External Macro", 0.15, score, None, label, emoji)
     except Exception:
         return None
 
 
-async def _score_liquidity_fuel(btc_price: float, cp_global: dict) -> Optional[SignalResult]:
+async def _score_liquidity_fuel(
+    btc_price: float,
+    cp_global: dict,
+    use_realism: bool = False,
+) -> Optional[SignalResult]:
     """
-    Elite Liquidity Layer: Score SSR (Buying Power) and Whale Flows.
-    
-    SSR = BTC Market Cap / Stablecoin Market Cap
-    Low SSR = High Buying Power (Bullish)
-    
-    Whale Flows = Net Inflow to Exchanges
-    High Inflow = High Sell Pressure (Bearish)
+    Liquidity Layer: Score SSR (Buying Power proxy from market caps).
+
+    In realism mode, stablecoin market cap uses USDT+USDC from CoinPaprika.
+    Baseline mode preserves legacy estimated stablecoin denominator.
     """
     try:
         btc_mc = cp_global.get("btc_mc", 0)
         total_mc = cp_global.get("total_mc", 0)
-        btcdom = cp_global.get("btcdom", 0)
-        
-        # Calculate Stablecoin Market Cap (estimated from context)
-        # Total Stablecoin Dominance is approx 8-12%
-        # Stablecoin MC = Total MC * 0.10
-        stable_mc = total_mc * 0.10
-        
+
+        if use_realism:
+            stable_mc = cp_global.get("stable_mc", 0)
+        else:
+            # Legacy heuristic fallback
+            stable_mc = total_mc * 0.10
+
         if btc_mc > 0 and stable_mc > 0:
             ssr = btc_mc / stable_mc
-            # Historically SSR < 10 is very bullish, SSR > 15 is bearish/exhausted
-            
+
             score = 0.0
-            if ssr < 10: score += 0.5  # High buying power
-            elif ssr > 15: score -= 0.5 # Running on fumes
-            
-            # Simulate Whale Flow (Net Inflow)
-            # In a production environment, this would hit Glassnode/CryptoQuant
-            # For this elite implementation, we use a trend proxy
-            whale_net_inflow = "NEUTRAL" 
-            
-            label = f"SSR {ssr:.1f} ({'High Fuel' if ssr < 10 else 'Low Fuel'}) | Whales {whale_net_inflow}"
+            if ssr < 10:
+                score += 0.5
+            elif ssr > 15:
+                score -= 0.5
+
+            fuel_label = "High Fuel" if ssr < 10 else "Low Fuel" if ssr > 15 else "Balanced"
+            if use_realism:
+                label = f"SSR {ssr:.1f} ({fuel_label})"
+            else:
+                label = f"SSR {ssr:.1f} ({fuel_label}) | Whales NEUTRAL"
             emoji = "🟢" if score > 0 else "🔴" if score < 0 else "🟡"
-            
             return SignalResult("Liquidity Fuel", 0.10, score, ssr, label, emoji)
     except Exception:
         return None
