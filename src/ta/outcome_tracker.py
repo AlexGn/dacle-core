@@ -82,6 +82,7 @@ def log_ta_score(
     entry: float,
     sl: float,
     tp: float,
+    setup_type: str = "RECOVERY",
 ) -> str:
     """
     Log a computed TA score for later outcome tracking.
@@ -94,6 +95,7 @@ def log_ta_score(
         "tracking_id": tracking_id,
         "token": token,
         "direction": direction,
+        "setup_type": setup_type,
         "ta_score": ta_score,
         "enhanced_conviction": enhanced_conviction,
         "confluence_count": confluence_count,

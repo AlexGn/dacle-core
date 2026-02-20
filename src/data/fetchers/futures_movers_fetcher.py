@@ -35,6 +35,12 @@ BLOFIN_NATIVE_RELAXED_MIN_VOLUME_USD = 1_000_000
 BLOFIN_NATIVE_MIN_BOARD_SIZE = 5
 BLOFIN_NATIVE_RELAXED_VOLUME_STEPS = (2_000_000, 1_000_000, 500_000)
 
+# Session 442: Gem Exception Logic
+# Allows high-momentum tokens to bypass the $5M absolute volume floor
+MIN_GEM_VOLUME_USD = 100_000
+GEM_RVOL_THRESHOLD = 5.0  # 5x volume spike
+GEM_MIN_CHANGE_PCT = 15.0  # Must be a significant move
+
 
 @dataclass
 class FuturesMover:
@@ -48,6 +54,7 @@ class FuturesMover:
     low_24h: float
     trade_count: int
     direction: str  # "DUMP" or "PUMP"
+    volume_ratio: float = 1.0  # RVOL (recent/avg)
     fetched_at: str = ""
 
     def __post_init__(self):
@@ -64,6 +71,7 @@ class FuturesMover:
             "high_24h": self.high_24h,
             "low_24h": self.low_24h,
             "trade_count": self.trade_count,
+            "volume_ratio": round(self.volume_ratio, 2),
             "direction": self.direction,
             "fetched_at": self.fetched_at,
         }
@@ -211,11 +219,16 @@ class FuturesMoversFetcher:
             except (TypeError, ValueError):
                 continue
 
-            # Apply filters
-            if abs(change_pct) < min_change_pct:
+            # Apply filters (with Gem Exception fallback)
+            is_gem_candidate = (abs(change_pct) >= GEM_MIN_CHANGE_PCT and volume >= MIN_GEM_VOLUME_USD)
+            
+            if abs(change_pct) < min_change_pct and not is_gem_candidate:
                 continue
-            if volume < min_volume_usd:
+            
+            # Standard volume filter
+            if volume < min_volume_usd and not is_gem_candidate:
                 continue
+                
             if min_trade_count and int(ticker.get("count") or 0) < min_trade_count:
                 continue
 
@@ -236,6 +249,16 @@ class FuturesMoversFetcher:
             except (TypeError, ValueError) as e:
                 logger.warning(f"Failed to parse ticker {symbol}: {e}")
                 continue
+
+        # Session 442: Enrich candidates with RVOL to find hidden gems
+        if movers:
+            movers = self._enrich_movers_with_rvol(movers)
+            
+            # Final filter: If volume < min_volume_usd, MUST have RVOL >= GEM_RVOL_THRESHOLD
+            movers = [
+                m for m in movers 
+                if m.volume_24h_usd >= min_volume_usd or m.volume_ratio >= GEM_RVOL_THRESHOLD
+            ]
 
         # Sort by absolute change descending
         movers.sort(key=lambda m: abs(m.change_24h_pct), reverse=True)
@@ -366,6 +389,41 @@ class FuturesMoversFetcher:
             min_volume_usd / 1e6,
         )
         return movers[:limit]
+
+    def _enrich_movers_with_rvol(self, movers: List[FuturesMover]) -> List[FuturesMover]:
+        """Fetch 4h OHLCV for candidates and calculate RVOL to find 'Gems'."""
+        if not movers:
+            return []
+
+        enriched = []
+        # Limit enrichment to top 15 candidates to avoid rate limits
+        for mover in movers[:15]:
+            try:
+                # Use Blofin for OHLCV as many gems are there first
+                ohlcv = self.blofin_fetcher.fetch_ohlcv(mover.clean_symbol, timeframe="4h", limit=30)
+                if not ohlcv or len(ohlcv) < 10:
+                    enriched.append(mover)
+                    continue
+
+                # Calculate RVOL: recent volume / avg of last 20
+                volumes = [c[5] for c in ohlcv]
+                avg_vol = sum(volumes[:-1][-20:]) / min(len(volumes) - 1, 20)
+                recent_vol = volumes[-1]
+                rvol = recent_vol / avg_vol if avg_vol > 0 else 1.0
+                
+                mover.volume_ratio = rvol
+                enriched.append(mover)
+                if rvol >= GEM_RVOL_THRESHOLD:
+                    logger.info(f"💎 GEM DETECTED: {mover.clean_symbol} RVOL={rvol:.1f}x")
+            except Exception as e:
+                logger.debug(f"RVOL enrichment failed for {mover.clean_symbol}: {e}")
+                enriched.append(mover)
+        
+        # Add remaining unenriched
+        if len(movers) > 15:
+            enriched.extend(movers[15:])
+            
+        return enriched
 
     def get_dumpers(self, min_dump_pct: float = 10.0, **kwargs) -> List[FuturesMover]:
         """Get tokens that dumped significantly (negative change)."""

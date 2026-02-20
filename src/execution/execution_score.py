@@ -98,9 +98,23 @@ def compute_execution_score(
     dacle_auto_score: Optional[float] = None,
     user_conviction: Optional[float] = None,
     ta_fresh: bool = True,
+    volume_ratio: Optional[float] = None,
+    ema_200_distance_pct: Optional[float] = None,
 ) -> ExecutionScoreResult:
     """Compute canonical score/threshold and blocking decision for execution gating."""
-    threshold, threshold_reason = _compute_threshold(direction, market_direction)
+    # Session 442: Decoupling Check
+    # If in Rocket Mode (High Vol + Price > EMA200), we allow decoupling from macro
+    is_decoupling = (
+        direction.upper() == "LONG" 
+        and (volume_ratio or 1.0) > 3.0 
+        and (ema_200_distance_pct or 0) > 0
+    )
+    
+    if is_decoupling:
+        threshold = LONG_EXECUTION_THRESHOLD
+        threshold_reason = "Macro Decoupling (Rocket Momentum confirmed)"
+    else:
+        threshold, threshold_reason = _compute_threshold(direction, market_direction)
 
     entry_score = _sanitize_score(entry_score)
     quick_ta_score = _sanitize_score(quick_ta_score)
