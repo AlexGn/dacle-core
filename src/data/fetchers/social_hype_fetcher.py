@@ -43,6 +43,8 @@ PROVIDER_ERROR_ALERT_MIN_SAMPLES = 10
 PROVIDER_ERROR_ALERT_COOLDOWN_SECONDS = 6 * 60 * 60
 PROVIDER_HEALTH_HISTORY_LIMIT = 5000
 PROVIDER_HEALTH_DAILY_RETENTION_DAYS = 14
+SOCIAL_HYPE_LAST_GOOD_CACHE_PATH = PROJECT_ROOT / "data" / "cache" / "social_hype_last_good_cache.json"
+SOCIAL_HYPE_LAST_GOOD_TTL_SECONDS = 72 * 60 * 60
 
 # Symbol/name variations where provider canonical IDs differ or search relevance is weak.
 # Focused aliases include SUPRA path that was intermittently failing on primary symbol-only lookups.
@@ -81,6 +83,80 @@ def _default_provider_metrics() -> Dict[str, Any]:
         "daily": {},
         "last_alert_at": {},
         "providers_24h": {},
+    }
+
+
+def _default_social_hype_cache() -> Dict[str, Any]:
+    return {
+        "updated_at": _utc_now_iso(),
+        "tokens": {},
+    }
+
+
+def _load_social_hype_cache(path: Optional[Path] = None) -> Dict[str, Any]:
+    cache_path = path or SOCIAL_HYPE_LAST_GOOD_CACHE_PATH
+    if not cache_path.exists():
+        return _default_social_hype_cache()
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            data = _default_social_hype_cache()
+            data.update(payload)
+            if not isinstance(data.get("tokens"), dict):
+                data["tokens"] = {}
+            return data
+    except Exception:
+        pass
+    return _default_social_hype_cache()
+
+
+def _save_social_hype_cache(cache: Dict[str, Any], path: Optional[Path] = None) -> None:
+    cache_path = path or SOCIAL_HYPE_LAST_GOOD_CACHE_PATH
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache_path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+    tmp.replace(cache_path)
+
+
+def _cache_set_twitter_mentions(token_symbol: str, mentions: int, as_of: Optional[str] = None, path: Optional[Path] = None) -> None:
+    cache = _load_social_hype_cache(path)
+    tokens = cache.get("tokens", {})
+    if not isinstance(tokens, dict):
+        tokens = {}
+    tokens[token_symbol.upper()] = {
+        "twitter_mentions_7d": int(max(0, mentions)),
+        "as_of": as_of or _utc_now_iso(),
+    }
+    cache["tokens"] = tokens
+    cache["updated_at"] = _utc_now_iso()
+    _save_social_hype_cache(cache, path)
+
+
+def _cache_get_twitter_mentions(
+    token_symbol: str,
+    max_age_seconds: int = SOCIAL_HYPE_LAST_GOOD_TTL_SECONDS,
+    path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
+    cache = _load_social_hype_cache(path)
+    tokens = cache.get("tokens", {})
+    if not isinstance(tokens, dict):
+        return None
+    record = tokens.get(token_symbol.upper())
+    if not isinstance(record, dict):
+        return None
+    mentions = record.get("twitter_mentions_7d")
+    as_of = record.get("as_of")
+    if not isinstance(mentions, (int, float)):
+        return None
+    as_of_dt = _parse_iso(as_of) if isinstance(as_of, str) else None
+    if as_of_dt is None:
+        return None
+    age_seconds = (_utc_now_dt() - as_of_dt).total_seconds()
+    if age_seconds > max(0, int(max_age_seconds)):
+        return None
+    return {
+        "twitter_mentions_7d": int(max(0, mentions)),
+        "as_of": as_of_dt.isoformat().replace("+00:00", "Z"),
     }
 
 
@@ -551,20 +627,78 @@ class SocialHypeFetcher:
             "_notes": [self._build_data_unavailable_note("coingecko", detail, resolved_by_fallback=False)],
         }
 
-    def fetch_twitter_mentions(self, token_symbol: str, perplexity_data: Optional[Dict] = None) -> Dict[str, Any]:
+    def fetch_twitter_mentions(
+        self,
+        token_symbol: str,
+        perplexity_data: Optional[Dict] = None,
+        coingecko_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Fetch Twitter mentions from cached Perplexity payload when available.
 
         Returns a structured payload with source metadata and data notes.
         """
-        if perplexity_data and "social_hype" in perplexity_data:
+        return self.fetch_twitter_mentions_with_fallback(
+            token_symbol=token_symbol,
+            perplexity_data=perplexity_data,
+            coingecko_data=coingecko_data,
+        )
+
+    @staticmethod
+    def _estimate_mentions_from_coingecko(community: Optional[Dict[str, Any]]) -> Optional[int]:
+        if not isinstance(community, dict):
+            return None
+        followers = int(community.get("twitter_followers") or 0)
+        watchlist = int(community.get("watchlist_count") or 0)
+        if followers <= 0 and watchlist <= 0:
+            return None
+        # Conservative heuristic: approximate weekly mentions from community scale.
+        # Keeps estimates low to avoid overstating social hype when direct data is missing.
+        estimate = max(int(followers * 0.01), int(watchlist * 0.02))
+        return max(estimate, 1)
+
+    def fetch_twitter_mentions_with_fallback(
+        self,
+        token_symbol: str,
+        perplexity_data: Optional[Dict] = None,
+        coingecko_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        if (
+            isinstance(perplexity_data, dict)
+            and isinstance(perplexity_data.get("social_hype"), dict)
+            and "twitter_mentions_7d" in perplexity_data.get("social_hype", {})
+        ):
             mentions = int(perplexity_data["social_hype"].get("twitter_mentions_7d", 0) or 0)
+            _cache_set_twitter_mentions(token_symbol, mentions)
             self._record_provider_health("twitter_mentions", token_symbol, "cached", True, None)
             return {
                 "twitter_mentions_7d": mentions,
                 "_source": "cached",
                 "_fetched_at": _utc_now_iso(),
                 "_notes": [],
+            }
+
+        estimated_mentions = self._estimate_mentions_from_coingecko(coingecko_data)
+        if estimated_mentions is not None:
+            _cache_set_twitter_mentions(token_symbol, estimated_mentions)
+            detail = "estimated from coingecko community metrics"
+            self._record_provider_health("twitter_mentions", token_symbol, "fallback", True, detail)
+            return {
+                "twitter_mentions_7d": estimated_mentions,
+                "_source": "fallback",
+                "_fetched_at": _utc_now_iso(),
+                "_notes": [self._build_data_unavailable_note("twitter_mentions", detail, resolved_by_fallback=True)],
+            }
+
+        cached = _cache_get_twitter_mentions(token_symbol)
+        if cached is not None:
+            detail = f"using last-good cache from {cached['as_of']}"
+            self._record_provider_health("twitter_mentions", token_symbol, "fallback", True, detail)
+            return {
+                "twitter_mentions_7d": int(cached["twitter_mentions_7d"]),
+                "_source": "fallback",
+                "_fetched_at": _utc_now_iso(),
+                "_notes": [self._build_data_unavailable_note("twitter_mentions", detail, resolved_by_fallback=True)],
             }
 
         detail = "missing from perplexity payload"
@@ -592,7 +726,13 @@ class SocialHypeFetcher:
         Returns:
             int: Estimated Twitter mentions (past 7 days)
         """
-        return int(self.fetch_twitter_mentions(token_symbol, perplexity_data).get("twitter_mentions_7d", 0) or 0)
+        return int(
+            self.fetch_twitter_mentions_with_fallback(
+                token_symbol=token_symbol,
+                perplexity_data=perplexity_data,
+                coingecko_data=None,
+            ).get("twitter_mentions_7d", 0) or 0
+        )
 
     def calculate_social_hype_score(
         self,
@@ -672,7 +812,11 @@ class SocialHypeFetcher:
         # Fetch from free sources
         cryptorank_data = self.fetch_cryptorank_social(token_symbol)
         coingecko_data = self.fetch_coingecko_community(token_symbol)
-        twitter_data = self.fetch_twitter_mentions(token_symbol, perplexity_data)
+        twitter_data = self.fetch_twitter_mentions_with_fallback(
+            token_symbol=token_symbol,
+            perplexity_data=perplexity_data,
+            coingecko_data=coingecko_data,
+        )
         twitter_mentions = int(twitter_data.get("twitter_mentions_7d", 0) or 0)
 
         # Calculate composite score
