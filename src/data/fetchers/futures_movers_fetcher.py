@@ -28,6 +28,13 @@ from src.data.fetchers.blofin_fetcher import BlofinFetcher
 
 logger = logging.getLogger(__name__)
 
+# Blofin notional sizing is structurally lower than Binance on many alt pairs.
+# When native-first returns empty at high volume thresholds, retry once with a
+# safer floor before proxy fallback.
+BLOFIN_NATIVE_RELAXED_MIN_VOLUME_USD = 1_000_000
+BLOFIN_NATIVE_MIN_BOARD_SIZE = 5
+BLOFIN_NATIVE_RELAXED_VOLUME_STEPS = (2_000_000, 1_000_000, 500_000)
+
 
 @dataclass
 class FuturesMover:
@@ -156,11 +163,13 @@ class FuturesMoversFetcher:
             List of FuturesMover sorted by absolute change descending
         """
         if source_mode in ("blofin_native", "blofin_native_first"):
-            blofin_movers = self._get_top_movers_blofin_native(
+            target_count = min(BLOFIN_NATIVE_MIN_BOARD_SIZE, max(limit, 1))
+            blofin_movers = self._get_top_movers_blofin_native_with_expansion(
                 min_change_pct=min_change_pct,
                 min_volume_usd=min_volume_usd,
                 min_trade_count=min_trade_count,
                 limit=limit,
+                target_count=target_count,
             )
             if blofin_movers:
                 return blofin_movers
@@ -238,6 +247,65 @@ class FuturesMoversFetcher:
         )
 
         return movers[:limit]
+
+    def _get_top_movers_blofin_native_with_expansion(
+        self,
+        min_change_pct: float,
+        min_volume_usd: float,
+        min_trade_count: int,
+        limit: int,
+        target_count: int,
+    ) -> List[FuturesMover]:
+        """Fetch Blofin-native movers and relax volume floor to fill a minimum board."""
+        by_symbol = {}
+
+        def _merge(candidates: List[FuturesMover]) -> None:
+            for mover in candidates:
+                existing = by_symbol.get(mover.symbol)
+                if existing is None or abs(mover.change_24h_pct) > abs(existing.change_24h_pct):
+                    by_symbol[mover.symbol] = mover
+
+        strict = self._get_top_movers_blofin_native(
+            min_change_pct=min_change_pct,
+            min_volume_usd=min_volume_usd,
+            min_trade_count=min_trade_count,
+            limit=limit,
+        )
+        _merge(strict)
+        if len(by_symbol) >= target_count:
+            merged = list(by_symbol.values())
+            merged.sort(key=lambda m: abs(m.change_24h_pct), reverse=True)
+            return merged[:limit]
+
+        for floor in BLOFIN_NATIVE_RELAXED_VOLUME_STEPS:
+            if floor >= min_volume_usd:
+                continue
+            if len(by_symbol) >= target_count:
+                break
+
+            logger.info(
+                "Blofin-native board fill: retry with volume floor $%.1fM (have %s, target %s)",
+                floor / 1e6,
+                len(by_symbol),
+                target_count,
+            )
+            expanded = self._get_top_movers_blofin_native(
+                min_change_pct=min_change_pct,
+                min_volume_usd=floor,
+                min_trade_count=min_trade_count,
+                limit=limit,
+            )
+            _merge(expanded)
+
+        merged = list(by_symbol.values())
+        merged.sort(key=lambda m: abs(m.change_24h_pct), reverse=True)
+        if merged and len(merged) < target_count:
+            logger.info(
+                "Blofin-native remained below target board size (%s/%s) after relaxed floors; returning native-only set",
+                len(merged),
+                target_count,
+            )
+        return merged[:limit]
 
     def _get_top_movers_blofin_native(
         self,

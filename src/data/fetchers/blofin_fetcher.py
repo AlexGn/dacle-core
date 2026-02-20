@@ -205,9 +205,13 @@ class BlofinFetcher:
                 if price <= 0:
                     continue
 
-                # volCurrency24h is base-asset volume; convert to quote notional.
+                # Blofin exposes both vol24h and volCurrency24h; field semantics
+                # can vary by contract. Use the higher estimate to avoid
+                # systematically undercounting notional and suppressing movers.
                 base_vol_24h = float(row.get("volCurrency24h") or 0)
-                vol_24h_usd = base_vol_24h * price
+                quote_vol_24h = float(row.get("vol24h") or 0)
+                base_notional_24h = base_vol_24h * price
+                vol_24h_usd = max(base_notional_24h, quote_vol_24h)
                 if vol_24h_usd < MIN_VOLUME_USD:
                     continue
 
