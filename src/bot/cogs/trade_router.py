@@ -308,30 +308,12 @@ class TradeRouter(commands.Cog):
             )
             return
 
-        # Also run pre-trade-check directly
-        setup_data = {
-            "token": token,
-            "direction": direction,
-            "entry": float(entry_low),
-            "sl": float(stop_loss),
-            "target": float(target) if target else None,
-        }
-
-        ptc_result = await self.call_pre_trade_check(setup_data)
-        ptc_text = ""
-        if ptc_result and ptc_result.get("data", {}).get("formatted_response"):
-            ptc_text = ptc_result["data"]["formatted_response"]
-
-        if ptc_text:
-            await interaction.followup.send(
-                f"Setup posted to #trades for **{token}** {direction}.\n\n"
-                f"**Pre-Trade Check:**\n{ptc_text}"
-            )
-        else:
-            await interaction.followup.send(
-                f"Setup posted to #trades for **{token}** {direction}. "
-                f"Trade router will run pre-trade-check in the thread."
-            )
+        # Trade router (Node.js) handles pre-trade-check when it detects
+        # the setup in #trades — no need to run it here (avoids duplicates).
+        await interaction.followup.send(
+            f"Setup posted to #trades for **{token}** {direction}. "
+            f"Trade router will run pre-trade-check in the thread."
+        )
 
     # NOTE: on_message listener removed — trade setup detection is handled by
     # Node.js trade-router (deploy/openclaw/trade-router/index.js) per Session 408.
