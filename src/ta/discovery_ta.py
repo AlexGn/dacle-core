@@ -49,6 +49,9 @@ class DiscoveryTAResult:
     near_resistance: bool = False
     sr_levels_count: int = 0
 
+    # Volume
+    volume_ratio: float = 1.0  # recent volume / avg volume (RVOL)
+
     # Volume profile
     volume_profile_zone: str = "unknown"  # STRONG_BULLISH, WEAK_BULLISH, WEAK_BEARISH, STRONG_BEARISH
 
@@ -75,6 +78,7 @@ class DiscoveryTAResult:
             "near_support": self.near_support,
             "near_resistance": self.near_resistance,
             "sr_levels_count": self.sr_levels_count,
+            "volume_ratio": round(self.volume_ratio, 2),
             "volume_profile_zone": self.volume_profile_zone,
             "tvem_signal": self.tvem_signal,
             "ta_bias": self.ta_bias,
@@ -110,6 +114,7 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
             _compute_patterns,
             _compute_sr_levels,
             _compute_volume_profile,
+            _compute_volume_analysis,
             _compute_tvem,
         )
     except ImportError as e:
@@ -175,6 +180,10 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
     # Volume profile
     vp_data = _compute_volume_profile(ohlcv_dicts, current_price)
     result.volume_profile_zone = vp_data.get("zone_classification", "unknown")
+
+    # Relative Volume Analysis
+    vol_data = _compute_volume_analysis(ohlcv)
+    result.volume_ratio = vol_data.get("volume_ratio", 1.0)
 
     # TVEM
     tvem_data = _compute_tvem(ohlcv)
@@ -251,6 +260,15 @@ def _compute_bias_and_confidence(result: DiscoveryTAResult) -> None:
             bearish_signals += 1
         else:
             bullish_signals += 1
+
+    # Volume Ratio (Momentum Confirmation)
+    if result.volume_ratio >= 2.0:
+        if result.market_structure in ("bearish", "bullish"):
+            total_factors += 1
+            if result.market_structure == "bearish":
+                bearish_signals += 1
+            else:
+                bullish_signals += 1
 
     # Derive bias
     if total_factors == 0:

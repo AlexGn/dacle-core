@@ -7,7 +7,8 @@ from typing import Dict, Optional
 ENTRY_MIN_BQS = 60.0
 ENTRY_MIN_RR = 2.0
 COUNTER_REGIME_CONFIDENCE = 55.0
-BASE_EXECUTION_THRESHOLD = 8.0
+LONG_EXECUTION_THRESHOLD = 7.0
+SHORT_EXECUTION_THRESHOLD = 8.0
 COUNTER_REGIME_THRESHOLD = 8.5
 
 
@@ -35,8 +36,10 @@ def _is_counter_regime(direction: str, market_bias: str) -> bool:
 
 
 def _compute_threshold(direction: str, market_direction: Optional[dict]) -> tuple[float, str]:
-    threshold = BASE_EXECUTION_THRESHOLD
     direction_u = str(direction or "").upper()
+    base_threshold = (
+        LONG_EXECUTION_THRESHOLD if direction_u == "LONG" else SHORT_EXECUTION_THRESHOLD
+    )
 
     md = market_direction if isinstance(market_direction, dict) else {}
     bias = str(md.get("bias") or "NEUTRAL").upper()
@@ -52,7 +55,7 @@ def _compute_threshold(direction: str, market_direction: Optional[dict]) -> tupl
             COUNTER_REGIME_THRESHOLD,
             f"Counter-regime uplift ({direction_u} vs {bias} @ {confidence:.0f}% confidence)",
         )
-    return (BASE_EXECUTION_THRESHOLD, f"Base {direction_u} threshold")
+    return (base_threshold, f"Base {direction_u} threshold")
 
 
 def _sanitize_score(value: Optional[float]) -> Optional[float]:

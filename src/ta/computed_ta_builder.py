@@ -2741,6 +2741,7 @@ def build_computed_ta(
         dca_confluences=dca_confluences,
         rsi_value=rsi,
         current_price=current_price,
+        volume_ratio=volume_data.get("volume_ratio", 1.0),
         suggested_entries=suggested_entries,
         # Session 440: Momentum indicators
         macd=macd_data,
