@@ -72,12 +72,37 @@ class UpdateCommands(commands.Cog):
     def _is_owner(self, user_id: int) -> bool:
         return self.owner_id is not None and user_id == self.owner_id
 
+    @staticmethod
+    def _looks_like_discovery_channel(name: Optional[str]) -> bool:
+        return bool(name and "discovery" in name.lower())
+
+    def _is_discovery_context(self, interaction: discord.Interaction) -> bool:
+        if self.discovery_channel_id is not None and interaction.channel_id == self.discovery_channel_id:
+            return True
+
+        channel = interaction.channel
+        if channel is None:
+            return False
+
+        if self._looks_like_discovery_channel(getattr(channel, "name", None)):
+            return True
+
+        if isinstance(channel, discord.Thread):
+            if (
+                self.discovery_channel_id is not None
+                and channel.parent_id == self.discovery_channel_id
+            ):
+                return True
+            parent = channel.parent
+            if self._looks_like_discovery_channel(getattr(parent, "name", None)):
+                return True
+
+        return False
+
     def _is_authorized(self, interaction: discord.Interaction) -> bool:
         if self._is_owner(interaction.user.id):
             return True
-        if self.discovery_channel_id is None:
-            return False
-        return interaction.channel_id == self.discovery_channel_id
+        return self._is_discovery_context(interaction)
 
     def _headers(self) -> Dict[str, str]:
         headers = {"Content-Type": "application/json"}
@@ -210,6 +235,13 @@ class UpdateCommands(commands.Cog):
     )
     async def update(self, interaction: discord.Interaction):
         if not self._is_authorized(interaction):
+            logger.warning(
+                "/update unauthorized user=%s channel_id=%s channel_name=%s discovery_channel_id=%s",
+                interaction.user.id,
+                interaction.channel_id,
+                getattr(interaction.channel, "name", "unknown"),
+                self.discovery_channel_id,
+            )
             await interaction.response.send_message(
                 "❌ You are not authorized to run `/update` outside owner/discovery scope.",
                 ephemeral=True,
