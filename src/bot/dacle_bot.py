@@ -10,6 +10,7 @@ import time
 import re
 import subprocess
 import httpx
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -286,6 +287,21 @@ class DACLEBot(commands.Bot):
                 logger.error(f"🛡️ THE SENTINEL PULSE ERROR: {e}")
             
             # Pulse every 5 minutes
+            await asyncio.sleep(300)
+
+    async def _run_watcher_loop(self) -> None:
+        """
+        Backward-compatible watcher loop shim.
+        Older runtime paths still schedule _run_watcher_loop from on_ready.
+        """
+        from src.monitoring.the_watcher import TheWatcher
+        watcher = TheWatcher(dry_run=False)
+        logger.info("🛡️ WATCHER LOOP shim active (legacy on_ready compatibility).")
+        while not self.is_closed():
+            try:
+                await watcher.watch_cycle()
+            except Exception as e:
+                logger.error(f"🛡️ WATCHER LOOP ERROR: {e}")
             await asyncio.sleep(300)
 
     async def _memory_watchdog(self) -> None:
