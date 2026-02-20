@@ -169,6 +169,10 @@ config/webhook_config.json
 # Auto-generated playbook markdown (runtime, regeneratable)
 data/tokens/*/playbooks/auto_playbook_*.md
 
+# Ephemeral TA task artifacts (runtime-generated)
+data/tokens/*/ta/tasks/computed_*.json
+data/tokens/*/ta/tasks/ta_*.json
+
 # Reports directory (generated analysis, not source code)
 reports/
 
