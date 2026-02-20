@@ -15,6 +15,7 @@ from typing import Any, Dict
 TRACKED_CHANNELS = (
     "discovery",
     "focus",
+    "logs",
     "trades",
     "macro-updates",
     "analysis-updates",
@@ -74,6 +75,8 @@ def write_channel_telemetry_event(
     message: str,
     source: str,
     posted: bool,
+    logical_channel: str | None = None,
+    resolved_channel: str | None = None,
 ) -> bool:
     """
     Append one outbound-message telemetry row to JSONL.
@@ -87,6 +90,10 @@ def write_channel_telemetry_event(
         "posted": bool(posted),
         "is_signal": _classify_signal(message),
     }
+    if logical_channel:
+        payload["logical_channel"] = logical_channel
+    if resolved_channel:
+        payload["resolved_channel"] = resolved_channel
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as fh:
