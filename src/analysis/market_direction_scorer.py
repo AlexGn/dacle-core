@@ -55,9 +55,10 @@ def load_weights() -> dict:
 
     config_path = CONFIG_DIR / "market_direction_weights.json"
     defaults = {
-        "btc_trend": 0.20, "btc_rsi": 0.08, "btcdom": 0.12,
-        "usdt_d": 0.12, "total3": 0.12, "fear_greed": 0.08,
-        "funding": 0.08, "btc_structure": 0.20,
+        "btc_trend": 0.17, "btc_rsi": 0.07, "btcdom": 0.10,
+        "usdt_d": 0.10, "total3": 0.10, "fear_greed": 0.07,
+        "funding": 0.08, "btc_structure": 0.17,
+        "oi_trend": 0.08, "ls_ratio": 0.06,
         "external_macro": 0.15, "liquidity_fuel": 0.10,
     }
     try:
@@ -333,6 +334,176 @@ def _score_btc_structure(btc_price: float, structure_bias: str, structure_shift:
     # Unknown bias string
     return SignalResult("BTC Structure", w, 0.0, btc_price,
                         f"{bias_upper} (${btc_price:,.0f})", "🟡")
+
+
+# =============================================================================
+# Derivatives Signals (Phase 2)
+# =============================================================================
+
+# OI change threshold: only classify if |OI change| > 1%
+_OI_CHANGE_THRESHOLD = 1.0
+
+
+def _score_oi_trend(
+    oi_change_pct: Optional[float], price_change_pct: Optional[float]
+) -> SignalResult:
+    """BTC OI Trend — 4-quadrant matrix of OI change vs price change.
+
+    OI↑ + Price↑ = Confirmation (strong bullish, new longs entering) = +1.0
+    OI↑ + Price↓ = Distribution (strong bearish, new shorts entering) = -1.0
+    OI↓ + Price↑ = Short squeeze / weak longs covering = +0.5
+    OI↓ + Price↓ = Liquidation / trend exhausting = -0.5
+    Small OI change = Neutral = 0.0
+    """
+    w = load_weights().get("oi_trend", 0.08)
+
+    if oi_change_pct is None or price_change_pct is None:
+        return SignalResult("OI Trend", w, 0.0, None, "N/A", "⚪")
+
+    oi_abs = abs(oi_change_pct)
+
+    # If OI change is too small, neutral
+    if oi_abs < _OI_CHANGE_THRESHOLD:
+        return SignalResult(
+            "OI Trend", w, 0.0, round(oi_change_pct, 2),
+            f"OI {oi_change_pct:+.1f}% — Flat", "🟡",
+        )
+
+    oi_up = oi_change_pct > 0
+    price_up = price_change_pct > 0
+
+    if oi_up and price_up:
+        return SignalResult(
+            "OI Trend", w, 1.0, round(oi_change_pct, 2),
+            f"OI {oi_change_pct:+.1f}% + Price {price_change_pct:+.1f}% — Confirmation",
+            "🟢",
+        )
+    elif oi_up and not price_up:
+        return SignalResult(
+            "OI Trend", w, -1.0, round(oi_change_pct, 2),
+            f"OI {oi_change_pct:+.1f}% + Price {price_change_pct:+.1f}% — Distribution",
+            "🔴",
+        )
+    elif not oi_up and price_up:
+        return SignalResult(
+            "OI Trend", w, 0.5, round(oi_change_pct, 2),
+            f"OI {oi_change_pct:+.1f}% + Price {price_change_pct:+.1f}% — Short Squeeze",
+            "🟢",
+        )
+    else:  # OI down, price down
+        return SignalResult(
+            "OI Trend", w, -0.5, round(oi_change_pct, 2),
+            f"OI {oi_change_pct:+.1f}% + Price {price_change_pct:+.1f}% — Liquidation",
+            "🔴",
+        )
+
+
+def _score_ls_ratio(ratio: Optional[float]) -> SignalResult:
+    """BTC Long/Short Account Ratio — Contrarian positioning signal.
+
+    Ratio >= 2.0 = Crowded longs → contrarian bearish (-1.0)
+    Ratio 1.5-2.0 = Moderately long-biased → slight bearish (-0.5)
+    Ratio 0.7-1.5 = Balanced → neutral (0.0)
+    Ratio 0.5-0.7 = Moderately short-biased → slight bullish (+0.5)
+    Ratio <= 0.5 = Crowded shorts → contrarian bullish (+1.0)
+    """
+    w = load_weights().get("ls_ratio", 0.06)
+
+    if ratio is None:
+        return SignalResult("L/S Ratio", w, 0.0, None, "N/A", "⚪")
+
+    if ratio >= 2.0:
+        return SignalResult(
+            "L/S Ratio", w, -1.0, round(ratio, 2),
+            f"{ratio:.2f} — Crowded Longs (contrarian bearish)", "🔴",
+        )
+    elif ratio >= 1.5:
+        return SignalResult(
+            "L/S Ratio", w, -0.5, round(ratio, 2),
+            f"{ratio:.2f} — Moderately Long", "🟠",
+        )
+    elif ratio <= 0.5:
+        return SignalResult(
+            "L/S Ratio", w, 1.0, round(ratio, 2),
+            f"{ratio:.2f} — Crowded Shorts (squeeze risk)", "🟢",
+        )
+    elif ratio <= 0.7:
+        return SignalResult(
+            "L/S Ratio", w, 0.5, round(ratio, 2),
+            f"{ratio:.2f} — Moderately Short", "🟢",
+        )
+    else:
+        return SignalResult(
+            "L/S Ratio", w, 0.0, round(ratio, 2),
+            f"{ratio:.2f} — Balanced", "🟡",
+        )
+
+
+def _score_funding_enhanced(rates: Optional[list] = None) -> SignalResult:
+    """Enhanced BTC Funding Rate — scores on level AND trend direction.
+
+    Takes a list of recent funding rate snapshots (ideally 8 = 24h at 8h intervals).
+    Combines:
+      - Level: current rate vs thresholds (±0.005%, ±0.01%)
+      - Direction: is the rate rising or falling over the period?
+
+    Score matrix:
+      High funding + rising  → +1.0 (strong bullish, longs aggressively paying)
+      High funding + falling → +0.5 (bullish weakening)
+      Low/negative + falling → -1.0 (strong bearish, shorts aggressively paying)
+      Low/negative + rising  → -0.5 (bearish weakening)
+      Neutral level          →  0.0
+    """
+    w = load_weights().get("funding", 0.08)
+
+    if not rates:
+        return SignalResult("Funding", w, 0.0, None, "N/A", "⚪")
+
+    current_rate = rates[-1]
+
+    # Determine direction from trend
+    if len(rates) >= 2:
+        first_half = sum(rates[:len(rates) // 2]) / max(len(rates) // 2, 1)
+        second_half = sum(rates[len(rates) // 2:]) / max(len(rates) - len(rates) // 2, 1)
+        trend_diff = second_half - first_half
+        rising = trend_diff > 0.001   # threshold for "rising"
+        falling = trend_diff < -0.001  # threshold for "falling"
+    else:
+        rising = False
+        falling = False
+
+    # Level classification
+    is_high = current_rate > 0.005
+    is_negative = current_rate < -0.01
+    is_neutral = not is_high and not is_negative
+
+    if is_neutral:
+        trend_label = "Rising" if rising else "Falling" if falling else "Flat"
+        return SignalResult(
+            "Funding", w, 0.0, round(current_rate, 4),
+            f"{current_rate:.4f}% — Neutral ({trend_label})", "🟡",
+        )
+
+    if is_high:
+        if rising:
+            score = 1.0
+            label = f"{current_rate:.4f}% — Positive & Rising (longs aggressively paying)"
+            emoji = "🟢"
+        else:
+            score = 0.5
+            label = f"{current_rate:.4f}% — Positive but {'Falling' if falling else 'Flat'}"
+            emoji = "🟢"
+    else:  # is_negative
+        if falling:
+            score = -1.0
+            label = f"{current_rate:.4f}% — Negative & Falling (shorts aggressively paying)"
+            emoji = "🔴"
+        else:
+            score = -0.5
+            label = f"{current_rate:.4f}% — Negative but {'Rising' if rising else 'Flat'}"
+            emoji = "🔴"
+
+    return SignalResult("Funding", w, score, round(current_rate, 4), label, emoji)
 
 
 # =============================================================================
