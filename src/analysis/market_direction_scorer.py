@@ -58,7 +58,7 @@ def load_weights() -> dict:
         "btc_trend": 0.17, "btc_rsi": 0.07, "btcdom": 0.10,
         "usdt_d": 0.10, "total3": 0.10, "fear_greed": 0.07,
         "funding": 0.08, "btc_structure": 0.17,
-        "oi_trend": 0.08, "ls_ratio": 0.06,
+        "oi_trend": 0.08, "ls_ratio": 0.06, "volume_profile": 0.05,
         "external_macro": 0.15, "liquidity_fuel": 0.10,
     }
     try:
@@ -1546,6 +1546,149 @@ def compute_score_delta(
         "score_delta": score_delta,
         "signal_changes": signal_changes,
     }
+
+
+# =============================================================================
+# Correlation Awareness (Phase 4.2)
+# =============================================================================
+
+# Signals that are structurally correlated (overlapping metrics from same data)
+_CORRELATED_GROUPS = [
+    {"BTCDOM", "USDT.D", "TOTAL3"},  # All derived from market cap ratios
+]
+
+_CORRELATION_DISCOUNT = 0.7  # 30% discount when all agree
+
+
+def apply_correlation_discount(signals: List[SignalResult]) -> List[SignalResult]:
+    """Apply correlation discount when overlapping signals unanimously agree.
+
+    When BTCDOM, USDT.D, TOTAL3 all show the same direction (all positive
+    or all negative), their scores are reduced by _CORRELATION_DISCOUNT
+    to prevent over-confidence from correlated signals.
+
+    Returns new list of SignalResult (does not mutate input).
+    """
+    adjusted = list(signals)
+    sig_by_name = {s.name: (i, s) for i, s in enumerate(adjusted)}
+
+    for group in _CORRELATED_GROUPS:
+        group_signals = [(sig_by_name[name][0], sig_by_name[name][1])
+                         for name in group if name in sig_by_name]
+        if len(group_signals) < 2:
+            continue
+
+        # Check if all non-zero signals in the group agree on direction
+        non_zero = [(i, s) for i, s in group_signals if s.score != 0]
+        if len(non_zero) < 2:
+            continue
+
+        all_positive = all(s.score > 0 for _, s in non_zero)
+        all_negative = all(s.score < 0 for _, s in non_zero)
+
+        if all_positive or all_negative:
+            # Apply discount
+            for idx, sig in non_zero:
+                adjusted[idx] = SignalResult(
+                    name=sig.name,
+                    weight=sig.weight,
+                    score=round(sig.score * _CORRELATION_DISCOUNT, 3),
+                    value=sig.value,
+                    label=sig.label,
+                    emoji=sig.emoji,
+                )
+
+    return adjusted
+
+
+# =============================================================================
+# Confidence Calibration (Phase 4.3)
+# =============================================================================
+
+def calibrate_confidence(
+    raw_confidence_pct: int,
+    history: Optional[dict] = None,
+) -> dict:
+    """Calibrate reported confidence against historical accuracy.
+
+    Args:
+        raw_confidence_pct: The computed confidence (0-100).
+        history: Dict of bucket_label -> {predicted, correct, hit_rate}.
+                 E.g. {"70-80": {"predicted": 20, "correct": 11, "hit_rate": 55.0}}.
+
+    Returns:
+        {"raw": int, "calibrated": int, "bucket": str|None, "sample_size": int}
+    """
+    result = {
+        "raw": raw_confidence_pct,
+        "calibrated": raw_confidence_pct,
+        "bucket": None,
+        "sample_size": 0,
+    }
+
+    if not history:
+        return result
+
+    # Find the matching bucket for raw confidence
+    for bucket_label, stats in history.items():
+        try:
+            low, high = bucket_label.split("-")
+            if int(low) <= raw_confidence_pct <= int(high):
+                actual_hit_rate = stats.get("hit_rate", raw_confidence_pct)
+                sample_size = stats.get("predicted", 0)
+                # Blend: move 50% toward actual hit rate (conservative)
+                if sample_size >= 5:  # Only calibrate with sufficient data
+                    calibrated = int(raw_confidence_pct * 0.5 + actual_hit_rate * 0.5)
+                else:
+                    calibrated = raw_confidence_pct
+                result["calibrated"] = calibrated
+                result["bucket"] = bucket_label
+                result["sample_size"] = sample_size
+                break
+        except (ValueError, KeyError):
+            continue
+
+    return result
+
+
+# =============================================================================
+# Volume Profile Signal (Phase 4.4)
+# =============================================================================
+
+def _score_volume_profile(
+    volume_24h: Optional[float],
+    avg_7d: Optional[float],
+) -> SignalResult:
+    """BTC Volume Profile — conviction modifier based on 24h vs 7d avg volume.
+
+    Volume > 1.5x avg = High volume, confirms current direction (+0.5)
+    Volume < 0.5x avg = Low volume, weakens conviction (-0.5)
+    Volume 0.5-1.5x = Normal, neutral (0.0)
+    """
+    w = load_weights().get("volume_profile", 0.05)
+
+    if volume_24h is None or avg_7d is None or avg_7d == 0:
+        return SignalResult("Volume Profile", w, 0.0, None, "N/A", "⚪")
+
+    ratio = volume_24h / avg_7d
+
+    if ratio > 1.5:
+        score = min((ratio - 1.5) / 1.5, 1.0) * 0.5 + 0.5  # 0.5 to 1.0
+        return SignalResult(
+            "Volume Profile", w, round(score, 3), round(ratio, 2),
+            f"High Volume ({ratio:.1f}x avg)", "🟢",
+        )
+    elif ratio < 0.5:
+        score = -(0.5 + min((0.5 - ratio) / 0.5, 1.0) * 0.5)  # -0.5 to -1.0
+        return SignalResult(
+            "Volume Profile", w, round(score, 3), round(ratio, 2),
+            f"Low Volume ({ratio:.1f}x avg)", "🔴",
+        )
+    else:
+        return SignalResult(
+            "Volume Profile", w, 0.0, round(ratio, 2),
+            f"Normal Volume ({ratio:.1f}x avg)", "🟡",
+        )
 
 
 # =============================================================================
