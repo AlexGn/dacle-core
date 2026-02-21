@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from src.utils.redis_lms import get_current_price
+from src.utils.lifecycle_id import generate_lifecycle_id, embed_lifecycle_id
+from src.utils.lifecycle_store import record_setup
 
 logger = get_logger(__name__)
 
@@ -279,6 +281,29 @@ class TradeRouter(commands.Cog):
             )
             return
 
+        # Generate lifecycle ID for trade tracking
+        lifecycle_id = generate_lifecycle_id(token, direction)
+        logger.info(f"/setup generating lifecycle_id={lifecycle_id}")
+
+        # Save lifecycle_id to playbook execution state
+        try:
+            exec_state["lifecycle_id"] = lifecycle_id
+            exec_state_path = None
+            for path in candidates:
+                if path.exists():
+                    exec_state_path = path
+                    break
+            if exec_state_path:
+                exec_state_path.write_text(json.dumps(exec_state, indent=2))
+        except Exception as e:
+            logger.warning(f"/setup failed to save lifecycle_id to exec state: {e}")
+
+        # Record setup in lifecycle store
+        try:
+            record_setup(lifecycle_id, token, direction)
+        except Exception as e:
+            logger.warning(f"/setup failed to record lifecycle: {e}")
+
         # Format setup message
         parts = [f"TAKE {direction} ${token}"]
         entry_high = levels.get("entry_high")
@@ -290,6 +315,9 @@ class TradeRouter(commands.Cog):
         if target:
             parts.append(f"Target: {target}")
         setup_msg = "\n".join(parts)
+
+        # Embed lifecycle_id as hidden metadata
+        setup_msg = embed_lifecycle_id(setup_msg, lifecycle_id)
 
         # Post to #trades
         trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
@@ -485,6 +513,14 @@ class LevelsResultView(discord.ui.View):
         if self.tp is not None:
             parts.append(f"Target: {self.tp}")
         setup_msg = "\n".join(parts)
+
+        # Generate lifecycle_id for /levels → #trades flow
+        lifecycle_id = generate_lifecycle_id(self.token, self.direction)
+        setup_msg = embed_lifecycle_id(setup_msg, lifecycle_id)
+        try:
+            record_setup(lifecycle_id, self.token, self.direction)
+        except Exception as e:
+            logger.warning(f"[levels] Failed to record lifecycle: {e}")
 
         try:
             setup_message = await trades_channel.send(setup_msg)

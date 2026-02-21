@@ -44,6 +44,9 @@ import hashlib
 from dotenv import load_dotenv
 load_dotenv()
 
+from src.utils.lifecycle_store import find_lifecycle_for_position, get_entry as get_lifecycle_entry
+from src.learning.exit_reason import infer_exit_reason
+
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -777,12 +780,54 @@ class BlofinTradeSync:
             # Get playbook R:R data
             rr_data = self._get_playbook_rr_data(token)
 
+            # Look up lifecycle_id and execution snapshot
+            lifecycle_id = None
+            execution_context = None
+            try:
+                lifecycle_id = find_lifecycle_for_position(token, trade_type)
+                if lifecycle_id:
+                    lc_entry = get_lifecycle_entry(lifecycle_id)
+                    if lc_entry:
+                        snapshot = lc_entry.get("execution_snapshot")
+                        if snapshot:
+                            execution_context = {
+                                "market_regime": (snapshot.get("market_direction") or {}).get("regime"),
+                                "market_bias": (snapshot.get("market_direction") or {}).get("bias"),
+                                "market_confidence": (snapshot.get("market_direction") or {}).get("confidence"),
+                                "btc_price": (snapshot.get("btc_context") or {}).get("price"),
+                                "btc_regime": (snapshot.get("btc_context") or {}).get("regime"),
+                                "conviction_score": snapshot.get("conviction_score"),
+                                "ptc_verdict": snapshot.get("ptc_verdict"),
+                            }
+            except Exception as e:
+                logger.debug(f"Lifecycle lookup failed for {token}: {e}")
+
+            # Infer exit reason from setup levels
+            exit_reason = None
+            sl_hit = None
+            tp_hit = None
+            try:
+                playbook_levels = self._get_setup_levels(token, trade_type)
+                if playbook_levels:
+                    exit_reason = infer_exit_reason(
+                        exit_price=close_price,
+                        direction=trade_type,
+                        entry_price=entry_price,
+                        stop_loss=playbook_levels.get("stop_loss"),
+                        take_profit=playbook_levels.get("target"),
+                    )
+                    sl_hit = exit_reason == "SL_HIT"
+                    tp_hit = exit_reason == "TP_HIT"
+            except Exception as e:
+                logger.debug(f"Exit reason inference failed for {token}: {e}")
+
             trade_dict = {
                 "trade_id": trade_id,
                 "token": token,
                 "exchange": "BLOFIN",
                 "trade_type": trade_type,
                 "result": result,
+                "lifecycle_id": lifecycle_id,
                 "submitted_at": datetime.now(timezone.utc).isoformat(),
                 "entry": {
                     "price": entry_price,
@@ -792,8 +837,9 @@ class BlofinTradeSync:
                 "exit": {
                     "price": close_price,
                     "date": close_date.isoformat(),
-                    "stop_loss_hit": None,
-                    "take_profit_hit": None,
+                    "stop_loss_hit": sl_hit,
+                    "take_profit_hit": tp_hit,
+                    "exit_reason": exit_reason,
                     "partial_exits": [],
                     "remaining_position_pct": 0.0,
                 },
@@ -811,6 +857,7 @@ class BlofinTradeSync:
                     "estimated_rr_ratio": rr_data.get("estimated_rr_ratio"),
                     "actual_rr_ratio": None,
                 },
+                "execution_context": execution_context,
                 "feedback": {
                     "auto_synced": True,
                     "sync_source": "BLOFIN",
@@ -1022,6 +1069,36 @@ class BlofinTradeSync:
             logger.debug(f"Partial exit detected: {token} {close_pct:.1f}% @ ${close.get('price', 0)}")
 
         return partial_exits
+
+    def _get_setup_levels(self, token: str, direction: str) -> Optional[Dict[str, Any]]:
+        """Load entry/SL/TP levels from playbook execution state.
+
+        Args:
+            token: Token symbol.
+            direction: Trade direction (SHORT or LONG).
+
+        Returns:
+            Dict with stop_loss and target keys, or None.
+        """
+        token_upper = token.upper()
+        direction_lower = direction.lower()
+        playbooks_dir = DATA_TOKENS_DIR / token_upper / "playbooks"
+        candidates = [
+            playbooks_dir / f"{token_upper}_{direction_lower}_execution_state.json",
+            playbooks_dir / f"{token_upper}_execution_state.json",
+        ]
+        for path in candidates:
+            if path.exists():
+                try:
+                    data = json.loads(path.read_text())
+                    levels = data.get("execution_levels", {})
+                    return {
+                        "stop_loss": levels.get("stop_loss"),
+                        "target": levels.get("target_1"),
+                    }
+                except Exception:
+                    continue
+        return None
 
     def _trigger_forward_validation_sync(self) -> None:
         """Trigger forward validation sync after new trades added."""

@@ -12,6 +12,8 @@ import aiohttp
 import discord
 
 from src.utils.logger import get_logger
+from src.utils.lifecycle_id import generate_lifecycle_id, embed_lifecycle_id
+from src.utils.lifecycle_store import record_setup
 
 logger = get_logger(__name__)
 
@@ -234,6 +236,25 @@ class TradeApprovalView(discord.ui.View):
 
         setup_msg = _format_setup_message(self.symbol, direction, exec_state)
 
+        # Generate lifecycle_id for Approve → #trades flow
+        lifecycle_id = generate_lifecycle_id(self.symbol, direction)
+        setup_msg = embed_lifecycle_id(setup_msg, lifecycle_id)
+        try:
+            record_setup(lifecycle_id, self.symbol, direction)
+            # Save lifecycle_id to execution state
+            exec_state["lifecycle_id"] = lifecycle_id
+            token_dir = TOKENS_DIR / self.symbol.upper() / "playbooks"
+            candidates = [
+                token_dir / f"{self.symbol.upper()}_{direction.lower()}_execution_state.json",
+                token_dir / f"{self.symbol.upper()}_execution_state.json",
+            ]
+            for path in candidates:
+                if path.exists():
+                    path.write_text(json.dumps(exec_state, indent=2))
+                    break
+        except Exception as e:
+            logger.warning(f"Failed to record lifecycle for approve: {e}")
+
         # Post to #trades channel
         trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
         if not trades_channel:
@@ -352,7 +373,15 @@ class AuditExecutionView(discord.ui.View):
             return
 
         setup_msg = _format_setup_message(self.symbol, self.direction, exec_state)
-        
+
+        # Generate lifecycle_id for audit execution
+        lifecycle_id = generate_lifecycle_id(self.symbol, self.direction)
+        setup_msg = embed_lifecycle_id(setup_msg, lifecycle_id)
+        try:
+            record_setup(lifecycle_id, self.symbol, self.direction)
+        except Exception as e:
+            logger.warning(f"Failed to record lifecycle for audit execution: {e}")
+
         # 2. Post to #trades
         trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
         if trades_channel:
