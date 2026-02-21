@@ -12,7 +12,7 @@ import aiohttp
 import discord
 
 from src.utils.logger import get_logger
-from src.utils.lifecycle_id import generate_lifecycle_id, embed_lifecycle_id
+from src.utils.lifecycle_id import generate_lifecycle_id
 from src.utils.lifecycle_store import record_setup
 
 logger = get_logger(__name__)
@@ -238,7 +238,6 @@ class TradeApprovalView(discord.ui.View):
 
         # Generate lifecycle_id for Approve → #trades flow
         lifecycle_id = generate_lifecycle_id(self.symbol, direction)
-        setup_msg = embed_lifecycle_id(setup_msg, lifecycle_id)
         try:
             record_setup(lifecycle_id, self.symbol, direction)
             # Save lifecycle_id to execution state
@@ -376,7 +375,6 @@ class AuditExecutionView(discord.ui.View):
 
         # Generate lifecycle_id for audit execution
         lifecycle_id = generate_lifecycle_id(self.symbol, self.direction)
-        setup_msg = embed_lifecycle_id(setup_msg, lifecycle_id)
         try:
             record_setup(lifecycle_id, self.symbol, self.direction)
         except Exception as e:

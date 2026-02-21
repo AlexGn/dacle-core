@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from src.utils.redis_lms import get_current_price
-from src.utils.lifecycle_id import generate_lifecycle_id, embed_lifecycle_id
+from src.utils.lifecycle_id import generate_lifecycle_id
 from src.utils.lifecycle_store import record_setup
 
 logger = get_logger(__name__)
@@ -316,9 +316,6 @@ class TradeRouter(commands.Cog):
             parts.append(f"Target: {target}")
         setup_msg = "\n".join(parts)
 
-        # Embed lifecycle_id as hidden metadata
-        setup_msg = embed_lifecycle_id(setup_msg, lifecycle_id)
-
         # Post to #trades
         trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
         if not trades_channel:
@@ -516,7 +513,6 @@ class LevelsResultView(discord.ui.View):
 
         # Generate lifecycle_id for /levels → #trades flow
         lifecycle_id = generate_lifecycle_id(self.token, self.direction)
-        setup_msg = embed_lifecycle_id(setup_msg, lifecycle_id)
         try:
             record_setup(lifecycle_id, self.token, self.direction)
         except Exception as e:
