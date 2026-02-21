@@ -38,6 +38,44 @@ logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
+CONFIG_DIR = PROJECT_ROOT / "config"
+
+_WEIGHTS_CACHE: Optional[dict] = None
+
+
+def load_weights() -> dict:
+    """Load signal weights from config/market_direction_weights.json.
+
+    Returns a dict mapping signal key -> weight (0.0-1.0).
+    Falls back to hardcoded defaults if config is missing.
+    """
+    global _WEIGHTS_CACHE
+    if _WEIGHTS_CACHE is not None:
+        return _WEIGHTS_CACHE
+
+    config_path = CONFIG_DIR / "market_direction_weights.json"
+    defaults = {
+        "btc_trend": 0.20, "btc_rsi": 0.08, "btcdom": 0.12,
+        "usdt_d": 0.12, "total3": 0.12, "fear_greed": 0.08,
+        "funding": 0.08, "btc_structure": 0.20,
+        "external_macro": 0.15, "liquidity_fuel": 0.10,
+    }
+    try:
+        if config_path.exists():
+            data = json.loads(config_path.read_text())
+            weights = data.get("weights", defaults)
+            _WEIGHTS_CACHE = weights
+            return weights
+    except Exception as e:
+        logger.debug(f"Failed to load weights config: {e}")
+    _WEIGHTS_CACHE = defaults
+    return defaults
+
+
+def _reset_weights_cache() -> None:
+    """Reset the weights cache (for testing)."""
+    global _WEIGHTS_CACHE
+    _WEIGHTS_CACHE = None
 
 
 # =============================================================================
@@ -85,6 +123,7 @@ class DirectionUpdate:
     btc_price: float = 0.0
     signal_quality: dict = field(default_factory=dict)
     data_quality: dict = field(default_factory=dict)
+    economic_calendar: Optional[dict] = None
 
     def __post_init__(self):
         if not self.timestamp:
@@ -129,6 +168,7 @@ class DirectionUpdate:
             "signal_quality": self.signal_quality,
             "data_quality": self.data_quality,
             "narrative": generate_narrative_summary(self),
+            "economic_calendar": self.economic_calendar,
         }
         return d
 
@@ -138,106 +178,114 @@ class DirectionUpdate:
 # =============================================================================
 
 def _score_btc_trend(trend: str, price: float, ema20: float) -> SignalResult:
-    """BTC Trend — 20% weight."""
+    """BTC Trend — weight from config."""
+    w = load_weights()["btc_trend"]
     trend_upper = (trend or "").upper()
     if trend_upper == "UPTREND" or (price and ema20 and price > ema20):
-        return SignalResult("BTC Trend", 0.20, 1.0, price, f"UPTREND (${price:,.0f})", "🟢")
+        return SignalResult("BTC Trend", w, 1.0, price, f"UPTREND (${price:,.0f})", "🟢")
     elif trend_upper == "DOWNTREND" or (price and ema20 and price < ema20):
-        return SignalResult("BTC Trend", 0.20, -1.0, price, f"DOWNTREND (${price:,.0f})", "🔴")
-    return SignalResult("BTC Trend", 0.20, 0.0, price, f"SIDEWAYS (${price:,.0f})", "🟡")
+        return SignalResult("BTC Trend", w, -1.0, price, f"DOWNTREND (${price:,.0f})", "🔴")
+    return SignalResult("BTC Trend", w, 0.0, price, f"SIDEWAYS (${price:,.0f})", "🟡")
 
 
 def _score_btc_rsi(rsi: Optional[float]) -> SignalResult:
-    """BTC RSI(4H) — 8% weight."""
+    """BTC RSI(4H) — weight from config."""
+    w = load_weights()["btc_rsi"]
     if rsi is None:
-        return SignalResult("BTC RSI", 0.08, 0.0, None, "N/A", "⚪")
+        return SignalResult("BTC RSI", w, 0.0, None, "N/A", "⚪")
     if rsi > 60:
-        return SignalResult("BTC RSI", 0.08, 1.0, round(rsi, 1), f"{rsi:.1f} — Strong", "🟢")
+        return SignalResult("BTC RSI", w, 1.0, round(rsi, 1), f"{rsi:.1f} — Strong", "🟢")
     elif rsi < 40:
-        return SignalResult("BTC RSI", 0.08, -1.0, round(rsi, 1), f"{rsi:.1f} — Weak", "🔴")
-    return SignalResult("BTC RSI", 0.08, 0.0, round(rsi, 1), f"{rsi:.1f} — Neutral", "🟡")
+        return SignalResult("BTC RSI", w, -1.0, round(rsi, 1), f"{rsi:.1f} — Weak", "🔴")
+    return SignalResult("BTC RSI", w, 0.0, round(rsi, 1), f"{rsi:.1f} — Neutral", "🟡")
 
 
 def _score_btcdom(change_24h: Optional[float], value: Optional[float]) -> SignalResult:
-    """BTCDOM direction — 12% weight. Falling BTCDOM = bullish for alts."""
+    """BTCDOM direction — weight from config. Falling BTCDOM = bullish for alts."""
+    w = load_weights()["btcdom"]
     if change_24h is None:
-        return SignalResult("BTCDOM", 0.12, 0.0, None, "N/A", "⚪")
+        return SignalResult("BTCDOM", w, 0.0, None, "N/A", "⚪")
     if change_24h < -0.3:
-        return SignalResult("BTCDOM", 0.12, 1.0, round(value or 0, 1),
+        return SignalResult("BTCDOM", w, 1.0, round(value or 0, 1),
                             f"Falling {change_24h:+.1f}%/24h", "🟢")
     elif change_24h > 0.3:
-        return SignalResult("BTCDOM", 0.12, -1.0, round(value or 0, 1),
+        return SignalResult("BTCDOM", w, -1.0, round(value or 0, 1),
                             f"Rising {change_24h:+.1f}%/24h", "🔴")
-    return SignalResult("BTCDOM", 0.12, 0.0, round(value or 0, 1),
+    return SignalResult("BTCDOM", w, 0.0, round(value or 0, 1),
                         f"Flat {change_24h:+.1f}%/24h", "🟡")
 
 
 def _score_usdt_d(change_24h: Optional[float], value: Optional[float]) -> SignalResult:
-    """USDT.D direction — 12% weight. Falling = risk-on (bullish)."""
+    """USDT.D direction — weight from config. Falling = risk-on (bullish)."""
+    w = load_weights()["usdt_d"]
     if change_24h is None:
-        return SignalResult("USDT.D", 0.12, 0.0, None, "N/A", "⚪")
+        return SignalResult("USDT.D", w, 0.0, None, "N/A", "⚪")
     # USDT.D rising = risk-off = bearish, falling = risk-on = bullish
     if change_24h < -0.2:
-        return SignalResult("USDT.D", 0.12, 1.0, round(value or 0, 2),
+        return SignalResult("USDT.D", w, 1.0, round(value or 0, 2),
                             f"Falling {change_24h:+.2f}%/24h (risk-on)", "🟢")
     elif change_24h > 0.2:
-        return SignalResult("USDT.D", 0.12, -1.0, round(value or 0, 2),
+        return SignalResult("USDT.D", w, -1.0, round(value or 0, 2),
                             f"Rising {change_24h:+.2f}%/24h (risk-off)", "🔴")
-    return SignalResult("USDT.D", 0.12, 0.0, round(value or 0, 2),
+    return SignalResult("USDT.D", w, 0.0, round(value or 0, 2),
                         f"Flat {change_24h:+.2f}%/24h", "🟡")
 
 
 def _score_total3(change_24h: Optional[float], value_b: Optional[float]) -> SignalResult:
-    """TOTAL3 direction — 12% weight. Rising = bullish for alts."""
+    """TOTAL3 direction — weight from config. Rising = bullish for alts."""
+    w = load_weights()["total3"]
     if change_24h is None:
-        return SignalResult("TOTAL3", 0.12, 0.0, None, "N/A", "⚪")
+        return SignalResult("TOTAL3", w, 0.0, None, "N/A", "⚪")
     if change_24h > 1.0:
-        return SignalResult("TOTAL3", 0.12, 1.0, round(value_b or 0, 0),
+        return SignalResult("TOTAL3", w, 1.0, round(value_b or 0, 0),
                             f"Rising {change_24h:+.1f}%/24h", "🟢")
     elif change_24h < -1.0:
-        return SignalResult("TOTAL3", 0.12, -1.0, round(value_b or 0, 0),
+        return SignalResult("TOTAL3", w, -1.0, round(value_b or 0, 0),
                             f"Falling {change_24h:+.1f}%/24h", "🔴")
-    return SignalResult("TOTAL3", 0.12, 0.0, round(value_b or 0, 0),
+    return SignalResult("TOTAL3", w, 0.0, round(value_b or 0, 0),
                         f"Flat {change_24h:+.1f}%/24h", "🟡")
 
 
 def _score_fear_greed(value: Optional[int]) -> SignalResult:
-    """Fear & Greed — 8% weight."""
+    """Fear & Greed — weight from config."""
+    w = load_weights()["fear_greed"]
     if value is None:
-        return SignalResult("Fear & Greed", 0.08, 0.0, None, "N/A", "⚪")
+        return SignalResult("Fear & Greed", w, 0.0, None, "N/A", "⚪")
     if value >= 55:
         label = "Extreme Greed" if value >= 75 else "Greed"
-        return SignalResult("Fear & Greed", 0.08, 1.0, value, f"{value} — {label}", "🟢")
+        return SignalResult("Fear & Greed", w, 1.0, value, f"{value} — {label}", "🟢")
     elif value <= 34:
         label = "Extreme Fear" if value <= 20 else "Fear"
-        return SignalResult("Fear & Greed", 0.08, -1.0, value, f"{value} — {label}", "🔴")
-    return SignalResult("Fear & Greed", 0.08, 0.0, value, f"{value} — Neutral", "🟡")
+        return SignalResult("Fear & Greed", w, -1.0, value, f"{value} — {label}", "🔴")
+    return SignalResult("Fear & Greed", w, 0.0, value, f"{value} — Neutral", "🟡")
 
 
 def _score_funding(rate_pct: Optional[float]) -> SignalResult:
-    """BTC Funding Rate — 8% weight."""
+    """BTC Funding Rate — weight from config."""
+    w = load_weights()["funding"]
     if rate_pct is None:
-        return SignalResult("Funding", 0.08, 0.0, None, "N/A", "⚪")
+        return SignalResult("Funding", w, 0.0, None, "N/A", "⚪")
     if rate_pct > 0.005:
-        return SignalResult("Funding", 0.08, 1.0, round(rate_pct, 4),
+        return SignalResult("Funding", w, 1.0, round(rate_pct, 4),
                             f"{rate_pct:.4f}% — Positive (longs paying)", "🟢")
     elif rate_pct < -0.01:
-        return SignalResult("Funding", 0.08, -1.0, round(rate_pct, 4),
+        return SignalResult("Funding", w, -1.0, round(rate_pct, 4),
                             f"{rate_pct:.4f}% — Negative (crowded shorts)", "🔴")
-    return SignalResult("Funding", 0.08, 0.0, round(rate_pct, 4),
+    return SignalResult("Funding", w, 0.0, round(rate_pct, 4),
                         f"{rate_pct:.4f}% — Neutral", "🟡")
 
 
 def _score_btc_structure(btc_price: float, structure_bias: str, structure_shift: float) -> SignalResult:
-    """BTC Structure — 20% weight. Higher-timeframe structural bias from daily/weekly levels."""
+    """BTC Structure — weight from config. Higher-timeframe structural bias from daily/weekly levels."""
+    w = load_weights()["btc_structure"]
     bias_upper = (structure_bias or "").upper()
 
     # Missing data: no price or no bias
     if not btc_price or not bias_upper:
-        return SignalResult("BTC Structure", 0.20, 0.0, None, "N/A", "⚪")
+        return SignalResult("BTC Structure", w, 0.0, None, "N/A", "⚪")
 
     if bias_upper == "NEUTRAL":
-        return SignalResult("BTC Structure", 0.20, 0.0, btc_price,
+        return SignalResult("BTC Structure", w, 0.0, btc_price,
                             f"NEUTRAL (${btc_price:,.0f})", "🟡")
 
     # Determine distance from MSS (market structure shift level)
@@ -262,7 +310,7 @@ def _score_btc_structure(btc_price: float, structure_bias: str, structure_shift:
                 label = f"BEARISH ${btc_price:,.0f} ({distance_pct:+.1f}% from MSS ${structure_shift:,.0f})"
             else:
                 label = f"BEARISH ${btc_price:,.0f} (no MSS level)"
-        return SignalResult("BTC Structure", 0.20, score, btc_price, label, emoji)
+        return SignalResult("BTC Structure", w, score, btc_price, label, emoji)
 
     if bias_upper == "BULLISH":
         if distance_pct is not None and distance_pct >= 10.0:
@@ -280,10 +328,10 @@ def _score_btc_structure(btc_price: float, structure_bias: str, structure_shift:
                 label = f"BULLISH ${btc_price:,.0f} ({distance_pct:+.1f}% from MSS ${structure_shift:,.0f})"
             else:
                 label = f"BULLISH ${btc_price:,.0f} (no MSS level)"
-        return SignalResult("BTC Structure", 0.20, score, btc_price, label, emoji)
+        return SignalResult("BTC Structure", w, score, btc_price, label, emoji)
 
     # Unknown bias string
-    return SignalResult("BTC Structure", 0.20, 0.0, btc_price,
+    return SignalResult("BTC Structure", w, 0.0, btc_price,
                         f"{bias_upper} (${btc_price:,.0f})", "🟡")
 
 
@@ -943,7 +991,8 @@ async def _score_external_macro(use_realism: bool = False) -> Optional[SignalRes
             label = f"DXY {dxy_trend} | NDX {ndx_trend}"
 
         emoji = "🟢" if score > 0 else "🔴" if score < 0 else "🟡"
-        return SignalResult("External Macro", 0.15, score, None, label, emoji)
+        em_w = load_weights().get("external_macro", 0.15)
+        return SignalResult("External Macro", em_w, score, None, label, emoji)
     except Exception:
         return None
 
@@ -979,12 +1028,10 @@ async def _score_liquidity_fuel(
                 score -= 0.5
 
             fuel_label = "High Fuel" if ssr < 10 else "Low Fuel" if ssr > 15 else "Balanced"
-            if use_realism:
-                label = f"SSR {ssr:.1f} ({fuel_label})"
-            else:
-                label = f"SSR {ssr:.1f} ({fuel_label}) | Whales NEUTRAL"
+            label = f"SSR {ssr:.1f} ({fuel_label})"
             emoji = "🟢" if score > 0 else "🔴" if score < 0 else "🟡"
-            return SignalResult("Liquidity Fuel", 0.10, score, ssr, label, emoji)
+            lf_w = load_weights().get("liquidity_fuel", 0.10)
+            return SignalResult("Liquidity Fuel", lf_w, score, ssr, label, emoji)
     except Exception:
         return None
 
@@ -1095,6 +1142,61 @@ def compute_signal_proximity(
     proximities.sort(key=lambda p: p["to_neutral"] if p["to_neutral"] is not None else float("inf"))
 
     return proximities
+
+
+# =============================================================================
+# Score Delta Computation (Phase 1.4)
+# =============================================================================
+
+def compute_score_delta(
+    current_signals: List[SignalResult],
+    current_score: float,
+    previous_signals: List[dict],
+    previous_score: float,
+) -> dict:
+    """Compute score delta and signal flips between current and previous update.
+
+    Args:
+        current_signals: List of current SignalResult objects.
+        current_score: Current composite score.
+        previous_signals: List of dicts with 'name', 'score', 'label' from previous update.
+        previous_score: Previous composite score.
+
+    Returns:
+        Dict with score_delta (float) and signal_changes (list of flip dicts).
+    """
+    score_delta = round(current_score - previous_score, 3)
+
+    # Build lookup of previous signals
+    prev_by_name = {s["name"]: s for s in previous_signals}
+
+    signal_changes = []
+    for sig in current_signals:
+        prev = prev_by_name.get(sig.name)
+        if prev is None:
+            continue
+        prev_score = prev.get("score", 0)
+        if sig.score != prev_score:
+            # Determine labels
+            def _bias_label(score_val):
+                if score_val > 0:
+                    return "BULLISH"
+                elif score_val < 0:
+                    return "BEARISH"
+                return "NEUTRAL"
+
+            signal_changes.append({
+                "name": sig.name,
+                "from_score": prev_score,
+                "to_score": sig.score,
+                "from_label": _bias_label(prev_score),
+                "to_label": _bias_label(sig.score),
+            })
+
+    return {
+        "score_delta": score_delta,
+        "signal_changes": signal_changes,
+    }
 
 
 # =============================================================================

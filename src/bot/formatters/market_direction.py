@@ -175,20 +175,73 @@ def build_market_direction_embed(
     narrative = data.get("narrative") or ""
 
     fields = []
+
+    # --- Economic Calendar Warning (Phase 1.6) ---
+    econ_cal = data.get("economic_calendar")
+    if econ_cal and isinstance(econ_cal, dict) and econ_cal.get("risk_level") in ("CRITICAL", "WARNING"):
+        event_name = econ_cal.get("event_name", "Unknown Event")
+        hours_until = econ_cal.get("hours_until", "?")
+        risk_lvl = econ_cal.get("risk_level", "WARNING")
+        risk_emoji = "\u26a0\ufe0f" if risk_lvl == "CRITICAL" else "\u26a1"
+        econ_text = f"{risk_emoji} **{event_name}** in {hours_until}h — {risk_lvl}"
+        fields.append({"name": "\u2501\u2501\u2501\u2501 Event Warning \u2501\u2501\u2501\u2501", "value": econ_text[:1024], "inline": False})
+
     if narrative:
-        fields.append({"name": "━━━━ Summary ━━━━", "value": narrative[:1024], "inline": False})
-    fields.append({"name": "━━━━ Signal Breakdown ━━━━", "value": signals_text[:1024], "inline": False})
+        fields.append({"name": "\u2501\u2501\u2501\u2501 Summary \u2501\u2501\u2501\u2501", "value": narrative[:1024], "inline": False})
+
+    # --- Delta / Changes from previous (Phase 1.4) ---
+    score_delta = data.get("score_delta")
+    signal_changes = data.get("signal_changes")
+    if score_delta is not None or signal_changes:
+        delta_lines: list[str] = []
+        if score_delta is not None:
+            delta_lines.append(f"Score: {score_delta:+.2f}")
+        if signal_changes and isinstance(signal_changes, list):
+            for ch in signal_changes[:5]:
+                if isinstance(ch, dict):
+                    delta_lines.append(
+                        f"\u2022 **{ch.get('name', '?')}** {ch.get('from_label', '?')} \u2192 {ch.get('to_label', '?')}"
+                    )
+        if delta_lines:
+            fields.append({"name": "\u2501\u2501\u2501\u2501 Changes \u2501\u2501\u2501\u2501", "value": "\n".join(delta_lines)[:1024], "inline": False})
+
+    fields.append({"name": "\u2501\u2501\u2501\u2501 Signal Breakdown \u2501\u2501\u2501\u2501", "value": signals_text[:1024], "inline": False})
+
+    # --- Signal Proximity / Near Flip (Phase 1.3) ---
+    signal_proximity = data.get("signal_proximity")
+    if signal_proximity and isinstance(signal_proximity, list):
+        prox_lines: list[str] = []
+        for p in signal_proximity[:3]:
+            if isinstance(p, dict) and p.get("description"):
+                prox_lines.append(f"\u2022 **{p.get('name', '?')}**: {p['description']}")
+        if prox_lines:
+            fields.append({"name": "\u2501\u2501\u2501\u2501 Signals Near Flip \u2501\u2501\u2501\u2501", "value": "\n".join(prox_lines)[:1024], "inline": False})
+
     if context_text:
-        fields.append({"name": "━━━━ Market Context ━━━━", "value": context_text[:1024], "inline": False})
+        fields.append({"name": "\u2501\u2501\u2501\u2501 Market Context \u2501\u2501\u2501\u2501", "value": context_text[:1024], "inline": False})
     staleness_badge = _get_levels_staleness_badge(btc_levels_path)
-    key_levels_header = f"━━━━ Key Levels{staleness_badge} ━━━━"
+    key_levels_header = f"\u2501\u2501\u2501\u2501 Key Levels{staleness_badge} \u2501\u2501\u2501\u2501"
     fields.extend([
         {"name": key_levels_header, "value": levels_text[:1024], "inline": False},
-        {"name": "━━━━ Implications ━━━━", "value": implications_text[:1024], "inline": False},
+        {"name": "\u2501\u2501\u2501\u2501 Implications \u2501\u2501\u2501\u2501", "value": implications_text[:1024], "inline": False},
     ])
 
+    # --- Accuracy stats in footer (Phase 1.5) ---
+    accuracy = data.get("accuracy_stats")
+    if accuracy and isinstance(accuracy, dict):
+        hit_rate = accuracy.get("hit_rate", 0)
+        by_bias = accuracy.get("by_bias", {})
+        bull_stats = by_bias.get("BULLISH", {})
+        bear_stats = by_bias.get("BEARISH", {})
+        acc_parts = [f"Accuracy: {hit_rate:.0f}%"]
+        if bull_stats.get("periods"):
+            acc_parts.append(f"BULLISH {bull_stats['hit_rate']:.0f}% ({bull_stats['correct']}/{bull_stats['periods']})")
+        if bear_stats.get("periods"):
+            acc_parts.append(f"BEARISH {bear_stats['hit_rate']:.0f}% ({bear_stats['correct']}/{bear_stats['periods']})")
+        footer_parts.append(" | ".join(acc_parts))
+
     return {
-        "title": "📊 MARKET DIRECTION UPDATE",
+        "title": "\U0001f4ca MARKET DIRECTION UPDATE",
         "description": (
             f"{bc['emoji']} **{bias}** ({confidence}% confidence, "
             f"{int(data.get('signals_active', 0) or 0)}/{int(data.get('signals_total', 8) or 8)} signals)"
