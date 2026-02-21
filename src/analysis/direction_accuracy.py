@@ -30,6 +30,11 @@ class DirectionAccuracyTracker:
         atomic_json_write(self._path, {"periods": self._periods})
 
     def close_period(self, from_bias, to_bias, btc_price_start, btc_price_end, start_ts, end_ts):
+        # Idempotency: skip if a period with the same start_ts+end_ts already exists
+        for existing in self._periods:
+            if existing.get("start_ts") == start_ts and existing.get("end_ts") == end_ts:
+                return
+
         btc_change_pct = ((btc_price_end - btc_price_start) / btc_price_start) * 100
 
         if from_bias == "NEUTRAL":

@@ -1598,3 +1598,67 @@ def check_neutral_recovery_opportunities(
             "confidence_pct": confidence,
         },
     )
+
+
+# Minimum favorable move % to qualify as a near-miss
+NEAR_MISS_MOVE_THRESHOLD = 20.0
+
+
+def check_near_miss_opportunities(
+    near_miss_data: list,
+) -> Optional[HeartbeatAlert]:
+    """Check for SKIP/WATCHLIST decisions where price moved favorably.
+
+    Fires when a non-EXECUTE decision saw >20% favorable price movement,
+    indicating a false negative (missed opportunity).
+
+    Args:
+        near_miss_data: List of dicts from NearMissTracker.get_near_misses()
+            with keys: symbol, score, direction, decision, outcome_30d_pct,
+            days_since_scoring.
+
+    Returns:
+        HeartbeatAlert if near-misses found, None otherwise.
+    """
+    if not near_miss_data:
+        return None
+
+    # Filter: only non-EXECUTE decisions with significant favorable moves
+    actionable = []
+    for entry in near_miss_data:
+        decision = entry.get("decision", "")
+        if decision in ("EXECUTE", "BLOCKED"):
+            continue
+
+        outcome_pct = entry.get("outcome_30d_pct", 0)
+        direction = entry.get("direction", "SHORT")
+
+        # Check favorable move
+        if direction == "SHORT" and outcome_pct is not None and outcome_pct < -NEAR_MISS_MOVE_THRESHOLD:
+            actionable.append(entry)
+        elif direction == "LONG" and outcome_pct is not None and outcome_pct > NEAR_MISS_MOVE_THRESHOLD:
+            actionable.append(entry)
+
+    if not actionable:
+        return None
+
+    lines = []
+    for e in actionable:
+        sym = e.get("symbol", "?")
+        score = e.get("score", 0)
+        direction = e.get("direction", "?")
+        decision = e.get("decision", "?")
+        pct = e.get("outcome_30d_pct", 0)
+        days = e.get("days_since_scoring", "?")
+        lines.append(
+            f"[NEAR MISS] {sym} scored {score} {direction} \u2192 {decision}. "
+            f"Now {pct:+.1f}% in {days}d. Would have been a WIN."
+        )
+
+    return HeartbeatAlert(
+        check_name="near_miss_opportunities",
+        channel="focus",
+        message="\n".join(lines),
+        severity="warning",
+        meta={"near_misses": actionable},
+    )

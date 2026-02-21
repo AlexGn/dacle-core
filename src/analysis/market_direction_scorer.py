@@ -151,6 +151,7 @@ class DirectionUpdate:
             "score": round(self.score, 3),
             "confidence_pct": self.confidence_pct,
             "signals_active": signals_active,
+            "signal_count": signals_active,
             "signals_total": len(self.signals),
             "signals": [
                 {
@@ -843,6 +844,8 @@ def _load_external_indices_snapshot() -> dict:
         "ndx_change_pct": None,
         "dxy_trend": "UNAVAILABLE",
         "ndx_trend": "UNAVAILABLE",
+        "vix_value": None,
+        "bond_10y_change_pct": None,
         "fetched_at": None,
         "stale_after_minutes": 300,
     }
@@ -866,6 +869,8 @@ def _load_external_indices_snapshot() -> dict:
             "ndx_change_pct": data.get("ndx_change_pct"),
             "dxy_trend": data.get("dxy_trend", "NEUTRAL"),
             "ndx_trend": data.get("ndx_trend", "NEUTRAL"),
+            "vix_value": data.get("vix_value"),
+            "bond_10y_change_pct": data.get("bond_10y_change_pct"),
             "fetched_at": data.get("fetched_at"),
             "stale_after_minutes": stale_after_minutes,
         })
@@ -1442,9 +1447,6 @@ async def _score_external_macro(use_realism: bool = False) -> Optional[SignalRes
                     score -= 0.5
                 ndx_trend = _trend_from_change(ndx_change)
 
-            dxy_txt = "N/A" if dxy_change is None else f"{dxy_change:+.2f}% ({dxy_trend})"
-            ndx_txt = "N/A" if ndx_change is None else f"{ndx_change:+.2f}% ({ndx_trend})"
-            label = f"DXY {dxy_txt} | NDX {ndx_txt}"
         else:
             if dxy_trend == "UPTREND":
                 score -= 0.5
@@ -1456,7 +1458,14 @@ async def _score_external_macro(use_realism: bool = False) -> Optional[SignalRes
             elif ndx_trend == "DOWNTREND":
                 score -= 0.5
 
-            label = f"DXY {dxy_trend} | NDX {ndx_trend}"
+        # Add VIX and bond yield modifiers (additive, then clamp)
+        vix_val = snapshot.get("vix_value")
+        bond_val = snapshot.get("bond_10y_change_pct")
+        score += _vix_score_modifier(vix_val)
+        score += _bond_yield_score_modifier(bond_val)
+        score = max(-1.0, min(1.0, score))
+
+        label = _build_external_macro_label(dxy_trend, ndx_trend, vix_val, bond_val)
 
         emoji = "🟢" if score > 0 else "🔴" if score < 0 else "🟡"
         em_w = load_weights().get("external_macro", 0.15)
