@@ -394,6 +394,46 @@ class LighterRealClient:
             pass
         return {}
 
+    async def fetch_nonce(self) -> dict:
+        """Fetch the current nonce for this account from the Lighter API.
+
+        In SHADOW mode, returns nonce=0 without any network I/O.
+        In LIVE mode, queries the account nonce REST endpoint.
+
+        Returns:
+            {"status": "success", "nonce": N} or {"status": "error", "error": "..."}
+        """
+        if self._is_shadow_mode():
+            return {"status": "success", "nonce": 0}
+
+        if not self.signer:
+            return {"status": "error", "error": "No signer available for nonce lookup."}
+
+        account_index = self._resolved_account_index
+        if account_index is None:
+            # Attempt to resolve account index first
+            try:
+                async with aiohttp.ClientSession() as session:
+                    account_index, idx_err = await self._resolve_account_index(session)
+                    if idx_err:
+                        return {"status": "error", "error": f"Account resolution failed: {idx_err}"}
+            except Exception as e:
+                return {"status": "error", "error": f"Account resolution error: {e}"}
+
+        url = f"{self.api_url}/account/{account_index}/nonce"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        nonce_val = data if isinstance(data, int) else data.get("nonce", 0) if isinstance(data, dict) else 0
+                        return {"status": "success", "nonce": int(nonce_val)}
+                    err_text = await resp.text()
+                    return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
+        except Exception as e:
+            logger.error(f"Nonce fetch error: {e}")
+            return {"status": "error", "error": str(e)}
+
     async def cancel_all_orders(self, symbol: Optional[str] = None) -> dict:
         """
         Best-effort cancel-all used by poison-pill shutdown.
