@@ -1,24 +1,38 @@
 """
-Market Direction Scorer — Periodic Market Bias Assessment
+Market Direction Scorer — Periodic Market Bias Assessment (v2.0 Elite)
 
-Calculates a composite direction bias (BULLISH / NEUTRAL / BEARISH) from 8 weighted
-signals. Used by the market_direction_monitor cron script and the /api/macro/market-direction
-endpoint to give David a clear "which way is the market likely to break?" assessment.
+Calculates a composite direction bias (BULLISH / NEUTRAL / BEARISH) from 11 core +
+2 optional weighted signals with correlation discount, regime classification, and
+confidence calibration. Used by the market_direction_monitor cron script and the
+/api/macro/market-direction endpoint.
 
-Signals (all scored -1 to +1):
-    1. BTC Trend (20%)       — Price vs EMA20 from Binance 4H
-    2. BTC RSI 4H (8%)       — Oversold/overbought momentum
-    3. BTCDOM direction (12%) — Falling = alt-friendly, rising = alt-bearish
-    4. USDT.D direction (12%) — Falling = risk-on, rising = risk-off
-    5. TOTAL3 direction (12%) — Alt market cap trend
-    6. Fear & Greed (8%)      — Sentiment extremes
-    7. BTC Funding Rate (8%)  — Derivatives positioning
-    8. BTC Structure (20%)    — Higher-timeframe structural bias from daily/weekly levels
+Core Signals (all scored -1.0 to +1.0, continuous proportional):
+    1. BTC Trend (17%)       — Multi-TF: EMA20(4H) + EMA50(4H) + EMA20(1D) alignment
+    2. BTC RSI 4H (7%)       — Continuous proportional oversold/overbought
+    3. BTCDOM direction (10%) — Falling = alt-friendly, rising = alt-bearish
+    4. USDT.D direction (10%) — Falling = risk-on, rising = risk-off
+    5. TOTAL3 direction (10%) — Alt market cap trend
+    6. Fear & Greed (7%)      — Continuous + velocity modifier from 7-day history
+    7. BTC Funding Rate (8%)  — Enhanced: level + 24h trend direction
+    8. BTC Structure (17%)    — Higher-timeframe structural bias from daily/weekly levels
+    9. OI Trend (8%)          — 4-quadrant OI vs Price change matrix (derivatives)
+   10. L/S Ratio (6%)         — Contrarian long/short positioning signal
+   11. Volume Profile (5%)    — 24h volume vs 7d average (conviction modifier)
+
+Optional Signals (appended when data available):
+   12. External Macro (15%)   — DXY + NDX direction from Yahoo Finance
+   13. Liquidity Fuel (10%)   — SSR (Stablecoin Supply Ratio)
+
+Post-Processing:
+    - Correlation discount (0.7x) on BTCDOM/USDT.D/TOTAL3 when unanimously aligned
+    - Regime classification: RISK_ON, RISK_OFF, ROTATION, ACCUMULATION, DISTRIBUTION, etc.
+    - Confidence calibration against historical accuracy buckets
 
 Data Sources (all free, no API keys):
-    - Binance REST API (BTC price, klines, funding)
+    - Binance REST API (BTC price, klines, funding, OI, L/S ratio)
+    - Binance Futures API (OI history, L/S account ratio)
     - CoinPaprika /v1/global + /v1/tickers (BTCDOM, TOTAL3, USDT.D)
-    - Alternative.me (Fear & Greed)
+    - Alternative.me (Fear & Greed, 7-day history)
     - Local JSON files (key levels from Sherlock, BTC structure bias)
 """
 
@@ -900,7 +914,8 @@ async def calculate_direction_bias() -> DirectionUpdate:
 
 async def _calculate_direction_bias_impl(use_realism: bool = False) -> DirectionUpdate:
     """
-    Fetch all 8 signals and compute composite market direction bias.
+    Fetch all 11 core signals + 2 optional, apply correlation discount,
+    and compute composite market direction bias with regime classification.
 
     Returns a DirectionUpdate with score, signals, key levels, and sizing hints.
     """
@@ -908,7 +923,14 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
 
     # ---- Fetch BTC data from Binance ----
     btc_price = btc_ema20 = btc_rsi = btc_trend = btc_change_24h = None
+    btc_ema50_4h = None
+    btc_ema20_1d = None
     funding_rate_pct = None
+    funding_rates_history: list = []
+    oi_change_pct = None
+    ls_ratio_value = None
+    btc_volume_24h = None
+    btc_volume_7d_avg = None
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             # 4H klines for EMA/RSI
@@ -946,18 +968,90 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
                     avg_loss = sum(losses) / 14 or 0.001
                     btc_rsi = 100 - (100 / (1 + avg_gain / avg_loss))
 
-            # Funding rate
+                # Volume: 24h from ticker, 7d avg from 4H klines (42 candles ~ 7d)
+                raw_klines = klines_resp.json()
+                try:
+                    btc_volume_24h = float(ticker.get("quoteVolume", 0))
+                    if len(raw_klines) >= 42:
+                        volumes_7d = [float(k[7]) for k in raw_klines[-42:]]  # quote volume
+                        btc_volume_7d_avg = sum(volumes_7d) / 7  # total per day
+                    elif len(raw_klines) >= 6:
+                        volumes = [float(k[7]) for k in raw_klines[-6:]]  # last 24h fallback
+                        btc_volume_7d_avg = sum(volumes)  # rough estimate
+                except Exception:
+                    pass
+
+                # EMA50 (4H) for multi-TF trend
+                btc_ema50_4h = None
+                if len(closes) >= 50:
+                    mult50 = 2 / 51
+                    ema50 = sum(closes[:50]) / 50
+                    for p in closes[50:]:
+                        ema50 = (p - ema50) * mult50 + ema50
+                    btc_ema50_4h = ema50
+
+            # Funding rate history (8 periods = 24h for enhanced scoring)
             try:
                 fr_resp = await client.get(
                     "https://fapi.binance.com/fapi/v1/fundingRate",
-                    params={"symbol": "BTCUSDT", "limit": 1}
+                    params={"symbol": "BTCUSDT", "limit": 8}
                 )
                 if fr_resp.status_code == 200:
                     fr_data = fr_resp.json()
                     if fr_data:
-                        funding_rate_pct = float(fr_data[0].get("fundingRate", 0)) * 100
+                        funding_rate_pct = float(fr_data[-1].get("fundingRate", 0)) * 100
+                        funding_rates_history = [
+                            float(r.get("fundingRate", 0)) * 100 for r in fr_data
+                        ]
             except Exception as e:
                 logger.debug(f"Funding rate fetch failed: {e}")
+
+            # OI (Open Interest) for derivatives signal
+            try:
+                oi_resp = await client.get(
+                    "https://fapi.binance.com/futures/data/openInterestHist",
+                    params={"symbol": "BTCUSDT", "period": "1h", "limit": 2}
+                )
+                if oi_resp.status_code == 200:
+                    oi_data = oi_resp.json()
+                    if oi_data and len(oi_data) >= 2:
+                        prev_oi = float(oi_data[-2].get("sumOpenInterestValue", 0))
+                        curr_oi = float(oi_data[-1].get("sumOpenInterestValue", 0))
+                        if prev_oi > 0:
+                            oi_change_pct = ((curr_oi - prev_oi) / prev_oi) * 100
+            except Exception as e:
+                logger.debug(f"OI history fetch failed: {e}")
+
+            # Long/Short Account Ratio
+            try:
+                ls_resp = await client.get(
+                    "https://fapi.binance.com/futures/data/globalLongShortAccountRatio",
+                    params={"symbol": "BTCUSDT", "period": "5m", "limit": 1}
+                )
+                if ls_resp.status_code == 200:
+                    ls_data = ls_resp.json()
+                    if ls_data:
+                        ls_ratio_value = float(ls_data[0].get("longShortRatio", 1.0))
+            except Exception as e:
+                logger.debug(f"L/S ratio fetch failed: {e}")
+
+            # Daily klines for EMA20(1D) — multi-TF BTC trend
+            btc_ema20_1d = None
+            try:
+                daily_resp = await client.get(
+                    "https://api.binance.com/api/v3/klines",
+                    params={"symbol": "BTCUSDT", "interval": "1d", "limit": 30}
+                )
+                if daily_resp.status_code == 200:
+                    daily_closes = [float(k[4]) for k in daily_resp.json()]
+                    if len(daily_closes) >= 20:
+                        mult_d = 2 / 21
+                        ema_d = sum(daily_closes[:20]) / 20
+                        for p in daily_closes[20:]:
+                            ema_d = (p - ema_d) * mult_d + ema_d
+                        btc_ema20_1d = ema_d
+            except Exception as e:
+                logger.debug(f"Daily klines fetch failed: {e}")
 
     except Exception as e:
         logger.warning(f"Binance BTC fetch failed: {e}")
@@ -1088,15 +1182,19 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     except Exception as e:
         logger.warning(f"CoinPaprika fetch failed: {e}")
 
-    # ---- Fetch Fear & Greed ----
+    # ---- Fetch Fear & Greed (7-day history for velocity) ----
     fg_value = None
+    fg_velocity = 0.0
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            fg_resp = await client.get("https://api.alternative.me/fng/?limit=1")
+            fg_resp = await client.get("https://api.alternative.me/fng/?limit=7")
             if fg_resp.status_code == 200:
                 fg_data = fg_resp.json()
                 if fg_data.get("data"):
                     fg_value = int(fg_data["data"][0].get("value", 50))
+                    # Build 7-day history (API returns newest first → reverse)
+                    fg_history = [int(d.get("value", 50)) for d in reversed(fg_data["data"])]
+                    fg_velocity = compute_fg_velocity(fg_history)
     except Exception as e:
         logger.debug(f"Fear & Greed fetch failed: {e}")
 
@@ -1106,25 +1204,46 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     structure_levels = structure_data.get("levels", {})
     structure_shift = structure_levels.get("structure_shift", 0)
 
-    # ---- Score all 8 signals ----
+    # ---- Score all 11 core signals ----
+    # Use multi-TF BTC trend when EMAs available, fallback to single-EMA
+    if btc_ema50_4h or btc_ema20_1d:
+        btc_trend_signal = _score_btc_trend_mtf(
+            btc_price or 0, btc_ema20 or 0, btc_ema50_4h or 0, btc_ema20_1d or 0
+        )
+    else:
+        btc_trend_signal = _score_btc_trend(btc_trend or "", btc_price or 0, btc_ema20 or 0)
+
+    # Use enhanced funding when history available, fallback to basic
+    if funding_rates_history and len(funding_rates_history) >= 2:
+        funding_signal = _score_funding_enhanced(funding_rates_history)
+    else:
+        funding_signal = _score_funding(funding_rate_pct)
+
     signals = [
-        _score_btc_trend(btc_trend or "", btc_price or 0, btc_ema20 or 0),
+        btc_trend_signal,
         _score_btc_rsi(btc_rsi),
         _score_btcdom(btcdom_change_24h, btcdom_value),
         _score_usdt_d(usdt_d_change_24h, usdt_d_value),
         _score_total3(total3_change_24h, total3_value_b),
-        _score_fear_greed(fg_value),
-        _score_funding(funding_rate_pct),
+        _score_fear_greed(fg_value, velocity=fg_velocity),
+        funding_signal,
         _score_btc_structure(btc_price or 0, structure_bias, structure_shift),
+        # Phase 2: Derivatives intelligence
+        _score_oi_trend(oi_change_pct, btc_change_24h),
+        _score_ls_ratio(ls_ratio_value),
+        # Phase 4: Volume profile
+        _score_volume_profile(btc_volume_24h, btc_volume_7d_avg),
     ]
 
-    # ---- Elite Macro Layer (Session 441: DXY/NDX Correlation) ----
+    # ---- Apply correlation discount (Phase 4.2) ----
+    signals = apply_correlation_discount(signals)
+
+    # ---- Optional signals (External Macro + Liquidity Fuel) ----
     external_snapshot = _load_external_indices_snapshot()
     external_macro = await _score_external_macro(use_realism=use_realism)
     if external_macro:
         signals.append(external_macro)
 
-    # ---- Liquidity Fuel Layer (Session 441: Whale Flows & SSR) ----
     liquidity_fuel = await _score_liquidity_fuel(btc_price, cp_global, use_realism=use_realism)
     if liquidity_fuel:
         signals.append(liquidity_fuel)
@@ -1138,7 +1257,6 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     ]
 
     # ---- Composite score = weighted sum ----
-    # Re-calculate total weight to include external macro if present
     total_weight = sum(s.weight for s in signals)
     composite = sum(s.weight * s.score for s in signals) / max(total_weight, 0.01)
     composite = max(-1.0, min(1.0, composite))
@@ -1202,6 +1320,7 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     core_signal_names = {
         "BTC Trend", "BTC RSI", "BTCDOM", "USDT.D", "TOTAL3",
         "Fear & Greed", "Funding", "BTC Structure",
+        "OI Trend", "L/S Ratio", "Volume Profile",
     }
     signal_quality = {}
     for s in signals:

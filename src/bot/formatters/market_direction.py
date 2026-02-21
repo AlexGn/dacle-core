@@ -240,12 +240,17 @@ def build_market_direction_embed(
             acc_parts.append(f"BEARISH {bear_stats['hit_rate']:.0f}% ({bear_stats['correct']}/{bear_stats['periods']})")
         footer_parts.append(" | ".join(acc_parts))
 
+    # Regime label (Phase 3.4)
+    regime = data.get("regime")
+    regime_line = f"\nRegime: **{regime}**" if regime else ""
+
     return {
         "title": "\U0001f4ca MARKET DIRECTION UPDATE",
         "description": (
             f"{bc['emoji']} **{bias}** ({confidence}% confidence, "
             f"{int(data.get('signals_active', 0) or 0)}/{int(data.get('signals_total', 8) or 8)} signals)"
             f"{shift_line}"
+            f"{regime_line}"
         ),
         "color": bc["color"],
         "fields": fields,
