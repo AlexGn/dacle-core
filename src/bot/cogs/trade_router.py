@@ -245,7 +245,22 @@ class TradeRouter(commands.Cog):
         project_root = Path(__file__).resolve().parents[3]
         tokens_dir = project_root / "data" / "tokens"
 
-        # Load playbook execution state
+        # Prefer David's manual levels from /levels command (stored in consolidated.json)
+        consolidated_path = tokens_dir / token / "consolidated.json"
+        discord_levels = None
+        if consolidated_path.exists():
+            try:
+                cdata = json.loads(consolidated_path.read_text())
+                dl = cdata.get("latest_discord_levels") or cdata.get("latest_discord_setup")
+                if dl and dl.get("direction", "").upper() == direction:
+                    expires = dl.get("expires_at", "")
+                    from datetime import datetime, timezone
+                    if not expires or datetime.fromisoformat(expires.replace("Z", "+00:00")) > datetime.now(timezone.utc):
+                        discord_levels = dl
+            except Exception:
+                pass
+
+        # Load playbook execution state as fallback
         playbooks_dir = tokens_dir / token / "playbooks"
         exec_state = None
         if playbooks_dir.exists():
@@ -261,18 +276,26 @@ class TradeRouter(commands.Cog):
                     except Exception:
                         continue
 
-        if not exec_state:
+        if not exec_state and not discord_levels:
             await interaction.followup.send(
                 f"No playbook found for **{token}** {direction}. "
                 f"Run `/analyze {token}` first to generate a playbook."
             )
             return
 
-        # Extract levels
-        levels = exec_state.get("execution_levels", {})
-        entry_low = levels.get("entry_low")
-        stop_loss = levels.get("stop_loss")
-        target = levels.get("target_1")
+        # Extract levels — prefer David's /levels input over auto-generated playbook
+        if discord_levels:
+            entry_low = discord_levels.get("entry")
+            stop_loss = discord_levels.get("stop_loss")
+            target = discord_levels.get("target")
+            entry_high = None
+            logger.info(f"/setup using David's /levels for {token} {direction}")
+        else:
+            levels = exec_state.get("execution_levels", {})
+            entry_low = levels.get("entry_low")
+            stop_loss = levels.get("stop_loss")
+            target = levels.get("target_1")
+            entry_high = levels.get("entry_high")
 
         if not entry_low or not stop_loss:
             await interaction.followup.send(
@@ -285,18 +308,19 @@ class TradeRouter(commands.Cog):
         lifecycle_id = generate_lifecycle_id(token, direction)
         logger.info(f"/setup generating lifecycle_id={lifecycle_id}")
 
-        # Save lifecycle_id to playbook execution state
-        try:
-            exec_state["lifecycle_id"] = lifecycle_id
-            exec_state_path = None
-            for path in candidates:
-                if path.exists():
-                    exec_state_path = path
-                    break
-            if exec_state_path:
-                exec_state_path.write_text(json.dumps(exec_state, indent=2))
-        except Exception as e:
-            logger.warning(f"/setup failed to save lifecycle_id to exec state: {e}")
+        # Save lifecycle_id to playbook execution state (if playbook exists)
+        if exec_state:
+            try:
+                exec_state["lifecycle_id"] = lifecycle_id
+                exec_state_path = None
+                for path in candidates:
+                    if path.exists():
+                        exec_state_path = path
+                        break
+                if exec_state_path:
+                    exec_state_path.write_text(json.dumps(exec_state, indent=2))
+            except Exception as e:
+                logger.warning(f"/setup failed to save lifecycle_id to exec state: {e}")
 
         # Record setup in lifecycle store
         try:
@@ -306,7 +330,6 @@ class TradeRouter(commands.Cog):
 
         # Format setup message
         parts = [f"TAKE {direction} ${token}"]
-        entry_high = levels.get("entry_high")
         if entry_high and entry_high != entry_low:
             parts.append(f"Entry: {entry_low} - {entry_high}")
         else:

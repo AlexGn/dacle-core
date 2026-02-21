@@ -43,8 +43,48 @@ def _load_execution_state(symbol: str, direction: str) -> Optional[dict]:
     return None
 
 
+def _load_discord_levels(symbol: str, direction: str) -> Optional[dict]:
+    """Load David's manual levels from /levels command (stored in consolidated.json).
+
+    Returns dict with {entry, stop_loss, target} or None if not found/expired.
+    """
+    from datetime import datetime, timezone
+    consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
+    if not consolidated_path.exists():
+        return None
+    try:
+        cdata = json.loads(consolidated_path.read_text())
+        dl = cdata.get("latest_discord_levels") or cdata.get("latest_discord_setup")
+        if not dl or dl.get("direction", "").upper() != direction.upper():
+            return None
+        expires = dl.get("expires_at", "")
+        if expires:
+            exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+            if exp_dt <= datetime.now(timezone.utc):
+                return None
+        return dl
+    except Exception:
+        return None
+
+
 def _format_setup_message(symbol: str, direction: str, exec_state: dict) -> str:
-    """Format a canonical setup message from execution state."""
+    """Format a canonical setup message from execution state or discord levels."""
+    # Check for David's manual /levels first
+    discord_levels = _load_discord_levels(symbol, direction)
+    if discord_levels:
+        entry = discord_levels.get("entry")
+        stop_loss = discord_levels.get("stop_loss")
+        target = discord_levels.get("target")
+        parts = [f"TAKE {direction.upper()} ${symbol.upper()}"]
+        if entry:
+            parts.append(f"Entry: {entry}")
+        if stop_loss:
+            parts.append(f"SL: {stop_loss}")
+        if target:
+            parts.append(f"Target: {target}")
+        return "\n".join(parts)
+
+    # Fall back to playbook execution levels
     levels = exec_state.get("execution_levels", {})
     entry_low = levels.get("entry_low")
     entry_high = levels.get("entry_high")
