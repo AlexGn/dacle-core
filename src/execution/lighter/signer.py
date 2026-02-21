@@ -74,8 +74,24 @@ class LighterSigner:
         """
         Signs an order using EIP-712.
         Domain is strict-validated at init for fail-fast safety.
+
+        If order_data contains a ``deadline`` key, the Order EIP-712 type is
+        extended with an optional ``deadline`` field (uint256).  This keeps
+        backward compatibility: orders without deadline use the 5-field type.
         """
         from eth_account.messages import encode_typed_data
+
+        order_fields = [
+            {"name": "marketId", "type": "uint32"},
+            {"name": "side", "type": "uint8"},
+            {"name": "price", "type": "uint256"},
+            {"name": "size", "type": "uint256"},
+            {"name": "nonce", "type": "uint32"},
+        ]
+
+        # 5.10: Extend type with deadline when present in order_data.
+        if "deadline" in order_data:
+            order_fields.append({"name": "deadline", "type": "uint256"})
 
         types = {
             "EIP712Domain": [
@@ -84,21 +100,15 @@ class LighterSigner:
                 {"name": "chainId", "type": "uint256"},
                 {"name": "verifyingContract", "type": "address"},
             ],
-            "Order": [
-                {"name": "marketId", "type": "uint32"},
-                {"name": "side", "type": "uint8"},
-                {"name": "price", "type": "uint256"},
-                {"name": "size", "type": "uint256"},
-                {"name": "nonce", "type": "uint32"},
-            ]
+            "Order": order_fields,
         }
-        
+
         structured_data = {
             "types": types,
             "domain": self.domain,
             "primaryType": "Order",
-            "message": order_data
+            "message": order_data,
         }
-        
+
         signed_msg = self.account.sign_message(encode_typed_data(full_message=structured_data))
         return signed_msg.signature.hex()

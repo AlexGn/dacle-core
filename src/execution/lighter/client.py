@@ -4,6 +4,7 @@ Production-grade client for Lighter.xyz.
 Handles authenticated orders, signing, and REST API interactions.
 """
 
+import asyncio
 import logging
 import os
 import time
@@ -14,6 +15,9 @@ import aiohttp
 from src.execution.lighter.signer import LighterSigner
 
 logger = logging.getLogger(__name__)
+
+# Errors that warrant failover to a secondary API URL.
+_FAILOVER_ERRORS = (asyncio.TimeoutError, aiohttp.ClientConnectionError, aiohttp.ServerDisconnectedError)
 
 
 class LighterRealClient:
@@ -27,6 +31,18 @@ class LighterRealClient:
         self.auth_token = (config.get("auth_token") or os.getenv("SCALPER_AUTH_TOKEN") or "").strip()
         self._resolved_account_index: Optional[int] = self._to_int(self.account_index)
         self._shadow_order_counter = 0
+
+        # 5.8: Execution timeouts — strict 500ms default on ALL REST calls.
+        timeout_sec = float(config.get("timeout_sec", 0.5))
+        self.timeout = aiohttp.ClientTimeout(total=timeout_sec)
+
+        # 5.10: Order deadline/expiration — optional, off by default.
+        self.enable_order_deadline = bool(config.get("enable_order_deadline", False))
+        self.order_deadline_sec = int(config.get("order_deadline_sec", 5))
+
+        # 5.11: API failover — primary + optional secondary URLs.
+        self.api_urls: List[str] = config.get("api_urls") or [self.api_url]
+        self.ws_urls: List[str] = config.get("ws_urls") or []
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
@@ -72,6 +88,11 @@ class LighterRealClient:
             "size": int(qty * 100000),  # Assuming size_decimals=5
             "nonce": nonce,
         }
+
+        # 5.10: Optional deadline in signed order data.
+        if self.enable_order_deadline:
+            order_data["deadline"] = int(time.time()) + self.order_deadline_sec
+
         signature = self.signer.sign_order(order_data)
 
         payload = {
@@ -85,18 +106,34 @@ class LighterRealClient:
             "timeInForce": "IOC",
         }
 
-        url = f"{self.api_url}/sendTx"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        return {"status": "success", "order_id": data.get("orderId"), "raw": data}
-                    err_text = await resp.text()
-                    return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
-        except Exception as e:
-            logger.error(f"Execution Error: {e}")
-            return {"status": "error", "error": str(e)}
+        # 5.10: Include deadline in REST payload when enabled.
+        if self.enable_order_deadline:
+            payload["deadline"] = order_data["deadline"]
+
+        # 5.11: Try each API URL in order; failover on transient errors.
+        last_error: Optional[Exception] = None
+        for api_url in self.api_urls:
+            url = f"{api_url}/sendTx"
+            try:
+                async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                    async with session.post(url, json=payload) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            return {"status": "success", "order_id": data.get("orderId"), "raw": data}
+                        err_text = await resp.text()
+                        return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
+            except _FAILOVER_ERRORS as e:
+                logger.warning(f"Failover: {api_url}/sendTx failed ({type(e).__name__}: {e}), trying next URL")
+                last_error = e
+                continue
+            except Exception as e:
+                logger.error(f"Execution Error: {e}")
+                return {"status": "error", "error": str(e)}
+
+        # All URLs exhausted.
+        error_msg = str(last_error) if last_error else "All API URLs exhausted"
+        logger.error(f"Execution Error (all URLs failed): {error_msg}")
+        return {"status": "error", "error": error_msg}
 
     async def fetch_fills(
         self,
@@ -112,64 +149,100 @@ class LighterRealClient:
 
         Fallback:
         - /recentTrades with account-index filtering and parser fallback.
+
+        Supports API failover (5.11): retries with secondary URL on transient errors.
         """
         if not self.signer:
             return {"status": "error", "error": "No signer available for fills endpoint."}
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                account_index, idx_err = await self._resolve_account_index(session)
-                if idx_err:
-                    return {"status": "error", "error": idx_err}
+        original_api_url = self.api_url
+        last_error: Optional[Exception] = None
 
-                trades_result = await self._fetch_account_trades(
-                    session=session,
-                    account_index=account_index,
-                    cursor=cursor,
-                    limit=limit,
+        for api_url in self.api_urls:
+            self.api_url = api_url
+            # Reset resolved account index so it re-resolves against the new URL.
+            saved_account_index = self._resolved_account_index
+            if len(self.api_urls) > 1:
+                self._resolved_account_index = self._to_int(self.account_index)
+            try:
+                result = await self._fetch_fills_inner(
+                    since_ts=since_ts, cursor=cursor, limit=limit,
                 )
+                self.api_url = original_api_url
+                return result
+            except _FAILOVER_ERRORS as e:
+                logger.warning(f"Failover: fetch_fills on {api_url} failed ({type(e).__name__}: {e}), trying next URL")
+                last_error = e
+                self._resolved_account_index = saved_account_index
+                continue
+            except Exception as e:
+                self.api_url = original_api_url
+                self._resolved_account_index = saved_account_index
+                logger.error(f"Fills Fetch Error: {e}")
+                return {"status": "error", "error": str(e)}
 
-                if trades_result["status"] == "success":
-                    trades = self._extract_trades(trades_result["raw"])
-                    fills = self._trades_to_fills(trades, account_index=account_index)
-                    if since_ts is not None:
-                        fills = [fill for fill in fills if self._to_int(fill.get("timestamp"), default=0) >= since_ts]
-                    return {
-                        "status": "success",
-                        "fills": fills,
-                        "next_cursor": trades_result.get("next_cursor"),
-                        "raw": trades_result["raw"],
-                        "source": "trades",
-                        "account_index": account_index,
-                    }
+        self.api_url = original_api_url
+        error_msg = str(last_error) if last_error else "All API URLs exhausted"
+        logger.error(f"Fills Fetch Error (all URLs failed): {error_msg}")
+        return {"status": "error", "error": error_msg}
 
-                # Fallback path when auth token missing/invalid or endpoint shape drifts.
-                fallback_result = await self._fetch_recent_trades(session=session, limit=limit)
-                if fallback_result["status"] != "success":
-                    return {
-                        "status": "error",
-                        "error": (
-                            f"trades failed ({trades_result.get('error')}); "
-                            f"fallback failed ({fallback_result.get('error')})"
-                        ),
-                    }
+    async def _fetch_fills_inner(
+        self,
+        since_ts: Optional[int] = None,
+        cursor: Optional[str] = None,
+        limit: int = 100,
+    ) -> dict:
+        """Inner fetch_fills logic; may raise _FAILOVER_ERRORS for URL failover."""
+        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            account_index, idx_err = await self._resolve_account_index(session)
+            if idx_err:
+                return {"status": "error", "error": idx_err}
 
-                recent = self._extract_trades(fallback_result["raw"])
-                fills = self._trades_to_fills(recent, account_index=account_index)
+            trades_result = await self._fetch_account_trades(
+                session=session,
+                account_index=account_index,
+                cursor=cursor,
+                limit=limit,
+            )
+
+            if trades_result["status"] == "success":
+                trades = self._extract_trades(trades_result["raw"])
+                fills = self._trades_to_fills(trades, account_index=account_index)
                 if since_ts is not None:
                     fills = [fill for fill in fills if self._to_int(fill.get("timestamp"), default=0) >= since_ts]
                 return {
                     "status": "success",
                     "fills": fills,
-                    "next_cursor": None,
-                    "raw": fallback_result["raw"],
-                    "source": "recentTrades_fallback",
+                    "next_cursor": trades_result.get("next_cursor"),
+                    "raw": trades_result["raw"],
+                    "source": "trades",
                     "account_index": account_index,
-                    "warning": trades_result.get("error"),
                 }
-        except Exception as e:
-            logger.error(f"Fills Fetch Error: {e}")
-            return {"status": "error", "error": str(e)}
+
+            # Fallback path when auth token missing/invalid or endpoint shape drifts.
+            fallback_result = await self._fetch_recent_trades(session=session, limit=limit)
+            if fallback_result["status"] != "success":
+                return {
+                    "status": "error",
+                    "error": (
+                        f"trades failed ({trades_result.get('error')}); "
+                        f"fallback failed ({fallback_result.get('error')})"
+                    ),
+                }
+
+            recent = self._extract_trades(fallback_result["raw"])
+            fills = self._trades_to_fills(recent, account_index=account_index)
+            if since_ts is not None:
+                fills = [fill for fill in fills if self._to_int(fill.get("timestamp"), default=0) >= since_ts]
+            return {
+                "status": "success",
+                "fills": fills,
+                "next_cursor": None,
+                "raw": fallback_result["raw"],
+                "source": "recentTrades_fallback",
+                "account_index": account_index,
+                "warning": trades_result.get("error"),
+            }
 
     async def _resolve_account_index(self, session: aiohttp.ClientSession) -> Tuple[Optional[int], Optional[str]]:
         if self._resolved_account_index is not None:
@@ -381,23 +454,136 @@ class LighterRealClient:
             return default
 
     async def get_balance(self) -> dict:
-        """Fetch account balance via REST."""
+        """Fetch account balance via REST.
+
+        Supports API failover (5.11): tries each URL in api_urls on transient errors.
+        """
         if not self.signer:
             return {}
-        url = f"{self.api_url}/account/{self.signer.address}/balances"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as resp:
-                    if resp.status == 200:
-                        return await resp.json()
-        except Exception:
-            pass
+
+        last_error: Optional[Exception] = None
+        for api_url in self.api_urls:
+            url = f"{api_url}/account/{self.signer.address}/balances"
+            try:
+                async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            return await resp.json()
+            except _FAILOVER_ERRORS as e:
+                logger.warning(f"Failover: {url} failed ({type(e).__name__}: {e}), trying next URL")
+                last_error = e
+                continue
+            except Exception:
+                pass
+                return {}
+
+        if last_error:
+            logger.error(f"get_balance: all API URLs failed: {last_error}")
         return {}
 
     async def cancel_all_orders(self, symbol: Optional[str] = None) -> dict:
         """
         Best-effort cancel-all used by poison-pill shutdown.
+
+        5.5: In LIVE mode, fetches open orders via GET /orders, then cancels each
+        via POST /sendTx with a cancel payload. In SHADOW mode returns a success stub.
         """
         if self._is_shadow_mode():
             return {"status": "success", "shadow": True, "cancelled": 0}
-        return {"status": "error", "error": "cancel_all_orders endpoint not implemented"}
+
+        if not self.signer:
+            return {"status": "error", "error": "No signer available for cancel_all_orders."}
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                orders = await self._fetch_open_orders(session)
+                if orders is None:
+                    return {"status": "error", "error": "Failed to fetch open orders."}
+
+                # Filter by symbol if requested.
+                if symbol:
+                    orders = [
+                        o for o in orders
+                        if o.get("symbol") == symbol or o.get("market_id") == self.market_id
+                    ]
+
+                if not orders:
+                    return {"status": "success", "cancelled": 0}
+
+                cancelled = 0
+                errors: List[str] = []
+                for order in orders:
+                    order_id = order.get("order_id") or order.get("orderId") or order.get("id")
+                    nonce = order.get("nonce", 0)
+                    result = await self._cancel_order(session, order_id, nonce)
+                    if result.get("status") == "success":
+                        cancelled += 1
+                    else:
+                        errors.append(f"order {order_id}: {result.get('error', 'unknown')}")
+
+                response: Dict[str, Any] = {"status": "success", "cancelled": cancelled}
+                if errors:
+                    response["errors"] = errors
+                return response
+        except Exception as e:
+            logger.error(f"cancel_all_orders error: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def _fetch_open_orders(self, session: aiohttp.ClientSession) -> Optional[List[Dict[str, Any]]]:
+        """Fetch open orders via GET /orders."""
+        url = f"{self.api_url}/orders"
+        params: Dict[str, Any] = {"market_id": self.market_id}
+
+        account_idx = self._resolved_account_index
+        if account_idx is not None:
+            params["account_index"] = account_idx
+        if self.auth_token:
+            params["auth"] = self.auth_token
+
+        status, payload, err_text = await self._get_json(session, url, params=params)
+        if status != 200:
+            logger.error(f"_fetch_open_orders HTTP {status}: {err_text}")
+            return None
+
+        if isinstance(payload, dict):
+            orders = payload.get("orders")
+            if isinstance(orders, list):
+                return orders
+            # Some API shapes return data directly.
+            data = payload.get("data")
+            if isinstance(data, list):
+                return data
+        if isinstance(payload, list):
+            return payload
+        return []
+
+    async def _cancel_order(self, session: aiohttp.ClientSession, order_id: Any, nonce: int) -> dict:
+        """Cancel a single order via POST /sendTx."""
+        url = f"{self.api_url}/sendTx"
+        payload = {
+            "type": "cancel_order",
+            "orderId": str(order_id),
+            "nonce": nonce,
+        }
+
+        if self.signer:
+            cancel_data = {"orderId": str(order_id), "nonce": nonce}
+            try:
+                payload["signature"] = self.signer.sign_order({
+                    "marketId": self.market_id,
+                    "side": 0,
+                    "price": 0,
+                    "size": 0,
+                    "nonce": nonce,
+                })
+            except Exception as e:
+                logger.warning(f"Failed to sign cancel for order {order_id}: {e}")
+
+        try:
+            async with session.post(url, json=payload) as resp:
+                if resp.status == 200:
+                    return {"status": "success"}
+                err_text = await resp.text()
+                return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
