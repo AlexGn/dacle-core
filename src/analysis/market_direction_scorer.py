@@ -170,6 +170,17 @@ class DirectionUpdate:
             "data_quality": self.data_quality,
             "narrative": generate_narrative_summary(self),
             "economic_calendar": self.economic_calendar,
+            "regime": classify_regime(
+                bias=self.bias,
+                score=self.score,
+                signals_agreeing=sum(
+                    1 for s in self.signals
+                    if s.score != 0 and (
+                        (s.score > 0 and self.score > 0) or (s.score < 0 and self.score < 0)
+                    )
+                ),
+                signals_total=len(self.signals),
+            ),
         }
         return d
 
@@ -179,7 +190,7 @@ class DirectionUpdate:
 # =============================================================================
 
 def _score_btc_trend(trend: str, price: float, ema20: float) -> SignalResult:
-    """BTC Trend — weight from config."""
+    """BTC Trend — weight from config (single-EMA backward compatibility)."""
     w = load_weights()["btc_trend"]
     trend_upper = (trend or "").upper()
     if trend_upper == "UPTREND" or (price and ema20 and price > ema20):
@@ -189,76 +200,243 @@ def _score_btc_trend(trend: str, price: float, ema20: float) -> SignalResult:
     return SignalResult("BTC Trend", w, 0.0, price, f"SIDEWAYS (${price:,.0f})", "🟡")
 
 
+def _score_btc_trend_mtf(
+    price: float,
+    ema20_4h: float,
+    ema50_4h: float,
+    ema20_1d: float,
+) -> SignalResult:
+    """Multi-TF BTC Trend — scores alignment across 3 EMAs.
+
+    All EMAs aligned bullish (price above all): +1.0
+    All EMAs aligned bearish (price below all): -1.0
+    Partial alignment: ±0.5 based on majority
+    No data: 0.0
+    """
+    w = load_weights()["btc_trend"]
+
+    if not price or not any([ema20_4h, ema50_4h, ema20_1d]):
+        return SignalResult("BTC Trend", w, 0.0, price, "N/A (insufficient data)", "⚪")
+
+    # Count bullish/bearish alignment
+    checks = []
+    labels = []
+    if ema20_4h:
+        above = price > ema20_4h
+        checks.append(1 if above else -1)
+        labels.append(f"EMA20(4H) {'✓' if above else '✗'}")
+    if ema50_4h:
+        above = price > ema50_4h
+        checks.append(1 if above else -1)
+        labels.append(f"EMA50(4H) {'✓' if above else '✗'}")
+    if ema20_1d:
+        above = price > ema20_1d
+        checks.append(1 if above else -1)
+        labels.append(f"EMA20(1D) {'✓' if above else '✗'}")
+
+    if not checks:
+        return SignalResult("BTC Trend", w, 0.0, price, "N/A", "⚪")
+
+    total = sum(checks)
+    n = len(checks)
+
+    if total == n:  # All bullish
+        score = 1.0
+        trend = "UPTREND"
+        emoji = "🟢"
+    elif total == -n:  # All bearish
+        score = -1.0
+        trend = "DOWNTREND"
+        emoji = "🔴"
+    elif total > 0:  # Majority bullish
+        score = 0.5
+        trend = "MIXED-BULLISH"
+        emoji = "🟢"
+    elif total < 0:  # Majority bearish
+        score = -0.5
+        trend = "MIXED-BEARISH"
+        emoji = "🔴"
+    else:  # Split
+        score = 0.0
+        trend = "SIDEWAYS"
+        emoji = "🟡"
+
+    label = f"{trend} (${price:,.0f}) — {', '.join(labels)}"
+    return SignalResult("BTC Trend", w, score, price, label, emoji)
+
+
 def _score_btc_rsi(rsi: Optional[float]) -> SignalResult:
-    """BTC RSI(4H) — weight from config."""
+    """BTC RSI(4H) — continuous proportional scoring.
+
+    Maps RSI to a -1.0 to +1.0 score:
+      RSI 50 = 0.0 (neutral midpoint)
+      RSI 100 = +1.0, RSI 0 = -1.0
+      Dead zone: RSI 40-60 = 0.0 (noise)
+    Outside dead zone, linearly interpolate toward extremes.
+    """
     w = load_weights()["btc_rsi"]
     if rsi is None:
         return SignalResult("BTC RSI", w, 0.0, None, "N/A", "⚪")
-    if rsi > 60:
-        return SignalResult("BTC RSI", w, 1.0, round(rsi, 1), f"{rsi:.1f} — Strong", "🟢")
-    elif rsi < 40:
-        return SignalResult("BTC RSI", w, -1.0, round(rsi, 1), f"{rsi:.1f} — Weak", "🔴")
-    return SignalResult("BTC RSI", w, 0.0, round(rsi, 1), f"{rsi:.1f} — Neutral", "🟡")
+
+    # Continuous scoring with dead zone at 40-60
+    if 40 <= rsi <= 60:
+        score = 0.0
+        label = f"{rsi:.1f} — Neutral"
+        emoji = "🟡"
+    elif rsi > 60:
+        # Linear from 0.0 at 60 to 1.0 at 100
+        score = min((rsi - 60) / 40, 1.0)
+        label = f"{rsi:.1f} — {'Extreme Greed' if rsi >= 80 else 'Strong'}"
+        emoji = "🟢"
+    else:  # rsi < 40
+        # Linear from 0.0 at 40 to -1.0 at 0
+        score = max(-(40 - rsi) / 40, -1.0)
+        label = f"{rsi:.1f} — {'Extreme Fear' if rsi <= 20 else 'Weak'}"
+        emoji = "🔴"
+
+    return SignalResult("BTC RSI", w, round(score, 3), round(rsi, 1), label, emoji)
 
 
 def _score_btcdom(change_24h: Optional[float], value: Optional[float]) -> SignalResult:
-    """BTCDOM direction — weight from config. Falling BTCDOM = bullish for alts."""
+    """BTCDOM direction — continuous scoring. Falling BTCDOM = bullish for alts.
+
+    Dead zone: |change| < 0.3% = 0.0
+    Outside: linearly scale toward ±1.0, capped at ±2.0% change.
+    """
     w = load_weights()["btcdom"]
     if change_24h is None:
         return SignalResult("BTCDOM", w, 0.0, None, "N/A", "⚪")
-    if change_24h < -0.3:
-        return SignalResult("BTCDOM", w, 1.0, round(value or 0, 1),
-                            f"Falling {change_24h:+.1f}%/24h", "🟢")
-    elif change_24h > 0.3:
-        return SignalResult("BTCDOM", w, -1.0, round(value or 0, 1),
-                            f"Rising {change_24h:+.1f}%/24h", "🔴")
-    return SignalResult("BTCDOM", w, 0.0, round(value or 0, 1),
-                        f"Flat {change_24h:+.1f}%/24h", "🟡")
+
+    if abs(change_24h) < 0.3:
+        return SignalResult("BTCDOM", w, 0.0, round(value or 0, 1),
+                            f"Flat {change_24h:+.1f}%/24h", "🟡")
+
+    # Falling BTCDOM is bullish for alts (inverted)
+    # Scale: -0.3% → +0.0, -2.0% → +1.0 (linear)
+    # Scale: +0.3% → -0.0, +2.0% → -1.0
+    if change_24h < 0:
+        score = min((abs(change_24h) - 0.3) / 1.7, 1.0)
+        emoji = "🟢"
+        label = f"Falling {change_24h:+.1f}%/24h"
+    else:
+        score = -min((change_24h - 0.3) / 1.7, 1.0)
+        emoji = "🔴"
+        label = f"Rising {change_24h:+.1f}%/24h"
+
+    return SignalResult("BTCDOM", w, round(score, 3), round(value or 0, 1), label, emoji)
 
 
 def _score_usdt_d(change_24h: Optional[float], value: Optional[float]) -> SignalResult:
-    """USDT.D direction — weight from config. Falling = risk-on (bullish)."""
+    """USDT.D direction — continuous scoring. Falling = risk-on (bullish).
+
+    Dead zone: |change| < 0.2% = 0.0
+    Outside: linearly scale toward ±1.0, capped at ±1.0% change.
+    """
     w = load_weights()["usdt_d"]
     if change_24h is None:
         return SignalResult("USDT.D", w, 0.0, None, "N/A", "⚪")
-    # USDT.D rising = risk-off = bearish, falling = risk-on = bullish
-    if change_24h < -0.2:
-        return SignalResult("USDT.D", w, 1.0, round(value or 0, 2),
-                            f"Falling {change_24h:+.2f}%/24h (risk-on)", "🟢")
-    elif change_24h > 0.2:
-        return SignalResult("USDT.D", w, -1.0, round(value or 0, 2),
-                            f"Rising {change_24h:+.2f}%/24h (risk-off)", "🔴")
-    return SignalResult("USDT.D", w, 0.0, round(value or 0, 2),
-                        f"Flat {change_24h:+.2f}%/24h", "🟡")
+
+    if abs(change_24h) < 0.2:
+        return SignalResult("USDT.D", w, 0.0, round(value or 0, 2),
+                            f"Flat {change_24h:+.2f}%/24h", "🟡")
+
+    # Falling USDT.D = risk-on = bullish (inverted)
+    if change_24h < 0:
+        score = min((abs(change_24h) - 0.2) / 0.8, 1.0)
+        label = f"Falling {change_24h:+.2f}%/24h (risk-on)"
+        emoji = "🟢"
+    else:
+        score = -min((change_24h - 0.2) / 0.8, 1.0)
+        label = f"Rising {change_24h:+.2f}%/24h (risk-off)"
+        emoji = "🔴"
+
+    return SignalResult("USDT.D", w, round(score, 3), round(value or 0, 2), label, emoji)
 
 
 def _score_total3(change_24h: Optional[float], value_b: Optional[float]) -> SignalResult:
-    """TOTAL3 direction — weight from config. Rising = bullish for alts."""
+    """TOTAL3 direction — continuous scoring. Rising = bullish for alts.
+
+    Dead zone: |change| < 1.0% = 0.0
+    Outside: linearly scale toward ±1.0, capped at ±5.0% change.
+    """
     w = load_weights()["total3"]
     if change_24h is None:
         return SignalResult("TOTAL3", w, 0.0, None, "N/A", "⚪")
-    if change_24h > 1.0:
-        return SignalResult("TOTAL3", w, 1.0, round(value_b or 0, 0),
-                            f"Rising {change_24h:+.1f}%/24h", "🟢")
-    elif change_24h < -1.0:
-        return SignalResult("TOTAL3", w, -1.0, round(value_b or 0, 0),
-                            f"Falling {change_24h:+.1f}%/24h", "🔴")
-    return SignalResult("TOTAL3", w, 0.0, round(value_b or 0, 0),
-                        f"Flat {change_24h:+.1f}%/24h", "🟡")
+
+    if abs(change_24h) < 1.0:
+        return SignalResult("TOTAL3", w, 0.0, round(value_b or 0, 0),
+                            f"Flat {change_24h:+.1f}%/24h", "🟡")
+
+    if change_24h > 0:
+        score = min((change_24h - 1.0) / 4.0, 1.0)
+        label = f"Rising {change_24h:+.1f}%/24h"
+        emoji = "🟢"
+    else:
+        score = -min((abs(change_24h) - 1.0) / 4.0, 1.0)
+        label = f"Falling {change_24h:+.1f}%/24h"
+        emoji = "🔴"
+
+    return SignalResult("TOTAL3", w, round(score, 3), round(value_b or 0, 0), label, emoji)
 
 
-def _score_fear_greed(value: Optional[int]) -> SignalResult:
-    """Fear & Greed — weight from config."""
+def compute_fg_velocity(history: List) -> float:
+    """Compute Fear & Greed velocity from 7-day history.
+
+    Args:
+        history: List of F&G values (oldest to newest, ideally 7 entries).
+
+    Returns:
+        Velocity as normalized float (-1.0 to +1.0).
+        Positive = rising (bullish modifier), negative = falling (bearish modifier).
+    """
+    if not history or len(history) < 2:
+        return 0.0
+    # Simple: (last - first) / range, normalized by max possible change (100)
+    delta = history[-1] - history[0]
+    return max(-1.0, min(1.0, delta / 100.0))
+
+
+def _score_fear_greed(value: Optional[int], velocity: float = 0.0) -> SignalResult:
+    """Fear & Greed — continuous proportional scoring with velocity modifier.
+
+    Maps F&G to a -1.0 to +1.0 score:
+      50 = 0.0 (neutral midpoint)
+      Dead zone: 34-55 = 0.0
+      Outside: linearly interpolate toward ±1.0
+    Velocity modifier (±0.3 max) shifts score when F&G is changing rapidly.
+    """
     w = load_weights()["fear_greed"]
     if value is None:
         return SignalResult("Fear & Greed", w, 0.0, None, "N/A", "⚪")
-    if value >= 55:
-        label = "Extreme Greed" if value >= 75 else "Greed"
-        return SignalResult("Fear & Greed", w, 1.0, value, f"{value} — {label}", "🟢")
-    elif value <= 34:
-        label = "Extreme Fear" if value <= 20 else "Fear"
-        return SignalResult("Fear & Greed", w, -1.0, value, f"{value} — {label}", "🔴")
-    return SignalResult("Fear & Greed", w, 0.0, value, f"{value} — Neutral", "🟡")
+
+    # Continuous scoring with dead zone at 34-55
+    if 34 < value < 55:
+        base_score = 0.0
+        label_type = "Neutral"
+        emoji = "🟡"
+    elif value >= 55:
+        # Linear from 0.0 at 55 to 1.0 at 100
+        base_score = min((value - 55) / 45, 1.0)
+        label_type = "Extreme Greed" if value >= 75 else "Greed"
+        emoji = "🟢"
+    else:  # value <= 34
+        # Linear from 0.0 at 34 to -1.0 at 0
+        base_score = max(-(34 - value) / 34, -1.0)
+        label_type = "Extreme Fear" if value <= 20 else "Fear"
+        emoji = "🔴"
+
+    # Apply velocity modifier (capped at ±0.3)
+    vel_modifier = max(-0.3, min(0.3, velocity))
+    score = max(-1.0, min(1.0, base_score + vel_modifier))
+
+    vel_label = ""
+    if abs(velocity) > 0.05:
+        vel_label = f", {'rising' if velocity > 0 else 'falling'} fast"
+
+    return SignalResult(
+        "Fear & Greed", w, round(score, 3), value,
+        f"{value} — {label_type}{vel_label}", emoji,
+    )
 
 
 def _score_funding(rate_pct: Optional[float]) -> SignalResult:
@@ -1368,6 +1546,97 @@ def compute_score_delta(
         "score_delta": score_delta,
         "signal_changes": signal_changes,
     }
+
+
+# =============================================================================
+# Regime Classification (Phase 3.4)
+# =============================================================================
+
+def classify_regime(
+    bias: DirectionBias,
+    score: float,
+    signals_agreeing: int,
+    signals_total: int,
+) -> str:
+    """Classify market regime from bias, score strength, and signal agreement.
+
+    Returns one of:
+      RISK_ON       — Strong bullish with high agreement
+      RISK_OFF      — Strong bearish with high agreement
+      ACCUMULATION  — Mildly bullish with low agreement (stealth buying)
+      DISTRIBUTION  — Mildly bearish with low agreement (stealth selling)
+      ROTATION      — Neutral with mixed signals
+      CAPITULATION  — Extreme bearish with near-unanimous agreement
+      SQUEEZE       — Strong move with extreme positioning (future: tie to L/S ratio)
+    """
+    abs_score = abs(score)
+    agreement_pct = signals_agreeing / max(signals_total, 1)
+
+    if bias == DirectionBias.BEARISH:
+        if abs_score >= 0.80 and agreement_pct >= 0.85:
+            return "CAPITULATION"
+        if abs_score >= 0.50 and agreement_pct >= 0.60:
+            return "RISK_OFF"
+        return "DISTRIBUTION"
+
+    if bias == DirectionBias.BULLISH:
+        if abs_score >= 0.50 and agreement_pct >= 0.60:
+            return "RISK_ON"
+        return "ACCUMULATION"
+
+    # NEUTRAL
+    return "ROTATION"
+
+
+# =============================================================================
+# VIX + Bond Yield Helpers (Phase 3.5)
+# =============================================================================
+
+def _vix_score_modifier(vix_value: Optional[float]) -> float:
+    """Compute score modifier from VIX level.
+
+    VIX > 25: fear / risk-off → bearish modifier (up to -0.5)
+    VIX < 15: complacency → bullish modifier (up to +0.3)
+    VIX 15-25: normal → 0.0
+    """
+    if vix_value is None:
+        return 0.0
+    if vix_value > 25:
+        return -min((vix_value - 25) / 25, 0.5)
+    if vix_value < 15:
+        return min((15 - vix_value) / 15, 0.3)
+    return 0.0
+
+
+def _bond_yield_score_modifier(change_pct: Optional[float]) -> float:
+    """Compute score modifier from 10Y bond yield change.
+
+    Rising yields (>0.1%): risk-off → bearish (up to -0.3)
+    Falling yields (<-0.1%): easing expectations → bullish (up to +0.3)
+    Small change: 0.0
+    """
+    if change_pct is None:
+        return 0.0
+    if change_pct > 0.1:
+        return -min((change_pct - 0.1) / 1.0, 0.3)
+    if change_pct < -0.1:
+        return min((abs(change_pct) - 0.1) / 1.0, 0.3)
+    return 0.0
+
+
+def _build_external_macro_label(
+    dxy_trend: str = "NEUTRAL",
+    ndx_trend: str = "NEUTRAL",
+    vix_value: Optional[float] = None,
+    bond_10y_change: Optional[float] = None,
+) -> str:
+    """Build human-readable label for External Macro signal."""
+    parts = [f"DXY {dxy_trend}", f"NDX {ndx_trend}"]
+    if vix_value is not None:
+        parts.append(f"VIX {vix_value:.1f}")
+    if bond_10y_change is not None:
+        parts.append(f"10Y {bond_10y_change:+.2f}%")
+    return " | ".join(parts)
 
 
 # =============================================================================
