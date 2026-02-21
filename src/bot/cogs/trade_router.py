@@ -245,20 +245,40 @@ class TradeRouter(commands.Cog):
         project_root = Path(__file__).resolve().parents[3]
         tokens_dir = project_root / "data" / "tokens"
 
-        # Prefer David's manual levels from /levels command (stored in consolidated.json)
-        consolidated_path = tokens_dir / token / "consolidated.json"
+        # Prefer David's manual levels from /levels command
+        # Primary: discord_levels.json audit trail (survives data consolidation)
+        # Fallback: consolidated.json fields (may be wiped by /analyze)
+        from datetime import datetime, timezone
         discord_levels = None
-        if consolidated_path.exists():
+        audit_path = tokens_dir / token / "discord_levels.json"
+        if audit_path.exists():
             try:
-                cdata = json.loads(consolidated_path.read_text())
-                dl = cdata.get("latest_discord_levels") or cdata.get("latest_discord_setup")
-                if dl and dl.get("direction", "").upper() == direction:
-                    expires = dl.get("expires_at", "")
-                    from datetime import datetime, timezone
-                    if not expires or datetime.fromisoformat(expires.replace("Z", "+00:00")) > datetime.now(timezone.utc):
-                        discord_levels = dl
+                audit_list = json.loads(audit_path.read_text())
+                if isinstance(audit_list, list) and audit_list:
+                    for dl_entry in reversed(audit_list):
+                        if dl_entry.get("direction", "").upper() != direction:
+                            continue
+                        expires = dl_entry.get("expires_at", "")
+                        if expires:
+                            exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+                            if exp_dt <= datetime.now(timezone.utc):
+                                continue
+                        discord_levels = dl_entry
+                        break
             except Exception:
                 pass
+        if not discord_levels:
+            consolidated_path = tokens_dir / token / "consolidated.json"
+            if consolidated_path.exists():
+                try:
+                    cdata = json.loads(consolidated_path.read_text())
+                    dl = cdata.get("latest_discord_levels") or cdata.get("latest_discord_setup")
+                    if dl and dl.get("direction", "").upper() == direction:
+                        expires = dl.get("expires_at", "")
+                        if not expires or datetime.fromisoformat(expires.replace("Z", "+00:00")) > datetime.now(timezone.utc):
+                            discord_levels = dl
+                except Exception:
+                    pass
 
         # Load playbook execution state as fallback
         playbooks_dir = tokens_dir / token / "playbooks"

@@ -44,27 +44,52 @@ def _load_execution_state(symbol: str, direction: str) -> Optional[dict]:
 
 
 def _load_discord_levels(symbol: str, direction: str) -> Optional[dict]:
-    """Load David's manual levels from /levels command (stored in consolidated.json).
+    """Load David's manual levels from /levels command.
 
+    Reads from discord_levels.json audit trail (survives data consolidation),
+    with fallback to consolidated.json fields.
     Returns dict with {entry, stop_loss, target} or None if not found/expired.
     """
     from datetime import datetime, timezone
-    consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
-    if not consolidated_path.exists():
-        return None
-    try:
-        cdata = json.loads(consolidated_path.read_text())
-        dl = cdata.get("latest_discord_levels") or cdata.get("latest_discord_setup")
-        if not dl or dl.get("direction", "").upper() != direction.upper():
-            return None
-        expires = dl.get("expires_at", "")
-        if expires:
-            exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
-            if exp_dt <= datetime.now(timezone.utc):
+    token_dir = TOKENS_DIR / symbol.upper()
+
+    # Primary: read from discord_levels.json audit trail (not wiped by consolidator)
+    audit_path = token_dir / "discord_levels.json"
+    if audit_path.exists():
+        try:
+            audit_list = json.loads(audit_path.read_text())
+            if isinstance(audit_list, list) and audit_list:
+                # Get most recent entry matching direction
+                for entry in reversed(audit_list):
+                    if entry.get("direction", "").upper() != direction.upper():
+                        continue
+                    expires = entry.get("expires_at", "")
+                    if expires:
+                        exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+                        if exp_dt <= datetime.now(timezone.utc):
+                            continue
+                    return entry
+        except Exception:
+            pass
+
+    # Fallback: consolidated.json (may be stale if /analyze ran after /levels)
+    consolidated_path = token_dir / "consolidated.json"
+    if consolidated_path.exists():
+        try:
+            cdata = json.loads(consolidated_path.read_text())
+            dl = cdata.get("latest_discord_levels") or cdata.get("latest_discord_setup")
+            if not dl or dl.get("direction", "").upper() != direction.upper():
                 return None
-        return dl
-    except Exception:
-        return None
+            expires = dl.get("expires_at", "")
+            if expires:
+                exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+                if exp_dt <= datetime.now(timezone.utc):
+                    return None
+            return dl
+        except Exception:
+            pass
+
+    return None
 
 
 def _format_setup_message(symbol: str, direction: str, exec_state: dict) -> str:

@@ -2826,6 +2826,14 @@ def consolidate_token(
         # Preserve override metadata
         result['_manual_overrides'] = manual_overrides
 
+    # Preserve David's /levels discord input across consolidation runs
+    if existing_consolidated:
+        for discord_field in ('david_ta_overlay', 'latest_discord_levels', 'latest_discord_setup'):
+            existing_val = existing_consolidated.get(discord_field)
+            if existing_val is not None:
+                result[discord_field] = existing_val
+                logger.info(f"  🔒 Preserving {discord_field} from previous consolidated")
+
     # Session 80: Phase 1 - Auto-calculate float % from vesting schedules
     try:
         # Import from same directory
