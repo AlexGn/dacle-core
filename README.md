@@ -47,6 +47,33 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
+## 🛡️ Scalper SHADOW Ops (Session 444)
+
+Production SHADOW hardening is now live on VPS with managed service + watchdogs.
+
+- **Service**: `dacle-scalper-shadow.service` (systemd, restart policy, isolated log)
+- **Token refresh**: `scripts/scalping/refresh_auth_token.py` (atomic `.env` update, preflight-compatible)
+- **WS guardrails**: 1008 close-code burst detection in daemon + cron checker
+- **Audit guardrails**: post-run artifact validator (state freshness + CSV idempotency/duplicates)
+- **Status gate**: one-line strict health report for ops automation
+
+### Key Commands (VPS)
+
+```bash
+cd /home/clawd/dacle
+PYTHONPATH=. venv/bin/python3 scripts/scalping/status_report.py
+PYTHONPATH=. venv/bin/python3 scripts/scalping/status_report.py --strict
+```
+
+### Cron Watchdogs Installed
+
+- `scalper-auth-refresh` (every 20m)
+- `scalper-ws-health` (every 5m)
+- `scalper-postrun-audit` (every 15m)
+- `scalper-status-strict` (every 5m)
+
+---
+
 **🔒 LATEST (Session 443)**: Autonomous Lighter Sniper ✅ **COMPLETE**
 - **HFT Scalper Daemon**: Pure `asyncio` event loop with sub-1ms local RAM risk gates.
 - **Predictive Sniper Brain**: Microstructure-based OBI + Wall Stability logic built to beat Lighter's 300ms Standard Tier penalty.
