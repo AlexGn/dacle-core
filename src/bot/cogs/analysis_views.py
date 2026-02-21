@@ -60,15 +60,32 @@ def _load_discord_levels(symbol: str, direction: str) -> Optional[dict]:
             audit_list = json.loads(audit_path.read_text())
             if isinstance(audit_list, list) and audit_list:
                 # Get most recent entry matching direction
-                for entry in reversed(audit_list):
-                    if entry.get("direction", "").upper() != direction.upper():
+                for raw in reversed(audit_list):
+                    # Audit trail uses "recommendation" field, not "direction"
+                    entry_dir = raw.get("direction", "") or raw.get("recommendation", "")
+                    if entry_dir.upper() != direction.upper():
                         continue
-                    expires = entry.get("expires_at", "")
+                    expires = raw.get("expires_at", "")
                     if expires:
                         exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
                         if exp_dt <= datetime.now(timezone.utc):
                             continue
-                    return entry
+                    # Normalize audit trail format to canonical {entry, stop_loss, target}
+                    entry_val = raw.get("entry")
+                    if entry_val is None:
+                        entry_levels = raw.get("entry_levels", [])
+                        entry_val = entry_levels[0] if entry_levels else None
+                    target_val = raw.get("target")
+                    if target_val is None:
+                        take_profits = raw.get("take_profits", [])
+                        target_val = take_profits[0] if take_profits else None
+                    return {
+                        "direction": direction.upper(),
+                        "entry": entry_val,
+                        "stop_loss": raw.get("stop_loss"),
+                        "target": target_val,
+                        "expires_at": expires,
+                    }
         except Exception:
             pass
 

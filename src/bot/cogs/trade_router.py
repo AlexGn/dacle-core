@@ -255,15 +255,32 @@ class TradeRouter(commands.Cog):
             try:
                 audit_list = json.loads(audit_path.read_text())
                 if isinstance(audit_list, list) and audit_list:
-                    for dl_entry in reversed(audit_list):
-                        if dl_entry.get("direction", "").upper() != direction:
+                    for raw in reversed(audit_list):
+                        # Audit trail uses "recommendation", not "direction"
+                        entry_dir = raw.get("direction", "") or raw.get("recommendation", "")
+                        if entry_dir.upper() != direction:
                             continue
-                        expires = dl_entry.get("expires_at", "")
+                        expires = raw.get("expires_at", "")
                         if expires:
                             exp_dt = datetime.fromisoformat(expires.replace("Z", "+00:00"))
                             if exp_dt <= datetime.now(timezone.utc):
                                 continue
-                        discord_levels = dl_entry
+                        # Normalize audit format to {entry, stop_loss, target}
+                        entry_val = raw.get("entry")
+                        if entry_val is None:
+                            entry_levels = raw.get("entry_levels", [])
+                            entry_val = entry_levels[0] if entry_levels else None
+                        target_val = raw.get("target")
+                        if target_val is None:
+                            take_profits = raw.get("take_profits", [])
+                            target_val = take_profits[0] if take_profits else None
+                        discord_levels = {
+                            "direction": direction,
+                            "entry": entry_val,
+                            "stop_loss": raw.get("stop_loss"),
+                            "target": target_val,
+                            "expires_at": expires,
+                        }
                         break
             except Exception:
                 pass
