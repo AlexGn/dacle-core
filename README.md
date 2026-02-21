@@ -25,12 +25,13 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 ---
 
-## 📊 Current Status (v1.2.0 - Architectural Reliability, Feb 13, 2026)
+## 📊 Current Status (v1.3.0 - Autonomous Sniper, Feb 21, 2026)
 
-### 🎯 v1.2.0 ARCHITECTURAL HYGIENE - PRODUCTION READY
+### 🎯 v1.3.0 AUTONOMOUS EVOLUTION - PRODUCTION READY
 
 | Component | Status | Details |
 |-----------|--------|---------|
+| **Dacle Sniper** | ✅ 100% | Autonomous Lighter.xyz scalper with OBI logic |
 | **Trade Router** | ✅ 100% | Redis-backed, durable retry queue + idempotency |
 | **System Doctor** | ✅ 100% | Auto-healing systemctl for API and Bot services |
 | **Scoring Parity** | ✅ 100% | CLI/API parity for analyze.py scoring pipeline |
@@ -39,14 +40,21 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 | **ML Validation** | ✅ 100% | LogReg 57.3% F1, forward validation active |
 | **Sherlock L051-L061** | ✅ 100% | All 11 learnings implemented |
 | **Alert Decision Engine** | ✅ 100% | 7 alert types, atomic state, deduplication |
-| **Learning System** | ✅ 100% | 92 learnings (L001-L092) |
+| **Learning System** | ✅ 100% | 93 learnings (L001-L093) |
 | **MEXC Trade Sync** | ✅ 100% | Dual-phase sync (active + closed positions) |
 
-**Next Phase**: Prometheus/Grafana monitoring, LONG ML training expansion
+**Next Phase**: Shadow Mode observation, Lighter Premium Account scaling
 
 ---
 
-**🔒 LATEST (Session 415b)**: Architectural Reliability & Parity ✅ **COMPLETE**
+**🔒 LATEST (Session 443)**: Autonomous Lighter Sniper ✅ **COMPLETE**
+- **HFT Scalper Daemon**: Pure `asyncio` event loop with sub-1ms local RAM risk gates.
+- **Predictive Sniper Brain**: Microstructure-based OBI + Wall Stability logic built to beat Lighter's 300ms Standard Tier penalty.
+- **Brain-to-Hands Link**: Redis-backed `PermissionWriter` translates Macro Dacle signals into micro-execution authority every 1s.
+- **Safety & Compliance**: Implemented "Dead Man's Switch," "Poison Pill" fatal halt, and mandatory `TaxAudit` CSV logging for German Spot-only compliance.
+- **Test Coverage**: 10/10 TDD tests passing across all new HFT components.
+
+**🔒 PREVIOUS (Session 415b)**: Architectural Reliability & Parity ✅ **COMPLETE**
 - **Trade Router Redis Migration**: Migrated Node.js trade-router to `ioredis` for persistent retry queues and idempotency.
 - **System Doctor Healing**: Implemented auto-healing logic to restart `dacle-api` and `dacle-bot` if detected as down.
 - **CLI/API Parity**: Refactored `analyze.py` to use `IntegratedAnalysisPipeline` for scoring parity with the production API.

@@ -39,7 +39,14 @@ dependencies = [
     "psutil>=5.9.0",  # System resource monitoring for VPS health checks
     "joblib>=1.3.0",  # ML model serialization (used by ml_validator.py)
     "yfinance>=0.2.36",  # Robust Yahoo Finance data fetching (Session 348)
-    "lancedb>=0.4.0",  # Tier 4: Vector database for long-term memory (Session 402)
+    "lancedb>=0.4.0",
+    "web3>=6.0.0",
+    "eth-account>=0.8.0",
+    "websockets>=11.0",
+    "aiohttp>=3.8.0",
+    "orjson>=3.9.0",
+    "pydantic>=2.5.2",
+    "redis[hiredis]>=5.0.1",  # Tier 4: Vector database for long-term memory (Session 402)
 ]
 
 [project.optional-dependencies]
