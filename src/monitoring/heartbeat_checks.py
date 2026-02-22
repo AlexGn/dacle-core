@@ -1756,7 +1756,17 @@ def check_scalper_health(
             severity="critical",
         )
 
-    # Priority 7: Token expiring soon (< 300s)
+    # Priority 7: GhostSweeper error
+    ghost_error = scalper_data.get("ghost_last_error")
+    if ghost_error:
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message=f"[SCALPER] GhostSweeper error: {ghost_error}",
+            severity="warning",
+        )
+
+    # Priority 8: Token expiring soon (< 300s)
     if token_ttl < SCALPER_TOKEN_TTL_WARN_SEC:
         return HeartbeatAlert(
             check_name="scalper_health",
