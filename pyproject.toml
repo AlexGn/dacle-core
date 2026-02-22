@@ -47,6 +47,7 @@ dependencies = [
     "lighter-sdk>=1.0.3",
     "orjson>=3.9.0",
     "pydantic>=2.5.2",
+    "urllib3>=2.2.2",
     "redis[hiredis]>=5.0.1",  # Tier 4: Vector database for long-term memory (Session 402)
 ]
 
