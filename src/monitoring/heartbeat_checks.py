@@ -188,6 +188,7 @@ def check_regime_shift_reeval(
 def check_high_conviction_discoveries(
     unified_tokens: List[dict],
     last_state: dict,
+    lighter_symbols: List[str] = None,
 ) -> List[HeartbeatAlert]:
     """
     Check for tokens with conviction score >= 8.0.
@@ -196,11 +197,13 @@ def check_high_conviction_discoveries(
     Args:
         unified_tokens: List of token dicts from GET /api/tokens/unified
         last_state: Previous state to detect NEW discoveries
+        lighter_symbols: List of symbols available on Lighter
 
     Returns:
         List of HeartbeatAlert objects.
     """
     prior_tokens = last_state.get("last_alerted_tokens", [])
+    lighter_symbols = lighter_symbols or []
     
     new_high = []
     all_high = []
@@ -229,9 +232,13 @@ def check_high_conviction_discoveries(
         symbol = data["symbol"]
         rvol = data["rvol"]
         rocket = " \U0001f680" if rvol >= 5.0 else ""
+        
+        # Route to #lighter if available on Lighter
+        channel = "lighter" if symbol in lighter_symbols else "discovery"
+        
         alerts.append(HeartbeatAlert(
             check_name=f"new_discovery_{symbol}",
-            channel="discovery",
+            channel=channel,
             message=f"\U0001f3af **NEW HIGH CONVICTION: {symbol}**{rocket}\nPreparing trade setup card...",
             severity="critical",
             meta={"token": symbol, "score": data["score"], "rvol": rvol}
@@ -1864,6 +1871,28 @@ def check_scalper_counters(
             message=(
                 f"[SCALPER] Possible chasing — "
                 f"{counters['cooldown_block_count']} cooldown blocks"
+            ),
+            severity="warning",
+        )
+
+    # Priority 3b: Nonce resync (>3 per daemon lifetime is concerning)
+    nonce_resyncs = counters.get("nonce_resync_count", 0)
+    if nonce_resyncs > 3:
+        return HeartbeatAlert(
+            check_name="scalper_counters",
+            channel="focus",
+            message=f"[SCALPER] Nonce resync triggered {nonce_resyncs}x — exchange nonce drift",
+            severity="warning",
+        )
+
+    # Priority 3c: SHORT reconciler escalation
+    if counters.get("short_reconciler_escalation_count", 0) > 0:
+        return HeartbeatAlert(
+            check_name="scalper_counters",
+            channel="focus",
+            message=(
+                f"[SCALPER] SHORT reconciler escalation "
+                f"({counters['short_reconciler_escalation_count']}x)"
             ),
             severity="warning",
         )
