@@ -10,7 +10,7 @@ import logging
 import time
 from typing import Optional
 
-from src.analysis.market_direction_scorer import calculate_direction_bias
+from src.analysis.market_direction_scorer import calculate_direction_bias, classify_regime
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,19 @@ async def get_live_market_direction() -> Optional[dict]:
             "bias": result.bias.value,
             "score": round(result.score, 3),
             "confidence_pct": result.confidence_pct,
+            "regime": classify_regime(
+                bias=result.bias,
+                score=result.score,
+                signals_agreeing=sum(
+                    1 for s in result.signals
+                    if s.score != 0 and (
+                        (s.score > 0 and result.score > 0) or (s.score < 0 and result.score < 0)
+                    )
+                ),
+                signals_total=len(result.signals),
+            ),
+            "btc_price": result.btc_price,
+            "position_implications": result.position_implications,
         }
         _cache["result"] = entry
         _cache["expires"] = now + _TTL_SECONDS

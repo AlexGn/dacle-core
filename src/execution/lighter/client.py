@@ -5,6 +5,7 @@ Handles authenticated orders, signing, and REST API interactions.
 """
 
 import asyncio
+import json
 import logging
 import os
 import time
@@ -164,7 +165,24 @@ class LighterRealClient:
                             result["filled_price"] = data.get("filled_price") or data.get("filledPrice")
                             return result
                         err_text = await resp.text()
-                        return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
+                        # Structured error classification
+                        error_code = "API_ERROR"
+                        try:
+                            err_json = json.loads(err_text)
+                            err_code_field = str(err_json.get("code", "") or err_json.get("error_code", "")).lower()
+                            if "nonce" in err_code_field or "sequence" in err_code_field:
+                                error_code = "NONCE_ERROR"
+                        except (json.JSONDecodeError, AttributeError):
+                            # Fallback: substring match on raw text
+                            lower_text = err_text.lower()
+                            if "nonce" in lower_text or "sequence" in lower_text:
+                                error_code = "NONCE_ERROR"
+                        return {
+                            "status": "error",
+                            "error": f"HTTP {resp.status}: {err_text}",
+                            "error_code": error_code,
+                            "http_status": resp.status,
+                        }
             except _FAILOVER_ERRORS as e:
                 logger.warning(f"Failover: {api_url}/sendTx failed ({type(e).__name__}: {e}), trying next URL")
                 last_error = e
