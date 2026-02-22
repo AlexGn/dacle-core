@@ -1187,6 +1187,59 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     except Exception as e:
         logger.warning(f"CoinPaprika fetch failed: {e}")
 
+    # ---- Fallback to cached macro levels if live fetch failed ----
+    if btcdom_value is None or btcdom_change_24h is None:
+        logger.info("Attempting fallback to cached macro levels for CoinPaprika indicators.")
+        sherlock_levels = _load_sherlock_macro_levels()
+        if sherlock_levels:
+            btcdom_data = sherlock_levels.get("btcdom", {})
+            total3_data = sherlock_levels.get("total3", {})
+            others_d_data = sherlock_levels.get("others_d", {})
+            usdt_d_data = sherlock_levels.get("usdt_d", {})
+            total1_data = sherlock_levels.get("total1", {})
+            total2_data = sherlock_levels.get("total2", {})
+
+            if btcdom_value is None:
+                btcdom_value = btcdom_data.get("current_value")
+            if btcdom_change_24h is None:
+                btcdom_change_24h = btcdom_data.get("change_24h", 0)
+
+            if total3_value_b is None:
+                total3_value_b = total3_data.get("current_value_b")
+            if total3_change_24h is None:
+                total3_change_24h = total3_data.get("change_24h", 0)
+
+            if others_d is None:
+                others_d = others_d_data.get("current_value")
+            if others_d_change_pp is None:
+                others_d_change_pp = others_d_data.get("change_pp", 0)
+
+            if usdt_d_value is None:
+                usdt_d_value = usdt_d_data.get("current_value")
+            if usdt_d_change_24h is None:
+                usdt_d_change_24h = usdt_d_data.get("change_24h", 0)
+
+            # Populate cp_global for Liquidity Fuel signal
+            cp_global = {
+                "btc_mc": total1_data.get("current_value_t", 0) * 1e12 * (btcdom_value / 100) if btcdom_value and total1_data.get("current_value_t") else 0,
+                "total_mc": total1_data.get("current_value_t", 0) * 1e12 if total1_data.get("current_value_t") else 0,
+                "btcdom": btcdom_value or 0,
+                "stable_mc": total1_data.get("current_value_t", 0) * 1e12 * 0.1, # fallback
+            }
+
+            # Fallback for context indicators
+            if total1_t is None:
+                total1_t = total1_data.get("current_value_t")
+            if total1_change is None:
+                total1_change = total1_data.get("change_24h", 0)
+                
+            if total2_b is None:
+                total2_b = total2_data.get("current_value_b")
+            if total2_change is None:
+                total2_change = total2_data.get("change_24h", 0)
+
+            logger.info("Successfully loaded fallback macro indicators from cache.")
+
     # ---- Fetch Fear & Greed (7-day history for velocity) ----
     fg_value = None
     fg_velocity = 0.0
