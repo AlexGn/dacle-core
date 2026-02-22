@@ -1,11 +1,11 @@
 """
 Position Commands Cog
-Provides /positions slash command showing live Blofin positions.
+Provides /positions slash command showing live Blofin + Lighter DEX positions.
 """
 
 import aiohttp
 import os
-from typing import Optional
+from typing import Any, Dict, Optional, Tuple
 
 import discord
 from discord import app_commands
@@ -14,6 +14,26 @@ from discord.ext import commands
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _build_scalper_field(data: Dict[str, Any]) -> Optional[Tuple[str, str, bool]]:
+    """Build embed field tuple for Lighter DEX scalper section.
+
+    Returns (name, value, inline) or None if there is nothing to show.
+    Pure function - no I/O.
+    """
+    is_running = data.get("is_running", False)
+    mode = data.get("mode", "SHADOW")
+    exposure = data.get("current_exposure_usd", 0)
+    fills_24h = data.get("fill_count_24h", 0)
+
+    if not is_running and exposure == 0 and fills_24h == 0:
+        return None
+
+    icon = "\U0001f7e2" if is_running else "\u26aa"  # green circle vs white circle
+    name = "{} Lighter DEX ({})".format(icon, mode)
+    value = "Exposure: ${:.2f}\nFills (24h): {}".format(exposure, fills_24h)
+    return (name, value, True)
 
 
 class PositionCommands(commands.Cog):
@@ -53,6 +73,8 @@ class PositionCommands(commands.Cog):
                 description="No open positions (0/3 slots)",
                 color=discord.Color.greyple(),
             )
+            # Append Lighter DEX scalper section even when no Blofin positions
+            await self._append_scalper_field(embed)
             await interaction.followup.send(embed=embed)
             return
 
@@ -99,12 +121,32 @@ class PositionCommands(commands.Cog):
 
             embed.add_field(name=f"${token}", value=field_value, inline=False)
 
+        # Append Lighter DEX scalper section
+        await self._append_scalper_field(embed)
+
         # Total P&L
         total_pnl = sum(p.get("unrealized_pnl", 0) for p in positions)
         total_sign = "+" if total_pnl >= 0 else ""
         embed.set_footer(text=f"Total Unrealized P&L: {total_sign}${total_pnl:.2f}")
 
         await interaction.followup.send(embed=embed)
+
+    async def _append_scalper_field(self, embed: discord.Embed) -> None:
+        """Fetch scalper status and append a Lighter DEX field to the embed."""
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.api_url}/api/scalping/status",
+                    timeout=aiohttp.ClientTimeout(total=3),
+                ) as resp:
+                    if resp.status == 200:
+                        scalper_data = await resp.json()
+                        field = _build_scalper_field(scalper_data)
+                        if field:
+                            name, value, inline = field
+                            embed.add_field(name=name, value=value, inline=inline)
+        except Exception:
+            pass  # Non-fatal -- Blofin positions still display
 
     async def cog_app_command_error(self, interaction, error):
         logger.error(f"[PositionCommands] {error}", exc_info=error)
