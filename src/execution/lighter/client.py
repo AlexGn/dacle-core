@@ -425,10 +425,11 @@ class LighterRealClient:
                 logger.critical("Auth token expired: HTTP %d from %s", status, url)
                 if self._auth_expired_callback:
                     try:
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(self._auth_expired_callback())
-                    except RuntimeError:
-                        pass  # No running loop (e.g. tests without event loop)
+                        result = self._auth_expired_callback()
+                        if asyncio.iscoroutine(result):
+                            asyncio.get_running_loop().create_task(result)
+                    except Exception:
+                        pass  # Best-effort; callback handles its own scheduling
 
             if payload is None:
                 return status, None, await resp.text()
