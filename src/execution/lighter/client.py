@@ -39,6 +39,10 @@ class LighterRealClient:
         self._resolved_account_index: Optional[int] = self._to_int(self.account_index)
         self._shadow_order_counter = 0
 
+        # Auth expiry detection (Day 3)
+        self._auth_expired_at: float = 0.0
+        self._auth_expired_callback = None
+
         # 5.8: Execution timeouts — strict 500ms default on ALL REST calls.
         timeout_sec = float(config.get("timeout_sec", 0.5))
         self.timeout = aiohttp.ClientTimeout(total=timeout_sec)
@@ -50,6 +54,16 @@ class LighterRealClient:
         # 5.11: API failover — primary + optional secondary URLs.
         self.api_urls: List[str] = config.get("api_urls") or [self.api_url]
         self.ws_urls: List[str] = config.get("ws_urls") or []
+
+    def set_auth_expired_callback(self, callback):
+        """Register async callback for auth expiry detection."""
+        self._auth_expired_callback = callback
+
+    def is_auth_expired(self) -> bool:
+        return self._auth_expired_at > 0.0
+
+    def clear_auth_expired(self):
+        self._auth_expired_at = 0.0
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
@@ -404,6 +418,18 @@ class LighterRealClient:
                 payload = await resp.json(content_type=None)
             except Exception:
                 payload = None
+
+            # Auth expiry detection (Day 3)
+            if status in (401, 403):
+                self._auth_expired_at = time.monotonic()
+                logger.critical("Auth token expired: HTTP %d from %s", status, url)
+                if self._auth_expired_callback:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(self._auth_expired_callback())
+                    except RuntimeError:
+                        pass  # No running loop (e.g. tests without event loop)
+
             if payload is None:
                 return status, None, await resp.text()
             return status, payload, ""

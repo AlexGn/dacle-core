@@ -1742,3 +1742,75 @@ def check_scalper_health(
         )
 
     return None
+
+
+def check_scalper_counters(
+    counters: dict,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check scalper counter thresholds for operational anomalies.
+
+    Pure function: zero I/O, zero side effects.
+
+    Args:
+        counters: Dict from GET /api/scalping/counters (schema_version 1).
+    """
+    # Priority 1: External close detected (most severe operational event)
+    if counters.get("reconcile_external_close_detected", 0) > 0:
+        return HeartbeatAlert(
+            check_name="scalper_counters",
+            channel="focus",
+            message=(
+                f"[SCALPER] External close detected "
+                f"({counters['reconcile_external_close_detected']}x)"
+            ),
+            severity="warning",
+        )
+
+    # Priority 2: Auth emergency refresh
+    if counters.get("auth_emergency_refresh_count", 0) > 0:
+        return HeartbeatAlert(
+            check_name="scalper_counters",
+            channel="focus",
+            message=(
+                f"[SCALPER] Emergency auth refresh triggered "
+                f"({counters['auth_emergency_refresh_count']}x)"
+            ),
+            severity="warning",
+        )
+
+    # Priority 3: Possible chasing (high cooldown blocks)
+    if counters.get("cooldown_block_count", 0) > 50:
+        return HeartbeatAlert(
+            check_name="scalper_counters",
+            channel="focus",
+            message=(
+                f"[SCALPER] Possible chasing — "
+                f"{counters['cooldown_block_count']} cooldown blocks"
+            ),
+            severity="warning",
+        )
+
+    # Priority 4: Low margin warning (only with fresh balance data)
+    balance = counters.get("usdc_balance")
+    source = counters.get("usdc_balance_source", "unknown")
+    updated_at = counters.get("usdc_balance_updated_at", 0)
+    snapshot_ts = counters.get("timestamp", 0)
+    if (
+        balance is not None
+        and source in ("live", "cache")
+        and snapshot_ts > 0
+        and (snapshot_ts - updated_at) < 120
+        and balance < 250
+    ):
+        return HeartbeatAlert(
+            check_name="scalper_counters",
+            channel="focus",
+            message=(
+                f"[SCALPER] Low margin — USDC balance ${balance:.0f} "
+                f"(risk of Insufficient Balance rejections)"
+            ),
+            severity="warning",
+        )
+
+    return None
