@@ -1662,3 +1662,83 @@ def check_near_miss_opportunities(
         severity="warning",
         meta={"near_misses": actionable},
     )
+
+
+# =============================================================================
+# Scalper Daemon Health Check (Session 445)
+# =============================================================================
+
+# Token TTL threshold: warn when remaining seconds drops below this
+SCALPER_TOKEN_TTL_WARN_SEC = 300
+
+
+def check_scalper_health(
+    scalper_data: dict,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check scalper daemon health: running, token fresh, audit passing.
+
+    Pure function: zero I/O, zero side effects.
+
+    Args:
+        scalper_data: Dict with keys:
+            - is_running: bool (systemd active)
+            - token_ttl_sec: float (remaining auth token TTL)
+            - ghost_last_error: Optional[str]
+            - circuit_breaker_open: bool
+            - fill_count_24h: int
+
+    Returns:
+        HeartbeatAlert if unhealthy, None if all good.
+    """
+    # Priority 1: Daemon not running (most critical)
+    if not scalper_data.get("is_running", False):
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message="[SCALPER] Scalper daemon is DOWN",
+            severity="critical",
+        )
+
+    # Priority 2: Token expired (TTL <= 0)
+    token_ttl = scalper_data.get("token_ttl_sec", 0)
+    if token_ttl <= 0:
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message="[SCALPER] Scalper auth token EXPIRED",
+            severity="critical",
+        )
+
+    # Priority 3: Circuit breaker open
+    if scalper_data.get("circuit_breaker_open", False):
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message="[SCALPER] Scalper circuit breaker is OPEN",
+            severity="critical",
+        )
+
+    # Priority 4: Token expiring soon (< 300s)
+    if token_ttl < SCALPER_TOKEN_TTL_WARN_SEC:
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message=(
+                f"[SCALPER] Scalper auth token expiring soon "
+                f"({token_ttl:.0f}s remaining)"
+            ),
+            severity="warning",
+        )
+
+    # Priority 5: GhostSweeper error
+    ghost_error = scalper_data.get("ghost_last_error")
+    if ghost_error:
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message=f"[SCALPER] GhostSweeper error: {ghost_error}",
+            severity="warning",
+        )
+
+    return None
