@@ -31,6 +31,13 @@ DISAMBIGUATION_PATH = PROJECT_ROOT / "data" / "bot" / "token_disambiguation.json
 def _get_api_base_url() -> str:
     """Resolve API base URL at call time (after load_config)."""
     return os.getenv("DACLE_API_URL", "http://localhost:8000")
+
+
+def _api_headers() -> Dict[str, str]:
+    api_key = os.getenv("DACLE_API_KEY", "").strip()
+    return {"X-API-Key": api_key} if api_key else {}
+
+
 DEFAULT_ANALYSIS_CHANNEL_ID = 1470403542253703369
 
 REQUIRED_FIELDS = {
@@ -228,7 +235,7 @@ class AnalysisCommands(commands.Cog):
             
             # 1. Gather Data (The Specialists)
             data = {}
-            async with httpx.AsyncClient(timeout=25.0) as client:
+            async with httpx.AsyncClient(timeout=25.0, headers=_api_headers()) as client:
                 try:
                     logger.info(f"AUDIT_FETCH: Calling Market Specialist API")
                     r = await client.get(f"{api_base}/api/macro/market-direction")
@@ -446,7 +453,7 @@ class AnalysisCommands(commands.Cog):
     def _search_token(self, symbol: str) -> List[Dict[str, Any]]:
         api_base = _get_api_base_url()
         url = f"{api_base}/api/tokens/search"
-        resp = requests.post(url, json={"symbol": symbol.upper()}, timeout=15)
+        resp = requests.post(url, json={"symbol": symbol.upper()}, headers=_api_headers(), timeout=15)
         resp.raise_for_status()
         payload = resp.json() or {}
         return payload.get("matches") or []
@@ -454,7 +461,7 @@ class AnalysisCommands(commands.Cog):
     def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
         api_base = _get_api_base_url()
         url = f"{api_base}/api/tokens/research"
-        resp = requests.post(url, json={"symbol": symbol.upper(), "name": name}, timeout=20)
+        resp = requests.post(url, json={"symbol": symbol.upper(), "name": name}, headers=_api_headers(), timeout=20)
         resp.raise_for_status()
         payload = resp.json()
         task_id = payload.get("task_id")
@@ -464,7 +471,7 @@ class AnalysisCommands(commands.Cog):
         status_url = f"{api_base}/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            status_resp = requests.get(status_url, timeout=15)
+            status_resp = requests.get(status_url, headers=_api_headers(), timeout=15)
             if status_resp.status_code == 404:
                 time.sleep(2)
                 continue
@@ -483,7 +490,7 @@ class AnalysisCommands(commands.Cog):
         """Trigger token refetch and wait for completion."""
         api_base = _get_api_base_url()
         url = f"{api_base}/api/tokens/{symbol}/refetch"
-        resp = requests.post(url, params={"force": "true", "auto_analyze": "false"}, timeout=15)
+        resp = requests.post(url, params={"force": "true", "auto_analyze": "false"}, headers=_api_headers(), timeout=15)
         resp.raise_for_status()
         payload = resp.json()
         task_id = payload.get("task_id")
@@ -493,7 +500,7 @@ class AnalysisCommands(commands.Cog):
         status_url = f"{api_base}/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            status_resp = requests.get(status_url, timeout=15)
+            status_resp = requests.get(status_url, headers=_api_headers(), timeout=15)
             if status_resp.status_code == 404:
                 time.sleep(2)
                 continue

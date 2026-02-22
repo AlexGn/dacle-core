@@ -17,6 +17,11 @@ from discord.ext import commands
 logger = get_logger(__name__)
 
 
+def _api_headers() -> dict[str, str]:
+    api_key = os.getenv("DACLE_API_KEY", "").strip()
+    return {"X-API-Key": api_key} if api_key else {}
+
+
 def format_scan_output(
     positions: List[Dict[str, Any]],
     tokens: List[Dict[str, Any]],
@@ -114,7 +119,7 @@ class ScanCog(commands.Cog):
             api_url = os.getenv("DACLE_API_URL", "http://localhost:8000")
             positions = []
             try:
-                async with httpx.AsyncClient(timeout=10) as client:
+                async with httpx.AsyncClient(timeout=10, headers=_api_headers()) as client:
                     resp = await client.get(f"{api_url}/api/blofin/positions")
                     if resp.status_code == 200:
                         body = resp.json()

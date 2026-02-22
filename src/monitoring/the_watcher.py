@@ -14,6 +14,8 @@ logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 API_BASE_URL = os.getenv("DACLE_API_URL", "http://localhost:8000")
+API_KEY = os.getenv("DACLE_API_KEY", "").strip()
+API_HEADERS = {"X-API-Key": API_KEY} if API_KEY else {}
 TRADES_CHANNEL_ID = 1468948950412431598 # #trades
 
 class TheWatcher:
@@ -24,7 +26,7 @@ class TheWatcher:
 
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
-        self.client = httpx.AsyncClient(timeout=30.0)
+        self.client = httpx.AsyncClient(timeout=30.0, headers=API_HEADERS)
         self.state_file = PROJECT_ROOT / "data" / "state" / "watcher_state.json"
         self._load_state()
 
