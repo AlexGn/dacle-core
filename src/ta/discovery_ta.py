@@ -29,6 +29,13 @@ class DiscoveryTAResult:
     # Market structure
     market_structure: str = "unknown"  # bearish / bullish / ranging
 
+    # SMC Details (Phase 11 Integration)
+    choch_direction: Optional[str] = None  # bullish / bearish
+    bos_direction: Optional[str] = None    # bullish / bearish
+    smc_fakeout_risk: bool = False
+    smc_structural_confirmation: bool = False
+    fvg_proximity_pct: Optional[float] = None
+
     # EMA alignment
     ema_alignment: str = "unknown"  # bearish / bullish / choppy
     ema_200_distance_pct: float = 0.0
@@ -68,6 +75,11 @@ class DiscoveryTAResult:
             "status": self.status,
             "error": self.error,
             "market_structure": self.market_structure,
+            "choch_direction": self.choch_direction,
+            "bos_direction": self.bos_direction,
+            "smc_fakeout_risk": self.smc_fakeout_risk,
+            "smc_structural_confirmation": self.smc_structural_confirmation,
+            "fvg_proximity_pct": self.fvg_proximity_pct,
             "ema_alignment": self.ema_alignment,
             "ema_200_distance_pct": round(self.ema_200_distance_pct, 2),
             "rsi_14": round(self.rsi_14, 1),
@@ -137,16 +149,27 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
     current_price = ohlcv[-1][4]  # Last close
 
     # Step 2: Run all analysis modules (each gracefully handles errors)
-    # Market structure
-    ms_data = _compute_market_structure(symbol, timeframe)
+    # Market structure (Refined SMC)
+    ms_data = _compute_market_structure(symbol, timeframe, ohlcv=ohlcv)
     if ms_data:
-        bias = ms_data.get("market_structure_bias", "").lower()
-        if "bearish" in bias:
-            result.market_structure = "bearish"
-        elif "bullish" in bias:
-            result.market_structure = "bullish"
-        else:
-            result.market_structure = "ranging"
+        # Fix contract bug: Analyzer returns 'current_structure' (Step 1 of checklist)
+        result.market_structure = ms_data.get("current_structure", "ranging")
+        
+        # Extract SMC details (Step 2 of checklist)
+        choch = ms_data.get("choch_details")
+        if choch:
+            result.choch_direction = choch.get("direction")
+            
+        bos = ms_data.get("bos_details")
+        if bos:
+            result.bos_direction = bos.get("direction")
+            
+        # FVG magnet strength
+        fvg = ms_data.get("nearest_bearish_fvg") or ms_data.get("nearest_bullish_fvg")
+        if fvg:
+            fvg_price = fvg.get("midpoint")
+            if fvg_price and current_price > 0:
+                result.fvg_proximity_pct = abs(current_price - fvg_price) / current_price * 100
 
     # EMAs
     ema_data = _compute_emas(ohlcv)
@@ -189,13 +212,23 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
     tvem_data = _compute_tvem(ohlcv)
     result.tvem_signal = tvem_data.get("signal", "NEUTRAL")
 
-    # Step 3: Derive ta_bias and ta_confidence
+    # Step 3: Derive ta_bias and ta_confidence (SMC-Hardened)
     _compute_bias_and_confidence(result)
+
+    # Step 4: Final SMC Status Flags (Step 2 of checklist)
+    # Determine if structure confirms or contradicts the technical bias
+    if result.ta_bias == "LONG_ALIGNED":
+        result.smc_structural_confirmation = (result.bos_direction == "bullish")
+        result.smc_fakeout_risk = (result.choch_direction == "bearish")
+    elif result.ta_bias == "SHORT_ALIGNED":
+        result.smc_structural_confirmation = (result.bos_direction == "bearish")
+        result.smc_fakeout_risk = (result.choch_direction == "bullish")
 
     logger.info(
         f"Discovery TA for {symbol}: bias={result.ta_bias}, "
-        f"confidence={result.ta_confidence:.2f}, structure={result.market_structure}, "
-        f"ema={result.ema_alignment}, rsi={result.rsi_14:.1f}"
+        f"conf={result.ta_confidence:.2f}, struct={result.market_structure}, "
+        f"BOS={result.bos_direction}, CHoCH={result.choch_direction}, "
+        f"fakeout={result.smc_fakeout_risk}"
     )
 
     return result
@@ -212,7 +245,7 @@ def _compute_bias_and_confidence(result: DiscoveryTAResult) -> None:
     bullish_signals = 0
     total_factors = 0
 
-    # Market structure
+    # 1. Market structure (High Weight)
     if result.market_structure in ("bearish", "bullish"):
         total_factors += 1
         if result.market_structure == "bearish":
@@ -220,7 +253,15 @@ def _compute_bias_and_confidence(result: DiscoveryTAResult) -> None:
         else:
             bullish_signals += 1
 
-    # EMA alignment
+    # 2. SMC - BOS (Highest Weight Confirmation)
+    if result.bos_direction in ("bullish", "bearish"):
+        total_factors += 1
+        if result.bos_direction == "bearish":
+            bearish_signals += 1
+        else:
+            bullish_signals += 1
+
+    # 3. EMA alignment
     if result.ema_alignment in ("bearish", "bullish"):
         total_factors += 1
         if result.ema_alignment == "bearish":
@@ -228,7 +269,7 @@ def _compute_bias_and_confidence(result: DiscoveryTAResult) -> None:
         else:
             bullish_signals += 1
 
-    # RSI
+    # 4. RSI
     if result.rsi_14 < 30 or result.rsi_14 > 70:
         total_factors += 1
         if result.rsi_14 > 70:
@@ -236,7 +277,7 @@ def _compute_bias_and_confidence(result: DiscoveryTAResult) -> None:
         else:
             bullish_signals += 1  # Oversold = bullish
 
-    # Patterns
+    # 5. Patterns
     if result.bearish_patterns > 0 or result.bullish_patterns > 0:
         total_factors += 1
         if result.bearish_patterns > result.bullish_patterns:
@@ -244,31 +285,13 @@ def _compute_bias_and_confidence(result: DiscoveryTAResult) -> None:
         elif result.bullish_patterns > result.bearish_patterns:
             bullish_signals += 1
 
-    # TVEM signal
+    # 6. TVEM signal
     if result.tvem_signal in ("BULLISH", "BEARISH"):
         total_factors += 1
         if result.tvem_signal == "BEARISH":
             bearish_signals += 1
         else:
             bullish_signals += 1
-
-    # Volume profile zone
-    zone = result.volume_profile_zone.upper()
-    if "BEARISH" in zone or "BULLISH" in zone:
-        total_factors += 1
-        if "BEARISH" in zone:
-            bearish_signals += 1
-        else:
-            bullish_signals += 1
-
-    # Volume Ratio (Momentum Confirmation)
-    if result.volume_ratio >= 2.0:
-        if result.market_structure in ("bearish", "bullish"):
-            total_factors += 1
-            if result.market_structure == "bearish":
-                bearish_signals += 1
-            else:
-                bullish_signals += 1
 
     # Derive bias
     if total_factors == 0:
@@ -287,3 +310,9 @@ def _compute_bias_and_confidence(result: DiscoveryTAResult) -> None:
         aligned = 0
 
     result.ta_confidence = aligned / total_factors if total_factors > 0 else 0.0
+
+    # Institutional Fakeout Logic: Force low confidence if CHoCH opposes the bias
+    if result.ta_bias == "LONG_ALIGNED" and result.choch_direction == "bearish":
+        result.ta_confidence = min(result.ta_confidence, 0.35)
+    elif result.ta_bias == "SHORT_ALIGNED" and result.choch_direction == "bullish":
+        result.ta_confidence = min(result.ta_confidence, 0.35)
