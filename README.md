@@ -51,7 +51,7 @@ See [CLAUDE.md](CLAUDE.md) for current system status.
 
 Production SHADOW hardening is now live on VPS with managed service + watchdogs.
 
-- **Service**: `dacle-scalper-shadow.service` (systemd, restart policy, isolated log)
+- **Service**: `dacle-scalper.service` (systemd, restart policy, isolated log)
 - **Token refresh**: `scripts/scalping/refresh_auth_token.py` (atomic `.env` update, preflight-compatible)
 - **WS guardrails**: 1008 close-code burst detection in daemon + cron checker
 - **Audit guardrails**: post-run artifact validator (state freshness + CSV idempotency/duplicates)
