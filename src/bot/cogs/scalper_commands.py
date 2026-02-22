@@ -21,7 +21,14 @@ class ScalperCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.api_url = os.getenv("DACLE_API_URL", "http://localhost:8000")
+        self.api_key = os.getenv("DACLE_API_KEY", "").strip()
         logger.info("ScalperCommands cog initialized")
+
+    def _build_api_headers(self) -> dict:
+        headers = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
 
     @app_commands.command(name="scalper", description="Show Lighter DEX scalper status and PnL")
     async def scalper_slash(self, interaction: discord.Interaction):
@@ -31,6 +38,7 @@ class ScalperCommands(commands.Cog):
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self.api_url}/api/scalping/status",
+                    headers=self._build_api_headers(),
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     if resp.status != 200:

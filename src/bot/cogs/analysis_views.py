@@ -23,6 +23,11 @@ TRADES_CHANNEL_ID = 1468948950412431598
 API_BASE_URL = os.getenv("DACLE_API_URL", "http://localhost:8000")
 
 
+def _api_headers() -> dict:
+    api_key = os.getenv("DACLE_API_KEY", "").strip()
+    return {"X-API-Key": api_key} if api_key else {}
+
+
 def _load_execution_state(symbol: str, direction: str) -> Optional[dict]:
     """Load playbook execution state for a token."""
     token_dir = TOKENS_DIR / symbol.upper()
@@ -218,7 +223,7 @@ class SetLevelsModal(discord.ui.Modal):
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"{API_BASE_URL}/api/execution/levels"
-                async with session.post(url, json=payload) as response:
+                async with session.post(url, json=payload, headers=_api_headers()) as response:
                     if response.status == 422:
                         error_data = await response.json()
                         detail = error_data.get("detail", "Validation error")
@@ -380,7 +385,7 @@ class TradeApprovalView(discord.ui.View):
         try:
             async with aiohttp.ClientSession() as session:
                 url = f"{API_BASE_URL}/api/tokens/research/{self.symbol}/refresh"
-                async with session.post(url) as resp:
+                async with session.post(url, headers=_api_headers()) as resp:
                     if resp.status in (200, 202):
                         await interaction.followup.send(
                             f"🔄 Data refresh triggered for **{self.symbol}**. "
@@ -479,7 +484,7 @@ class AuditExecutionView(discord.ui.View):
                         "result": "WATCHING", # Special status for active trades
                         "key_feedback": f"Auto-executed via Deep Audit. Conviction: {self.conviction}/10"
                     }
-                    async with session.post(url, data=payload) as resp:
+                    async with session.post(url, data=payload, headers=_api_headers()) as resp:
                         pass
             except: pass
 
@@ -491,4 +496,3 @@ class AuditExecutionView(discord.ui.View):
         for child in self.children:
             child.disabled = True
         await interaction.edit_original_response(view=self)
-

@@ -26,6 +26,11 @@ def _get_api_base_url() -> str:
     return os.getenv("DACLE_API_URL", "http://localhost:8000")
 
 
+def _get_api_headers() -> dict:
+    api_key = os.getenv("DACLE_API_KEY", "").strip()
+    return {"X-API-Key": api_key} if api_key else {}
+
+
 def _load_execution_state(symbol: str, direction: str) -> Optional[dict]:
     """Load playbook execution state for a token."""
     token_dir = TOKENS_DIR / symbol.upper()
@@ -149,7 +154,10 @@ class TACardView(discord.ui.View):
             async with aiohttp.ClientSession() as session:
                 url = f"{api_base}/api/ta/card/{self.symbol}"
                 async with session.get(
-                    url, params=params, timeout=aiohttp.ClientTimeout(total=60)
+                    url,
+                    params=params,
+                    headers=_get_api_headers(),
+                    timeout=aiohttp.ClientTimeout(total=60),
                 ) as resp:
                     if resp.status != 200:
                         error_data = await resp.json()
@@ -205,7 +213,10 @@ class TACardView(discord.ui.View):
             async with aiohttp.ClientSession() as session:
                 url = f"{api_base}/api/ta/card/{self.symbol}"
                 async with session.get(
-                    url, params=params, timeout=aiohttp.ClientTimeout(total=60)
+                    url,
+                    params=params,
+                    headers=_get_api_headers(),
+                    timeout=aiohttp.ClientTimeout(total=60),
                 ) as resp:
                     if resp.status != 200:
                         error_data = await resp.json()

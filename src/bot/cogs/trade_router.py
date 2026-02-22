@@ -39,7 +39,14 @@ class TradeRouter(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.api_url = os.getenv("DACLE_API_URL", "http://localhost:8000")
+        self.api_key = os.getenv("DACLE_API_KEY", "").strip()
         logger.info("TradeRouter cog initialized")
+
+    def _build_api_headers(self) -> Dict[str, str]:
+        headers: Dict[str, str] = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
 
     def parse_setup(self, content: str) -> Optional[Dict[str, Any]]:
         symbol_match = SYMBOL_PATTERN.search(content)
@@ -97,7 +104,7 @@ class TradeRouter(commands.Cog):
         url = f"{self.api_url}/api/execution/pre-trade-check"
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=setup) as response:
+                async with session.post(url, json=setup, headers=self._build_api_headers()) as response:
                     if response.status == 200:
                         return await response.json()
                     else:
@@ -210,7 +217,7 @@ class TradeRouter(commands.Cog):
                 try:
                     url = f"{self.api_url}/api/tokens/{setup['token']}/live-price"
                     async with aiohttp.ClientSession() as session:
-                        async with session.get(url) as resp:
+                        async with session.get(url, headers=self._build_api_headers()) as resp:
                             if resp.status == 200:
                                 data = await resp.json()
                                 current = data.get("price")
@@ -443,7 +450,7 @@ class TradeRouter(commands.Cog):
         try:
             url = f"{self.api_url}/api/execution/levels"
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload) as response:
+                async with session.post(url, json=payload, headers=self._build_api_headers()) as response:
                     if response.status == 422:
                         error_data = await response.json()
                         detail = error_data.get("detail", "Validation error")

@@ -42,7 +42,14 @@ class PositionCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.api_url = os.getenv("DACLE_API_URL", "http://localhost:8000")
+        self.api_key = os.getenv("DACLE_API_KEY", "").strip()
         logger.info("PositionCommands cog initialized")
+
+    def _build_api_headers(self) -> dict:
+        headers = {}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
 
     @app_commands.command(name="positions", description="Show live Blofin positions with P&L")
     async def positions(self, interaction: discord.Interaction):
@@ -52,7 +59,9 @@ class PositionCommands(commands.Cog):
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{self.api_url}/api/blofin/positions", timeout=aiohttp.ClientTimeout(total=10)
+                    f"{self.api_url}/api/blofin/positions",
+                    headers=self._build_api_headers(),
+                    timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status != 200:
                         await interaction.followup.send(
@@ -137,6 +146,7 @@ class PositionCommands(commands.Cog):
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self.api_url}/api/scalping/status",
+                    headers=self._build_api_headers(),
                     timeout=aiohttp.ClientTimeout(total=3),
                 ) as resp:
                     if resp.status == 200:
