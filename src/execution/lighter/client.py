@@ -509,6 +509,19 @@ class LighterRealClient:
         except (TypeError, ValueError):
             return default
 
+    def _to_bool(self, value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                return True
+            if normalized in {"0", "false", "no", "off"}:
+                return False
+        return None
+
     async def get_balance(self) -> dict:
         """Fetch account balance via REST.
 
@@ -643,6 +656,113 @@ class LighterRealClient:
         except Exception as e:
             logger.error(f"Nonce fetch error: {e}")
             return {"status": "error", "error": str(e)}
+
+    async def preflight_live_readiness(self) -> Dict[str, Any]:
+        """Validate auth token and infer whether account permissions allow trading."""
+        if self._is_shadow_mode():
+            return {"status": "success", "auth_ok": True, "can_trade": True, "detail": "shadow_mode"}
+        if not self.signer:
+            return {"status": "error", "auth_ok": False, "can_trade": False, "detail": "missing signer"}
+        if not str(self.auth_token or "").strip():
+            return {"status": "error", "auth_ok": False, "can_trade": False, "detail": "missing auth token"}
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                account_index, idx_err = await self._resolve_account_index(session)
+                if idx_err:
+                    return {"status": "error", "auth_ok": False, "can_trade": False, "detail": idx_err}
+
+                trades = await self._fetch_account_trades(
+                    session=session,
+                    account_index=account_index,
+                    cursor=None,
+                    limit=1,
+                )
+                if trades.get("status") != "success":
+                    return {
+                        "status": "error",
+                        "auth_ok": False,
+                        "can_trade": False,
+                        "detail": trades.get("error", "trades auth check failed"),
+                    }
+
+                permission = await self._infer_account_trade_permission(
+                    session=session,
+                    account_index=int(account_index),
+                )
+                can_trade = bool(permission.get("can_trade", True))
+                detail = str(permission.get("detail", "ok"))
+                return {
+                    "status": "success" if can_trade else "error",
+                    "auth_ok": True,
+                    "can_trade": can_trade,
+                    "detail": detail,
+                    "account_index": int(account_index),
+                }
+        except Exception as e:
+            return {"status": "error", "auth_ok": False, "can_trade": False, "detail": str(e)}
+
+    async def _infer_account_trade_permission(
+        self,
+        session: aiohttp.ClientSession,
+        account_index: int,
+    ) -> Dict[str, Any]:
+        if not self.signer or not self.signer.address:
+            return {"can_trade": False, "detail": "missing signer address"}
+
+        url = f"{self.api_url}/accountsByL1Address"
+        status, payload, err_text = await self._get_json(
+            session,
+            url,
+            params={"l1_address": self.signer.address},
+        )
+        if status != 200 or not isinstance(payload, dict):
+            detail = self._extract_error_message(payload) or err_text or "account permission lookup failed"
+            return {"can_trade": False, "detail": detail}
+
+        sub_accounts = payload.get("sub_accounts")
+        if not isinstance(sub_accounts, list):
+            return {"can_trade": False, "detail": "account permission payload missing sub_accounts"}
+
+        chosen = None
+        for account in sub_accounts:
+            if not isinstance(account, dict):
+                continue
+            if self._to_int(account.get("index")) == int(account_index):
+                chosen = account
+                break
+
+        if not isinstance(chosen, dict):
+            return {"can_trade": False, "detail": "resolved account index missing in account lookup"}
+
+        # Fail closed if explicit read-only flags are present.
+        for key in ("read_only", "is_read_only", "readonly", "trade_disabled", "is_trade_disabled"):
+            if key in chosen and self._to_bool(chosen.get(key)) is True:
+                return {"can_trade": False, "detail": f"{key}=true"}
+
+        for key in ("can_trade", "trade_enabled", "is_trade_enabled", "write_enabled", "can_write"):
+            value = self._to_bool(chosen.get(key))
+            if value is False:
+                return {"can_trade": False, "detail": f"{key}=false"}
+
+        permissions = chosen.get("permissions")
+        if isinstance(permissions, str):
+            normalized = permissions.strip().lower()
+            if "read_only" in normalized or normalized == "read":
+                return {"can_trade": False, "detail": f"permissions={permissions}"}
+        if isinstance(permissions, list):
+            normalized_items = {str(item).strip().lower() for item in permissions}
+            if "read_only" in normalized_items:
+                return {"can_trade": False, "detail": "permissions include read_only"}
+            if "trade" not in normalized_items and "write" not in normalized_items and "read" in normalized_items:
+                return {"can_trade": False, "detail": "permissions missing trade/write"}
+        if isinstance(permissions, dict):
+            for key in ("can_trade", "trade_enabled", "write_enabled"):
+                value = self._to_bool(permissions.get(key))
+                if value is False:
+                    return {"can_trade": False, "detail": f"permissions.{key}=false"}
+
+        return {"can_trade": True, "detail": "ok"}
 
     async def cancel_order(self, order_id: Any, nonce: int) -> dict:
         """
