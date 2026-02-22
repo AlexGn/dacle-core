@@ -19,6 +19,13 @@ logger = logging.getLogger(__name__)
 # Errors that warrant failover to a secondary API URL.
 _FAILOVER_ERRORS = (asyncio.TimeoutError, aiohttp.ClientConnectionError, aiohttp.ServerDisconnectedError)
 
+# Valid order types and their Lighter API timeInForce mapping.
+_ORDER_TYPE_TO_TIF = {
+    "IOC": "IOC",
+    "LIMIT": "GTC",
+    "POST_ONLY": "POST_ONLY",
+}
+
 
 class LighterRealClient:
     def __init__(self, config: dict, signer: Optional[LighterSigner] = None):
@@ -47,7 +54,7 @@ class LighterRealClient:
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
 
-    def _build_shadow_ack(self, symbol: str, side: str, price: float, qty: float, nonce: int) -> dict:
+    def _build_shadow_ack(self, symbol: str, side: str, price: float, qty: float, nonce: int, order_type: str = "IOC") -> dict:
         self._shadow_order_counter += 1
         now_ms = int(time.time() * 1000)
         return {
@@ -61,6 +68,7 @@ class LighterRealClient:
             "size": str(qty),
             "nonce": nonce,
             "timestamp": now_ms,
+            "order_type": order_type,
         }
 
     async def create_order(
@@ -70,13 +78,29 @@ class LighterRealClient:
         price: float,
         qty: float,
         nonce: int,
+        order_type: str = "IOC",
     ) -> dict:
         """
-        Creates an authenticated IOC order on Lighter.xyz.
+        Creates an authenticated order on Lighter.xyz.
+
+        Args:
+            order_type: One of "IOC", "LIMIT", or "POST_ONLY".
+                        IOC   -> timeInForce "IOC"   (immediate-or-cancel, taker)
+                        LIMIT -> timeInForce "GTC"   (good-till-cancelled, maker/taker)
+                        POST_ONLY -> timeInForce "POST_ONLY" (maker-only, better fees)
+
         In SHADOW mode this function fail-closes by returning a mock ack before any network I/O.
         """
+        order_type = order_type.upper() if order_type else "IOC"
+        tif = _ORDER_TYPE_TO_TIF.get(order_type)
+        if tif is None:
+            return {
+                "status": "error",
+                "error": f"Invalid order_type '{order_type}'. Must be one of: {', '.join(_ORDER_TYPE_TO_TIF)}",
+            }
+
         if self._is_shadow_mode():
-            return self._build_shadow_ack(symbol, side, price, qty, nonce)
+            return self._build_shadow_ack(symbol, side, price, qty, nonce, order_type=order_type)
 
         if not self.signer:
             return {"status": "error", "error": "No signer provided for LIVE mode."}
@@ -103,7 +127,7 @@ class LighterRealClient:
             "size": str(qty),
             "nonce": nonce,
             "signature": signature,
-            "timeInForce": "IOC",
+            "timeInForce": tif,
         }
 
         # 5.10: Include deadline in REST payload when enabled.
