@@ -1687,9 +1687,11 @@ def check_scalper_health(
             - ghost_last_error: Optional[str]
             - circuit_breaker_open: bool
             - fill_count_24h: int
-
-    Returns:
-        HeartbeatAlert if unhealthy, None if all good.
+            - kill_active: bool
+            - kill_reason: str
+            - stale: bool
+            - sync_degraded: bool
+            - permission_stale: bool
     """
     # Priority 1: Daemon not running (most critical)
     if not scalper_data.get("is_running", False):
@@ -1710,16 +1712,7 @@ def check_scalper_health(
             severity="critical",
         )
 
-    # Priority 3: Contract/sync staleness
-    if scalper_data.get("stale") is True:
-        return HeartbeatAlert(
-            check_name="scalper_health",
-            channel="focus",
-            message="[SCALPER] Scalper permission/sync state is STALE",
-            severity="critical",
-        )
-
-    # Priority 4: Kill switch active
+    # Priority 3: Kill switch active (P0-B)
     if scalper_data.get("kill_active") is True:
         reason = str(scalper_data.get("kill_reason") or "unspecified")
         return HeartbeatAlert(
@@ -1729,7 +1722,32 @@ def check_scalper_health(
             severity="warning",
         )
 
-    # Priority 5: Circuit breaker open
+    # Priority 4: Sync degradation (Phase 3)
+    if scalper_data.get("sync_degraded") is True:
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message="[SCALPER] Redis sync DEGRADED (5+ misses) — system in fail-closed mode",
+            severity="critical",
+        )
+
+    # Priority 5: Brain/Hands Desync (Phase 4)
+    if scalper_data.get("stale") is True:
+        context = []
+        if scalper_data.get("permission_stale"):
+            context.append("permission stale")
+        if scalper_data.get("daemon_sync_age_sec", 0) > 2.0:
+            context.append(f"daemon sync age {scalper_data.get('daemon_sync_age_sec'):.1f}s")
+        
+        ctx_str = f" ({', '.join(context)})" if context else ""
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message=f"[SCALPER] Brain/Hands desync detected{ctx_str}",
+            severity="critical",
+        )
+
+    # Priority 6: Circuit breaker open
     if scalper_data.get("circuit_breaker_open", False):
         return HeartbeatAlert(
             check_name="scalper_health",
@@ -1738,7 +1756,7 @@ def check_scalper_health(
             severity="critical",
         )
 
-    # Priority 6: Token expiring soon (< 300s)
+    # Priority 7: Token expiring soon (< 300s)
     if token_ttl < SCALPER_TOKEN_TTL_WARN_SEC:
         return HeartbeatAlert(
             check_name="scalper_health",
@@ -1750,13 +1768,43 @@ def check_scalper_health(
             severity="warning",
         )
 
-    # Priority 7: GhostSweeper error
-    ghost_error = scalper_data.get("ghost_last_error")
-    if ghost_error:
+    return None
+
+
+def check_permission_writer_freshness(
+    events_path: str,
+    max_age_sec: float = 120.0,
+    now: Optional[datetime] = None,
+) -> Optional[HeartbeatAlert]:
+    """
+    Check if the permission writer event log is fresh (Phase 4).
+    Detects writer death even if Redis keys are technically still present.
+    """
+    path = Path(events_path)
+    if not path.exists():
         return HeartbeatAlert(
-            check_name="scalper_health",
-            channel="focus",
-            message=f"[SCALPER] GhostSweeper error: {ghost_error}",
+            check_name="writer_freshness",
+            channel="logs",
+            message="[SCALPER] Permission writer event log missing",
+            severity="warning",
+        )
+
+    ts_now = now or datetime.now(timezone.utc)
+    try:
+        mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        age = (ts_now - mtime).total_seconds()
+        if age > max_age_sec:
+            return HeartbeatAlert(
+                check_name="writer_freshness",
+                channel="focus",
+                message=f"[SCALPER] Permission writer is DEAD (log age {age:.0f}s > {max_age_sec}s)",
+                severity="critical",
+            )
+    except Exception as e:
+        return HeartbeatAlert(
+            check_name="writer_freshness",
+            channel="logs",
+            message=f"[SCALPER] Permission writer freshness check failed: {e}",
             severity="warning",
         )
 

@@ -59,32 +59,47 @@ class ScalperCommands(commands.Cog):
         """Build Discord embed from scalper status data. Pure function for testability."""
         is_running = data.get("is_running", False)
         mode = data.get("mode", "UNKNOWN")
+        kill_active = bool(data.get("kill_active"))
+        kill_reason = str(data.get("kill_reason") or "")
+        stale = bool(data.get("stale"))
 
-        color = discord.Color.green() if is_running else discord.Color.red()
-        status_icon = "\U0001f7e2" if is_running else "\U0001f534"
+        # Icon and Title Logic
+        if not is_running:
+            color = discord.Color.red()
+            status_icon = "\U0001f534"
+            title_suffix = " \u2014 DOWN"
+        elif kill_active:
+            color = discord.Color.orange()
+            status_icon = "\u23f8\ufe0f" # Pause
+            title_suffix = " \u2014 HALTED"
+        elif stale:
+            color = discord.Color.gold()
+            status_icon = "\u26a0\ufe0f" # Warning
+            title_suffix = " \u2014 UNSAFE"
+        else:
+            color = discord.Color.green()
+            status_icon = "\U0001f7e2"
+            title_suffix = ""
 
         embed = discord.Embed(
-            title=f"{status_icon} Lighter Scalper \u2014 {mode}",
+            title=f"{status_icon} Lighter Scalper \u2014 {mode}{title_suffix}",
             color=color,
         )
 
         # Status section
         circuit = "OPEN \u26a0\ufe0f" if data.get("circuit_breaker_open") else "CLOSED"
-        kill_active = bool(data.get("kill_active"))
-        kill_reason = str(data.get("kill_reason") or "")
-        stale = bool(data.get("stale"))
         token_ttl = data.get("token_ttl_sec")
-        ttl_str = f"{int(token_ttl)}s" if token_ttl is not None else "N/A"
-        status_line = f"Running: {is_running}"
-        if not is_running:
-            status_line = "Running: False"
-        elif kill_active:
-            status_line = f"HALTED: {kill_reason or 'No reason'}"
+        ttl_str = f"{int(token_ttl)}s" if token_ttl is not None and token_ttl >= 0 else "N/A"
+        
+        status_value = f"Running: {is_running}\nCircuit: {circuit}\nToken TTL: {ttl_str}"
+        if kill_active:
+            status_value += f"\n**Kill Switch**: ACTIVE\nReason: {kill_reason or 'No reason'}"
         elif stale:
-            status_line = "UNSAFE: permission/sync stale"
+            status_value += f"\n**Warning**: Sync/Permission Stale"
+        
         embed.add_field(
             name="Status",
-            value=f"{status_line}\nCircuit: {circuit}\nToken TTL: {ttl_str}",
+            value=status_value,
             inline=True,
         )
 
@@ -97,6 +112,7 @@ class ScalperCommands(commands.Cog):
             last_str = last_fill[:19]
         else:
             last_str = "None"
+            
         embed.add_field(
             name="Fills (24h)",
             value=f"Count: {fill_count}\nLast: {last_str}",
@@ -109,8 +125,8 @@ class ScalperCommands(commands.Cog):
         embed.add_field(name="GhostSweeper", value=ghost_str, inline=True)
 
         # Permission
-        perm = data.get("permission", {})
-        if perm:
+        perm = data.get("permission")
+        if isinstance(perm, dict):
             allow = []
             if perm.get("allow_long"):
                 allow.append("LONG")
@@ -118,10 +134,18 @@ class ScalperCommands(commands.Cog):
                 allow.append("SHORT")
             allow_str = ", ".join(allow) if allow else "NONE"
             max_notional = perm.get("max_notional_usd", 0)
+            reason = perm.get("reason", "N/A")
+            
             embed.add_field(
-                name="Permission",
-                value=f"Allowed: {allow_str}\nMax: ${max_notional:.0f}/trade",
-                inline=True,
+                name="Macro Permission",
+                value=f"Allowed: {allow_str}\nMax: ${max_notional:.0f}/trade\nReason: {reason}",
+                inline=False,
+            )
+        else:
+            embed.add_field(
+                name="Macro Permission",
+                value="Waiting for Brain sync...",
+                inline=False,
             )
 
         return embed
