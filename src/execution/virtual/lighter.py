@@ -37,12 +37,13 @@ class VirtualLighter:
         self.nonce_counter = 0
         
     async def create_order(
-        self, 
-        symbol: str, 
-        side: str, 
-        price: float, 
-        qty: float, 
-        nonce: int
+        self,
+        symbol: str,
+        side: str,
+        price: float,
+        qty: float,
+        nonce: int,
+        order_type: str = "IOC",
     ) -> dict:
         """
         Simulates the Lighter Standard Tier order creation.
