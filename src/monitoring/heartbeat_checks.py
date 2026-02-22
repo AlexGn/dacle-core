@@ -1710,7 +1710,26 @@ def check_scalper_health(
             severity="critical",
         )
 
-    # Priority 3: Circuit breaker open
+    # Priority 3: Contract/sync staleness
+    if scalper_data.get("stale") is True:
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message="[SCALPER] Scalper permission/sync state is STALE",
+            severity="critical",
+        )
+
+    # Priority 4: Kill switch active
+    if scalper_data.get("kill_active") is True:
+        reason = str(scalper_data.get("kill_reason") or "unspecified")
+        return HeartbeatAlert(
+            check_name="scalper_health",
+            channel="focus",
+            message=f"[SCALPER] Kill switch active ({reason})",
+            severity="warning",
+        )
+
+    # Priority 5: Circuit breaker open
     if scalper_data.get("circuit_breaker_open", False):
         return HeartbeatAlert(
             check_name="scalper_health",
@@ -1719,7 +1738,7 @@ def check_scalper_health(
             severity="critical",
         )
 
-    # Priority 4: Token expiring soon (< 300s)
+    # Priority 6: Token expiring soon (< 300s)
     if token_ttl < SCALPER_TOKEN_TTL_WARN_SEC:
         return HeartbeatAlert(
             check_name="scalper_health",
@@ -1731,7 +1750,7 @@ def check_scalper_health(
             severity="warning",
         )
 
-    # Priority 5: GhostSweeper error
+    # Priority 7: GhostSweeper error
     ghost_error = scalper_data.get("ghost_last_error")
     if ghost_error:
         return HeartbeatAlert(

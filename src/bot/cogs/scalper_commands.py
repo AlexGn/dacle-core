@@ -38,6 +38,7 @@ class ScalperCommands(commands.Cog):
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self.api_url}/api/scalping/status",
+                    params={"detailed": "true"},
                     headers=self._build_api_headers(),
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
@@ -69,22 +70,33 @@ class ScalperCommands(commands.Cog):
 
         # Status section
         circuit = "OPEN \u26a0\ufe0f" if data.get("circuit_breaker_open") else "CLOSED"
+        kill_active = bool(data.get("kill_active"))
+        kill_reason = str(data.get("kill_reason") or "")
+        stale = bool(data.get("stale"))
         token_ttl = data.get("token_ttl_sec")
         ttl_str = f"{int(token_ttl)}s" if token_ttl is not None else "N/A"
+        status_line = f"Running: {is_running}"
+        if not is_running:
+            status_line = "Running: False"
+        elif kill_active:
+            status_line = f"HALTED: {kill_reason or 'No reason'}"
+        elif stale:
+            status_line = "UNSAFE: permission/sync stale"
         embed.add_field(
             name="Status",
-            value=f"Running: {is_running}\nCircuit: {circuit}\nToken TTL: {ttl_str}",
+            value=f"{status_line}\nCircuit: {circuit}\nToken TTL: {ttl_str}",
             inline=True,
         )
 
         # Fills section
         fill_count = data.get("fill_count_24h", 0)
         last_fill = data.get("last_fill")
-        last_str = (
-            last_fill.get("utc_iso_timestamp", "N/A")[:19]
-            if isinstance(last_fill, dict)
-            else "None"
-        )
+        if isinstance(last_fill, dict):
+            last_str = str(last_fill.get("utc_iso_timestamp", "N/A"))[:19]
+        elif isinstance(last_fill, str):
+            last_str = last_fill[:19]
+        else:
+            last_str = "None"
         embed.add_field(
             name="Fills (24h)",
             value=f"Count: {fill_count}\nLast: {last_str}",
