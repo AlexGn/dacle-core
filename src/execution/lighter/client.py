@@ -66,6 +66,8 @@ class LighterRealClient:
             "side": side.lower(),
             "price": str(price),
             "size": str(qty),
+            "filled_qty": str(qty),
+            "filled_price": str(price),
             "nonce": nonce,
             "timestamp": now_ms,
             "order_type": order_type,
@@ -143,7 +145,10 @@ class LighterRealClient:
                     async with session.post(url, json=payload) as resp:
                         if resp.status == 200:
                             data = await resp.json()
-                            return {"status": "success", "order_id": data.get("orderId"), "raw": data}
+                            result = {"status": "success", "order_id": data.get("orderId"), "raw": data}
+                            result["filled_qty"] = data.get("filled_qty") or data.get("filledQty")
+                            result["filled_price"] = data.get("filled_price") or data.get("filledPrice")
+                            return result
                         err_text = await resp.text()
                         return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
             except _FAILOVER_ERRORS as e:
@@ -543,6 +548,26 @@ class LighterRealClient:
                     return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
         except Exception as e:
             logger.error(f"Nonce fetch error: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def cancel_order(self, order_id: Any, nonce: int) -> dict:
+        """
+        Cancel a single order by ID.
+
+        In SHADOW mode returns a success stub without network I/O.
+        In LIVE mode creates its own aiohttp session and delegates to _cancel_order.
+        """
+        if self._is_shadow_mode():
+            return {"status": "success", "shadow": True, "order_id": str(order_id)}
+
+        if not self.signer:
+            return {"status": "error", "error": "No signer available for cancel_order."}
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                return await self._cancel_order(session, order_id, nonce)
+        except Exception as e:
+            logger.error(f"cancel_order error: {e}")
             return {"status": "error", "error": str(e)}
 
     async def cancel_all_orders(self, symbol: Optional[str] = None) -> dict:
