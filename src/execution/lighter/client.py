@@ -510,6 +510,73 @@ class LighterRealClient:
             logger.error(f"get_balance: all API URLs failed: {last_error}")
         return {}
 
+    def _build_balance_url(self, api_url: str) -> str:
+        """Build balance endpoint URL."""
+        return f"{api_url}/account/{self.signer.address}/balances"
+
+    def _normalize_balance_payload(self, raw: Any) -> dict:
+        """Normalize balance response into flat {asset: float} map.
+        Handles nested structures, sums available + locked if present."""
+        if not isinstance(raw, dict):
+            return {}
+        result = {}
+        for key, value in raw.items():
+            if isinstance(value, dict):
+                # Sum available + locked to get true position size
+                available = self._safe_float(value.get("available", 0))
+                locked = self._safe_float(value.get("locked", 0))
+                # If neither key exists, try 'balance' or 'total'
+                if "available" not in value and "locked" not in value:
+                    available = self._safe_float(value.get("balance", value.get("total", 0)))
+                result[key] = available + locked
+            else:
+                result[key] = self._safe_float(value)
+        return result
+
+    def _safe_float(self, value: Any) -> float:
+        """Convert to float safely, return 0.0 on failure."""
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    async def get_balance_checked(self, timeout_sec: Optional[float] = None) -> tuple:
+        """Tri-state balance fetch with its own error handling.
+
+        Returns (success, balances):
+          - (True, {BTC: X, USDT: Y}) — API responded, balances are authoritative
+          - (False, {}) — API failed/timeout, balances are UNKNOWN
+
+        SHADOW mode: returns (True, {}) — always succeeds, no balance data.
+        """
+        if self._is_shadow_mode():
+            return (True, {})
+
+        if not self.signer:
+            return (False, {})
+
+        effective_timeout = aiohttp.ClientTimeout(total=timeout_sec) if timeout_sec else self.timeout
+
+        for api_url in self.api_urls:
+            url = self._build_balance_url(api_url)
+            try:
+                async with aiohttp.ClientSession(timeout=effective_timeout) as session:
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            raw = await resp.json(content_type=None)
+                            normalized = self._normalize_balance_payload(raw)
+                            return (True, normalized)
+                        else:
+                            logger.warning(f"get_balance_checked HTTP {resp.status} from {url}")
+            except _FAILOVER_ERRORS as e:
+                logger.warning(f"get_balance_checked failover: {url} ({type(e).__name__}: {e})")
+                continue
+            except Exception as e:
+                logger.error(f"get_balance_checked error: {e}")
+                return (False, {})
+
+        return (False, {})
+
     async def fetch_nonce(self) -> dict:
         """Fetch the current nonce for this account from the Lighter API.
 
@@ -617,6 +684,28 @@ class LighterRealClient:
         except Exception as e:
             logger.error(f"cancel_all_orders error: {e}")
             return {"status": "error", "error": str(e)}
+
+    async def fetch_open_orders(self, timeout_sec: Optional[float] = None) -> Optional[list]:
+        """Public wrapper for open orders fetch.
+
+        SHADOW returns [].
+        LIVE creates session + calls _fetch_open_orders.
+        Returns None on failure (consumers MUST treat None as 'unknown, skip').
+        """
+        if self._is_shadow_mode():
+            return []
+
+        if not self.signer:
+            return None
+
+        effective_timeout = aiohttp.ClientTimeout(total=timeout_sec) if timeout_sec else self.timeout
+
+        try:
+            async with aiohttp.ClientSession(timeout=effective_timeout) as session:
+                return await self._fetch_open_orders(session)
+        except Exception as e:
+            logger.error(f"fetch_open_orders error: {e}")
+            return None
 
     async def _fetch_open_orders(self, session: aiohttp.ClientSession) -> Optional[List[Dict[str, Any]]]:
         """Fetch open orders via GET /orders."""
