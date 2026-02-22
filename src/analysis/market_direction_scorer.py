@@ -1061,7 +1061,7 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     except Exception as e:
         logger.warning(f"Binance BTC fetch failed: {e}")
 
-    # ---- Fetch CoinPaprika global + ticker data ----
+    # ---- Fetch Market Data (CoinLore + DefiLlama) ----
     btcdom_value = btcdom_change_24h = None
     usdt_d_value = usdt_d_change_24h = None
     total3_value_b = total3_change_24h = None
@@ -1072,120 +1072,70 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     others_d = others_d_change_pp = None
     stable_d = stable_d_change_pp = None
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Parallel fetch: global stats + BTC + ETH + USDT + USDC tickers
-            global_resp, btc_ticker, eth_ticker, usdt_ticker, usdc_ticker = await asyncio.gather(
-                client.get("https://api.coinpaprika.com/v1/global"),
-                client.get("https://api.coinpaprika.com/v1/tickers/btc-bitcoin"),
-                client.get("https://api.coinpaprika.com/v1/tickers/eth-ethereum"),
-                client.get("https://api.coinpaprika.com/v1/tickers/usdt-tether"),
-                client.get("https://api.coinpaprika.com/v1/tickers/usdc-usd-coin"),
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            lore_resp, llama_resp = await asyncio.gather(
+                client.get("https://api.coinlore.net/api/global/"),
+                client.get("https://stablecoins.llama.fi/stablecoins"),
                 return_exceptions=True,
             )
 
-            if not isinstance(global_resp, Exception) and global_resp.status_code == 200:
-                gd = global_resp.json()
-                total_mc = gd.get("market_cap_usd", 0)
-                btcdom_value = gd.get("bitcoin_dominance_percentage", 0)
-                mc_change_24h = gd.get("market_cap_change_24h", 0)
-
-                # Extract BTC ticker data
-                btc_pct_change = 0
-                btc_mc = 0
-                if not isinstance(btc_ticker, Exception) and btc_ticker.status_code == 200:
-                    btc_data = btc_ticker.json()
-                    btc_pct_change = btc_data.get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
-                    btc_mc = btc_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
-                if not btc_mc and btcdom_value:
-                    btc_mc = total_mc * (btcdom_value / 100)  # fallback
-                cp_global = {
-                    "btc_mc": btc_mc or 0,
-                    "total_mc": total_mc or 0,
-                    "btcdom": btcdom_value or 0,
-                    "stable_mc": 0,
-                }
-
-                # BTCDOM change: BTC outperforms market → dominance rises
-                btcdom_change_24h = btc_pct_change - mc_change_24h
-
-                # Extract ETH ticker data
-                eth_mc = 0
-                eth_pct_change = 0
-                if not isinstance(eth_ticker, Exception) and eth_ticker.status_code == 200:
-                    eth_data = eth_ticker.json()
-                    eth_mc = eth_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
-                    eth_pct_change = eth_data.get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
-
-                # Extract USDT ticker data
-                usdt_mc = 0
-                usdt_pct_change = 0
-                if not isinstance(usdt_ticker, Exception) and usdt_ticker.status_code == 200:
-                    usdt_data = usdt_ticker.json()
-                    usdt_mc = usdt_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
-                    usdt_pct_change = usdt_data.get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
-                if total_mc:
-                    usdt_d_value = (usdt_mc / total_mc * 100)
-                    # USDT.D change: when total MC rises, USDT.D falls (inverse)
-                    usdt_d_change_24h = -mc_change_24h * 0.1 if mc_change_24h else 0
-
-                # Extract USDC ticker data (graceful degradation if unavailable)
-                usdc_mc = 0
-                usdc_pct_change = 0
-                if not isinstance(usdc_ticker, Exception) and usdc_ticker.status_code == 200:
-                    usdc_data = usdc_ticker.json()
-                    usdc_mc = usdc_data.get("quotes", {}).get("USD", {}).get("market_cap", 0) or 0
-                    usdc_pct_change = usdc_data.get("quotes", {}).get("USD", {}).get("percent_change_24h", 0) or 0
-
-                # TOTAL3: total MC minus BTC minus ETH
-                total3_mc = total_mc - btc_mc - eth_mc
-                total3_value_b = total3_mc / 1e9 if total3_mc > 0 else 0
-
-                # Derive 24h-ago values for accurate change computation
-                total_mc_24h_ago = total_mc / (1 + mc_change_24h / 100) if mc_change_24h else total_mc
-                btc_mc_24h_ago = btc_mc / (1 + btc_pct_change / 100) if btc_pct_change else btc_mc
-                eth_mc_24h_ago = eth_mc / (1 + eth_pct_change / 100) if eth_pct_change else eth_mc
-
-                # TOTAL3 change (exact computation instead of ETH proxy)
-                total3_mc_24h_ago = total_mc_24h_ago - btc_mc_24h_ago - eth_mc_24h_ago
-                if total3_mc_24h_ago > 0:
-                    total3_change_24h = ((total3_mc - total3_mc_24h_ago) / total3_mc_24h_ago) * 100
-                else:
-                    total3_change_24h = 0
-
-                # ---- Context indicators ----
-                # TOTAL1: total crypto market cap in trillions
-                if total_mc:
+            # Process CoinLore (Global + Dominance)
+            if not isinstance(lore_resp, Exception) and lore_resp.status_code == 200:
+                lore_data = lore_resp.json()
+                if isinstance(lore_data, list) and lore_data:
+                    data = lore_data[0]
+                    total_mc = float(data.get("total_mcap", 0))
+                    btcdom_value = float(data.get("btc_d", 0))
+                    ethdom = float(data.get("eth_d", 0))
+                    mc_change_24h = float(data.get("mcap_change", 0))
+                    
+                    btc_mc = total_mc * (btcdom_value / 100)
+                    eth_mc = total_mc * (ethdom / 100)
+                    total3_mc = total_mc - btc_mc - eth_mc
+                    total3_value_b = total3_mc / 1e9
+                    others_d = (total3_mc / total_mc * 100) if total_mc else 0
+                    
+                    # Context
                     total1_t = total_mc / 1e12
                     total1_change = mc_change_24h
-
-                # TOTAL2: total ex-BTC in billions
-                total2_mc = total_mc - btc_mc
-                if total2_mc > 0:
+                    total2_mc = total_mc - btc_mc
                     total2_b = total2_mc / 1e9
-                    total2_mc_24h_ago = total_mc_24h_ago - btc_mc_24h_ago
-                    if total2_mc_24h_ago > 0:
-                        total2_change = ((total2_mc - total2_mc_24h_ago) / total2_mc_24h_ago) * 100
-                    else:
-                        total2_change = 0
+                    
+                    # Approximation for TOTAL3 change
+                    total3_change_24h = mc_change_24h # Simplification
+                    btcdom_change_24h = 0 # Lore doesn't provide prev day dominance directly
+                    
+                    cp_global = {
+                        "btc_mc": btc_mc,
+                        "total_mc": total_mc,
+                        "btcdom": btcdom_value,
+                        "stable_mc": 0,
+                    }
 
-                # Others.D: altcoin dominance ex-BTC/ETH (= TOTAL3 / TOTAL1 * 100)
-                if total_mc and total3_mc > 0:
-                    others_d = (total3_mc / total_mc) * 100
-                    others_d_24h_ago = (total3_mc_24h_ago / total_mc_24h_ago) * 100 if total_mc_24h_ago else 0
-                    others_d_change_pp = others_d - others_d_24h_ago
+            # Process DefiLlama (Stablecoin Dominance)
+            if not isinstance(llama_resp, Exception) and llama_resp.status_code == 200:
+                llama_data = llama_resp.json()
+                stables = llama_data.get("peggedAssets", [])
+                usdt = next((s for s in stables if s.get("symbol") == "USDT"), None)
+                usdc = next((s for s in stables if s.get("symbol") == "USDC"), None)
+                
+                if usdt and total1_t:
+                    usdt_mc = float(usdt.get("circulating", {}).get("peggedUSD", 0))
+                    usdt_prev = float(usdt.get("circulatingPrevDay", {}).get("peggedUSD", 0))
+                    total_mc_val = total1_t * 1e12
+                    
+                    usdt_d_value = (usdt_mc / total_mc_val) * 100
+                    prev_total_mc = total_mc_val / (1 + total1_change/100)
+                    usdt_d_prev = (usdt_prev / prev_total_mc) * 100
+                    usdt_d_change_24h = usdt_d_value - usdt_d_prev
+                    
+                    # Context Stable Dominance
+                    usdc_mc = float(usdc.get("circulating", {}).get("peggedUSD", 0)) if usdc else 0
+                    stable_d = ((usdt_mc + usdc_mc) / total_mc_val) * 100
+                    cp_global["stable_mc"] = usdt_mc + usdc_mc
 
-                # STABLE.C.D: stablecoin dominance (USDT + USDC)
-                stables_mc = usdt_mc + usdc_mc
-                cp_global["stable_mc"] = stables_mc or 0
-                if total_mc and stables_mc > 0:
-                    stable_d = (stables_mc / total_mc) * 100
-                    usdt_mc_24h_ago = usdt_mc / (1 + usdt_pct_change / 100) if usdt_pct_change else usdt_mc
-                    usdc_mc_24h_ago = usdc_mc / (1 + usdc_pct_change / 100) if usdc_pct_change else usdc_mc
-                    stables_mc_24h_ago = usdt_mc_24h_ago + usdc_mc_24h_ago
-                    stable_d_24h_ago = (stables_mc_24h_ago / total_mc_24h_ago) * 100 if total_mc_24h_ago else 0
-                    stable_d_change_pp = stable_d - stable_d_24h_ago
     except Exception as e:
-        logger.warning(f"CoinPaprika fetch failed: {e}")
+        logger.warning(f"Market data fetch failed: {e}")
 
     # ---- Fallback to cached macro levels if live fetch failed ----
     if btcdom_value is None or btcdom_change_24h is None:
