@@ -1101,9 +1101,14 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
                     total2_mc = total_mc - btc_mc
                     total2_b = total2_mc / 1e9
                     
-                    # Approximation for TOTAL3 change
-                    total3_change_24h = mc_change_24h # Simplification
-                    btcdom_change_24h = 0 # Lore doesn't provide prev day dominance directly
+                    # Approximations for context changes
+                    prev_total_mc = total_mc / (1 + mc_change_24h/100) if mc_change_24h else total_mc
+                    prev_btc_mc = prev_total_mc * (btcdom_value / 100)
+                    total2_change = (((total2_mc) - (prev_total_mc - prev_btc_mc)) / (prev_total_mc - prev_btc_mc) * 100) if (prev_total_mc - prev_btc_mc) > 0 else 0
+                    
+                    total3_change_24h = mc_change_24h 
+                    btcdom_change_24h = 0
+                    others_d_change_pp = others_d - ( (prev_total_mc - prev_btc_mc - (prev_total_mc * ethdom / 100)) / prev_total_mc * 100) if prev_total_mc > 0 else 0
                     
                     cp_global = {
                         "btc_mc": btc_mc,
@@ -1125,13 +1130,18 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
                     total_mc_val = total1_t * 1e12
                     
                     usdt_d_value = (usdt_mc / total_mc_val) * 100
-                    prev_total_mc = total_mc_val / (1 + total1_change/100)
-                    usdt_d_prev = (usdt_prev / prev_total_mc) * 100
+                    prev_total_mc = total_mc_val / (1 + total1_change/100) if total1_change else total_mc_val
+                    usdt_d_prev = (usdt_prev / prev_total_mc) * 100 if prev_total_mc > 0 else usdt_d_value
                     usdt_d_change_24h = usdt_d_value - usdt_d_prev
                     
                     # Context Stable Dominance
                     usdc_mc = float(usdc.get("circulating", {}).get("peggedUSD", 0)) if usdc else 0
-                    stable_d = ((usdt_mc + usdc_mc) / total_mc_val) * 100
+                    usdc_prev = float(usdc.get("circulatingPrevDay", {}).get("peggedUSD", 0)) if usdc else 0
+                    stable_mc = usdt_mc + usdc_mc
+                    stable_mc_prev = usdt_prev + usdc_prev
+                    stable_d = (stable_mc / total_mc_val) * 100
+                    stable_d_prev = (stable_mc_prev / prev_total_mc) * 100 if prev_total_mc > 0 else stable_d
+                    stable_d_change_pp = stable_d - stable_d_prev
                     cp_global["stable_mc"] = usdt_mc + usdc_mc
 
     except Exception as e:
@@ -1169,15 +1179,11 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
             if usdt_d_change_24h is None:
                 usdt_d_change_24h = usdt_d_data.get("change_24h", 0)
 
-            # Populate cp_global for Liquidity Fuel signal
-            cp_global = {
-                "btc_mc": total1_data.get("current_value_t", 0) * 1e12 * (btcdom_value / 100) if btcdom_value and total1_data.get("current_value_t") else 0,
-                "total_mc": total1_data.get("current_value_t", 0) * 1e12 if total1_data.get("current_value_t") else 0,
-                "btcdom": btcdom_value or 0,
-                "stable_mc": total1_data.get("current_value_t", 0) * 1e12 * 0.1, # fallback
-            }
-
             # Fallback for context indicators
+            total1_data = sherlock_levels.get("total1", {})
+            total2_data = sherlock_levels.get("total2", {})
+            stable_d_data = sherlock_levels.get("stable_d", {})
+
             if total1_t is None:
                 total1_t = total1_data.get("current_value_t")
             if total1_change is None:
@@ -1187,6 +1193,19 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
                 total2_b = total2_data.get("current_value_b")
             if total2_change is None:
                 total2_change = total2_data.get("change_24h", 0)
+
+            if stable_d is None:
+                stable_d = stable_d_data.get("current_value")
+            if stable_d_change_pp is None:
+                stable_d_change_pp = stable_d_data.get("change_pp", 0)
+
+            # Populate cp_global for Liquidity Fuel signal
+            cp_global = {
+                "btc_mc": (total1_t * 1e12 * (btcdom_value / 100)) if total1_t and btcdom_value else 0,
+                "total_mc": (total1_t * 1e12) if total1_t else 0,
+                "btcdom": btcdom_value or 0,
+                "stable_mc": (total1_t * 1e12 * (stable_d / 100)) if total1_t and stable_d else 0,
+            }
 
             logger.info("Successfully loaded fallback macro indicators from cache.")
 
