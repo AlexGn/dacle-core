@@ -35,6 +35,7 @@ class DiscoveryTAResult:
     smc_fakeout_risk: bool = False
     smc_structural_confirmation: bool = False
     fvg_proximity_pct: Optional[float] = None
+    rsi_divergence: Optional[str] = None  # bullish / bearish / none
 
     # EMA alignment
     ema_alignment: str = "unknown"  # bearish / bullish / choppy
@@ -77,6 +78,7 @@ class DiscoveryTAResult:
             "market_structure": self.market_structure,
             "choch_direction": self.choch_direction,
             "bos_direction": self.bos_direction,
+            "rsi_divergence": self.rsi_divergence,
             "smc_fakeout_risk": self.smc_fakeout_risk,
             "smc_structural_confirmation": self.smc_structural_confirmation,
             "fvg_proximity_pct": self.fvg_proximity_pct,
@@ -178,6 +180,7 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
 
     # RSI
     result.rsi_14 = _compute_rsi(ohlcv, 14)
+    result.rsi_divergence = _detect_rsi_divergence(ohlcv)
 
     # Funding rate
     result.funding_rate = _compute_funding_rate(symbol)
@@ -316,3 +319,79 @@ def _compute_bias_and_confidence(result: DiscoveryTAResult) -> None:
         result.ta_confidence = min(result.ta_confidence, 0.35)
     elif result.ta_bias == "SHORT_ALIGNED" and result.choch_direction == "bullish":
         result.ta_confidence = min(result.ta_confidence, 0.35)
+
+
+def _detect_rsi_divergence(ohlcv: list[list]) -> Optional[str]:
+    """
+    Detect RSI divergence between the last 2 peaks/troughs.
+    Returns: 'bullish', 'bearish', or None
+    """
+    try:
+        if not ohlcv or len(ohlcv) < 20:
+            return None
+
+        # 1. Calculate RSI for the series
+        import numpy as np
+        closes = np.array([c[4] for c in ohlcv])
+        highs = np.array([c[2] for c in ohlcv])
+        lows = np.array([c[3] for c in ohlcv])
+
+        # Simple RSI calc
+        def get_rsi_series(data, window=14):
+            diff = np.diff(data)
+            gain = np.where(diff > 0, diff, 0)
+            loss = np.where(diff < 0, -diff, 0)
+            avg_gain = np.convolve(gain, np.ones(window) / window, mode="valid")
+            avg_loss = np.convolve(loss, np.ones(window) / window, mode="valid")
+            # Avoid div zero
+            rs = np.divide(
+                avg_gain, avg_loss, out=np.zeros_like(avg_gain), where=avg_loss != 0
+            )
+            return 100 - (100 / (1 + rs))
+
+        rsi_series = get_rsi_series(closes)
+        if len(rsi_series) < 5:
+            return None
+
+        # 2. Find local peaks in Price (within last 30 candles)
+        # We look for the last 2 local highs
+        price_peaks = []
+        for i in range(len(highs) - 2, 5, -1):
+            if highs[i] > highs[i - 1] and highs[i] > highs[i + 1]:
+                price_peaks.append(i)
+                if len(price_peaks) >= 2:
+                    break
+
+        if len(price_peaks) >= 2:
+            p2, p1 = price_peaks[0], price_peaks[1]  # p2 is most recent
+            # Shift RSI index (offset by window-1)
+            offset = 13
+            r2_idx, r1_idx = p2 - offset, p1 - offset
+
+            if r2_idx < len(rsi_series) and r1_idx < len(rsi_series):
+                # BEARISH DIVERGENCE: Price Higher High, RSI Lower High
+                if highs[p2] > highs[p1] and rsi_series[r2_idx] < rsi_series[r1_idx]:
+                    return "bearish"
+
+        # 3. Find local troughs in Price
+        price_troughs = []
+        for i in range(len(lows) - 2, 5, -1):
+            if lows[i] < lows[i - 1] and lows[i] < lows[i + 1]:
+                price_troughs.append(i)
+                if len(price_troughs) >= 2:
+                    break
+
+        if len(price_troughs) >= 2:
+            t2, t1 = price_troughs[0], price_troughs[1]
+            offset = 13
+            r2_idx, r1_idx = t2 - offset, t1 - offset
+
+            if r2_idx < len(rsi_series) and r1_idx < len(rsi_series):
+                # BULLISH DIVERGENCE: Price Lower Low, RSI Higher Low
+                if lows[t2] < lows[t1] and rsi_series[r2_idx] > rsi_series[r1_idx]:
+                    return "bullish"
+
+    except Exception as e:
+        logger.warning(f"Divergence detection failed: {e}")
+
+    return None
