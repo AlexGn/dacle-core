@@ -148,6 +148,20 @@ class ScalperCommands(commands.Cog):
                 inline=False,
             )
 
+        # Global Risk Ledger field
+        global_exp = data.get("global_exposure_usd")
+        global_cap = data.get("global_exposure_cap_usd", 250.0)
+        ledger_enabled = data.get("global_ledger_enabled", False)
+
+        if ledger_enabled and global_exp is not None:
+            pct = (global_exp / global_cap * 100) if global_cap > 0 else 0
+            risk_icon = "🔴" if pct >= 80 else "🟡" if pct >= 50 else "🟢"
+            embed.add_field(
+                name="Global Risk Ledger",
+                value=f"{risk_icon} **${global_exp:.2f}** / ${global_cap:.0f} ({pct:.0f}%)",
+                inline=False,
+            )
+
         return embed
 
     async def cog_app_command_error(self, interaction, error):
