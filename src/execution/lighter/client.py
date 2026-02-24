@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiohttp
 
 from src.execution.lighter.signer import LighterSigner
+from src.utils.network import get_standard_headers
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +80,7 @@ class LighterRealClient:
                 
             url = f"{self.api_url}/orderBooks"
             try:
-                async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
                     async with session.get(url) as resp:
                         if resp.status == 200:
                             data = await resp.json()
@@ -197,7 +198,7 @@ class LighterRealClient:
         for api_url in self.api_urls:
             url = f"{api_url}/sendTx"
             try:
-                async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
                     async with session.post(url, json=payload) as resp:
                         if resp.status == 200:
                             data = await resp.json()
@@ -295,7 +296,7 @@ class LighterRealClient:
         limit: int = 100,
     ) -> dict:
         """Inner fetch_fills logic; may raise _FAILOVER_ERRORS for URL failover."""
-        async with aiohttp.ClientSession(timeout=self.timeout) as session:
+        async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
             account_index, idx_err = await self._resolve_account_index(session)
             if idx_err:
                 return {"status": "error", "error": idx_err}
@@ -593,7 +594,7 @@ class LighterRealClient:
         for api_url in self.api_urls:
             url = f"{api_url}/account/{self.signer.address}/balances"
             try:
-                async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
                     async with session.get(url) as resp:
                         if resp.status == 200:
                             return await resp.json()
@@ -726,7 +727,7 @@ class LighterRealClient:
             return {"status": "error", "auth_ok": False, "can_trade": False, "detail": "missing auth token"}
 
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
                 account_index, idx_err = await self._resolve_account_index(session)
                 if idx_err:
                     return {"status": "error", "auth_ok": False, "can_trade": False, "detail": idx_err}
@@ -837,7 +838,7 @@ class LighterRealClient:
             return {"status": "error", "error": "No signer available for cancel_order."}
 
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
                 return await self._cancel_order(session, order_id, nonce)
         except Exception as e:
             logger.error(f"cancel_order error: {e}")
@@ -857,7 +858,7 @@ class LighterRealClient:
             return {"status": "error", "error": "No signer available for cancel_all_orders."}
 
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout) as session:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
                 orders = await self._fetch_open_orders(session)
                 if orders is None:
                     return {"status": "error", "error": "Failed to fetch open orders."}

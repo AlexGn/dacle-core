@@ -47,6 +47,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import httpx
+from src.utils.network import get_standard_headers
 
 logger = logging.getLogger(__name__)
 
@@ -937,7 +938,7 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     btc_volume_24h = None
     btc_volume_7d_avg = None
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, headers=get_standard_headers()) as client:
             # 4H klines for EMA/RSI
             klines_resp = await client.get(
                 "https://api.binance.com/api/v3/klines",
@@ -1072,7 +1073,7 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     others_d = others_d_change_pp = None
     stable_d = stable_d_change_pp = None
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=15.0, headers=get_standard_headers()) as client:
             lore_resp, llama_resp = await asyncio.gather(
                 client.get("https://api.coinlore.net/api/global/"),
                 client.get("https://stablecoins.llama.fi/stablecoins"),
@@ -1213,7 +1214,7 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     fg_value = None
     fg_velocity = 0.0
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=10.0, headers=get_standard_headers()) as client:
             fg_resp = await client.get("https://api.alternative.me/fng/?limit=7")
             if fg_resp.status_code == 200:
                 fg_data = fg_resp.json()
