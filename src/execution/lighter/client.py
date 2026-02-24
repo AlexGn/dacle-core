@@ -28,6 +28,11 @@ _ORDER_TYPE_TO_TIF = {
 }
 
 
+class MarketMetadata:
+    def __init__(self, price_decimals: int = 1, size_decimals: int = 5):
+        self.price_decimals = price_decimals
+        self.size_decimals = size_decimals
+
 class LighterRealClient:
     def __init__(self, config: dict, signer: Optional[LighterSigner] = None):
         self.api_url = config.get("api_url", "https://mainnet.zklighter.elliot.ai/api/v1")
@@ -39,6 +44,12 @@ class LighterRealClient:
         self.auth_token = (config.get("auth_token") or os.getenv("SCALPER_AUTH_TOKEN") or "").strip()
         self._resolved_account_index: Optional[int] = self._to_int(self.account_index)
         self._shadow_order_counter = 0
+        
+        # Market Metadata Cache
+        self._market_metadata: Dict[int, MarketMetadata] = {
+            1: MarketMetadata(price_decimals=1, size_decimals=5) # BTC Default
+        }
+        self._metadata_lock = asyncio.Lock()
 
         # Auth expiry detection (Day 3)
         self._auth_expired_at: float = 0.0
@@ -55,6 +66,33 @@ class LighterRealClient:
         # 5.11: API failover — primary + optional secondary URLs.
         self.api_urls: List[str] = config.get("api_urls") or [self.api_url]
         self.ws_urls: List[str] = config.get("ws_urls") or []
+
+    async def _get_market_metadata(self, market_id: int) -> MarketMetadata:
+        """Fetch and cache decimals for a specific market."""
+        if market_id in self._market_metadata:
+            return self._market_metadata[market_id]
+            
+        async with self._metadata_lock:
+            # Re-check after acquiring lock
+            if market_id in self._market_metadata:
+                return self._market_metadata[market_id]
+                
+            url = f"{self.api_url}/orderBooks"
+            try:
+                async with aiohttp.ClientSession(timeout=self.timeout) as session:
+                    async with session.get(url) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            for ob in data.get("order_books", []):
+                                mid = int(ob["market_id"])
+                                self._market_metadata[mid] = MarketMetadata(
+                                    price_decimals=int(ob["supported_price_decimals"]),
+                                    size_decimals=int(ob["supported_size_decimals"])
+                                )
+            except Exception as e:
+                logger.warning(f"Failed to fetch market metadata: {e}")
+                
+            return self._market_metadata.get(market_id, MarketMetadata())
 
     def set_auth_expired_callback(self, callback):
         """Register async callback for auth expiry detection."""
@@ -122,11 +160,14 @@ class LighterRealClient:
         if not self.signer:
             return {"status": "error", "error": "No signer provided for LIVE mode."}
 
+        # Resolve Decimals
+        meta = await self._get_market_metadata(self.market_id)
+        
         order_data = {
             "marketId": self.market_id,
             "side": 0 if side == "BUY" else 1,
-            "price": int(price * 10),  # Assuming price_decimals=1 for BTC perp
-            "size": int(qty * 100000),  # Assuming size_decimals=5
+            "price": int(round(price * (10 ** meta.price_decimals))),
+            "size": int(round(qty * (10 ** meta.size_decimals))),
             "nonce": nonce,
         }
 
