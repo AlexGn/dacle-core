@@ -1375,19 +1375,25 @@ def _classify_trend(ema_data: dict, structure_data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _compute_volume_analysis(ohlcv: list[list]) -> dict:
-    """Analyze volume for spikes and divergences."""
-    if not ohlcv or len(ohlcv) < 10:
-        return {"volume_spike": False}
+    """Analyze volume for spikes and divergences.
+    
+    Session 456: Use last completed candle (volumes[-2]) instead of current candle (volumes[-1])
+    to avoid near-zero RVOL artifacts on fresh candles.
+    """
+    if not ohlcv or len(ohlcv) < 12:
+        return {"volume_spike": False, "volume_ratio": 1.0}
 
     volumes = [c[5] for c in ohlcv]
-    avg_volume = sum(volumes[-20:]) / min(len(volumes), 20)
-    recent_volume = volumes[-1]
+    # Use volumes[-2] as the last completed candle
+    # Average from volumes[-22:-2] (20 completed candles before the target)
+    avg_volume = sum(volumes[-22:-2]) / 20
+    recent_completed_volume = volumes[-2]
 
     return {
-        "volume_spike": recent_volume > avg_volume * 1.5,
+        "volume_spike": recent_completed_volume > avg_volume * 1.5 if avg_volume > 0 else False,
         "avg_volume": avg_volume,
-        "recent_volume": recent_volume,
-        "volume_ratio": recent_volume / avg_volume if avg_volume > 0 else 1.0,
+        "recent_volume": recent_completed_volume,
+        "volume_ratio": recent_completed_volume / avg_volume if avg_volume > 0 else 1.0,
     }
 
 
@@ -2742,6 +2748,7 @@ def build_computed_ta(
         rsi_value=rsi,
         current_price=current_price,
         volume_ratio=volume_data.get("volume_ratio", 1.0),
+        ema_200_distance_pct=ema_data.get("ema_200_distance_pct", 0.0),
         suggested_entries=suggested_entries,
         # Session 440: Momentum indicators
         macd=macd_data,

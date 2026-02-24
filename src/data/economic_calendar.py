@@ -26,12 +26,15 @@ Date: 2025-12-28
 """
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -188,22 +191,13 @@ class EconomicCalendar:
                 return events
         except Exception as e:
             logger.warning(f"Investing.com fetch failed: {e}")
-            # Raise exception to trigger fail-safe in ta_upload.py
-            # We prefer to be conservative (0.75x multiplier) than assume "CLEAR"
-            # on partial data.
-            raise Exception(f"Failed to fetch economic events: {e}")
+            # Session 456: Degrade gracefully instead of crashing
+            return []
 
-        # Try alternative: TradingEconomics
-        # (This block is unreachable now with the raise above, but keeping structure if we want to change strategy)
-        # For now, strict failure is better for consistency.
-        
-        # Fall back to hardcoded major events?
-        # No, because missing CPI/NFP is dangerous.
-        # Strict failure ensures we don't give false confidence.
         return []
 
     def _fetch_from_investing(self) -> List[EconomicEvent]:
-        """Fetch events from Investing.com."""
+        """Fetch events from Investing.com with retry logic."""
         headers = {
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
             "X-Requested-With": "XMLHttpRequest",
@@ -222,8 +216,18 @@ class EconomicCalendar:
             "dateTo": end_date.strftime("%Y-%m-%d"),
         }
 
+        # Session 456: Add retry logic for 429/500s
+        session = requests.Session()
+        retries = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"]
+        )
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+
         try:
-            response = requests.post(
+            response = session.post(
                 self.API_URL,
                 headers=headers,
                 data=params,
@@ -234,14 +238,12 @@ class EconomicCalendar:
                 data = response.json()
                 return self._parse_investing_response(data)
             else:
-                raise Exception(f"Investing.com API returned status {response.status_code}")
+                logger.warning(f"Investing.com API returned status {response.status_code}")
+                return []
                 
         except Exception as e:
-            # Re-raise so upstream checks typically falling back to cache can see it
-            # But the caller _fetch_events catches it.
-            # We want to make sure if ALL sources fail, we know about it.
             logger.warning(f"Investing.com API error: {e}")
-            raise e
+            return []
 
 
     def _parse_investing_response(self, data: dict) -> List[EconomicEvent]:
