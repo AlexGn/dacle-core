@@ -59,6 +59,7 @@ class DiscoveryTAResult:
 
     # Volume
     volume_ratio: float = 1.0  # recent volume / avg volume (RVOL)
+    atr_bps: Optional[float] = None # v1.5.1 volatility metric
 
     # Volume profile
     volume_profile_zone: str = "unknown"  # STRONG_BULLISH, WEAK_BULLISH, WEAK_BEARISH, STRONG_BEARISH
@@ -93,6 +94,7 @@ class DiscoveryTAResult:
             "near_resistance": self.near_resistance,
             "sr_levels_count": self.sr_levels_count,
             "volume_ratio": round(self.volume_ratio, 2),
+            "atr_bps": round(self.atr_bps, 2) if self.atr_bps is not None else None,
             "volume_profile_zone": self.volume_profile_zone,
             "tvem_signal": self.tvem_signal,
             "ta_bias": self.ta_bias,
@@ -210,6 +212,12 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
     # Relative Volume Analysis
     vol_data = _compute_volume_analysis(ohlcv)
     result.volume_ratio = vol_data.get("volume_ratio", 1.0)
+    
+    # Session 454 (v1.5.1): ATR calculation for volatility telemetry
+    try:
+        result.atr_bps = _calculate_atr_bps(ohlcv)
+    except Exception as e:
+        logger.warning(f"ATR calculation failed: {e}")
 
     # TVEM
     tvem_data = _compute_tvem(ohlcv)
@@ -395,3 +403,40 @@ def _detect_rsi_divergence(ohlcv: list[list]) -> Optional[str]:
         logger.warning(f"Divergence detection failed: {e}")
 
     return None
+
+def _calculate_atr_bps(ohlcv: list[list], period: int = 14) -> Optional[float]:
+    """
+    Calculate Average True Range (ATR) normalized to basis points (bps).
+    1 bps = 0.01%
+    """
+    if not ohlcv or len(ohlcv) < period + 1:
+        return None
+        
+    try:
+        true_ranges = []
+        for i in range(1, len(ohlcv)):
+            high = ohlcv[i][2]
+            low = ohlcv[i][3]
+            prev_close = ohlcv[i-1][4]
+            
+            tr = max(
+                high - low,
+                abs(high - prev_close),
+                abs(low - prev_close)
+            )
+            true_ranges.append(tr)
+            
+        if len(true_ranges) < period:
+            return None
+            
+        atr_abs = sum(true_ranges[-period:]) / period
+        current_price = ohlcv[-1][4]
+        
+        if current_price <= 0:
+            return None
+            
+        # Convert to bps: (ATR / Price) * 10000
+        atr_bps = (atr_abs / current_price) * 10000
+        return float(atr_bps)
+    except Exception:
+        return None
