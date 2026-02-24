@@ -290,6 +290,7 @@ class AppConfig:
     redis: RedisConfig
     perplexity: Optional[PerplexityConfig]
     openai: Optional[OpenAIConfig]
+    scalper: dict = field(default_factory=dict)
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -304,6 +305,28 @@ class AppConfig:
         if os.getenv("OPENAI_API_KEY"):
             openai_config = OpenAIConfig.from_env()
 
+        # Load scalper yaml if exists (Session 456 fix)
+        scalper_cfg = {}
+        try:
+            # Find project root for config path
+            current = Path(__file__).resolve().parent
+            root = None
+            while current != current.parent:
+                if (current / "config" / "scalper.yaml").exists():
+                    root = current
+                    break
+                current = current.parent
+            
+            if root:
+                scalper_yaml = root / "config" / "scalper.yaml"
+                import yaml
+                with open(scalper_yaml) as f:
+                    data = yaml.safe_load(f)
+                    if isinstance(data, dict):
+                        scalper_cfg = data.get("scalper", {})
+        except Exception:
+            pass
+
         return cls(
             env=os.getenv("ENV", "development"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
@@ -312,6 +335,7 @@ class AppConfig:
             redis=RedisConfig.from_env(),
             perplexity=perplexity_config,
             openai=openai_config,
+            scalper=scalper_cfg,
         )
 
     @property
