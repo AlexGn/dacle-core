@@ -20,7 +20,7 @@ def get_standard_headers(extra_headers: dict = None) -> dict:
         headers.update(extra_headers)
     return headers
 
-def get_httpx_headers(extra_headers: dict = None) -> httpx.Headers:
+def get_httpx_headers(extra_headers: dict = None):
     """Return standard headers as an httpx.Headers object."""
     import httpx
     return httpx.Headers(get_standard_headers(extra_headers))
