@@ -958,7 +958,7 @@ class MessageMonitor(commands.Cog):
                                             thread_name = f"{symbol} {trade_setup['direction']} setup"
                                             final_target = await trigger_message.create_thread(
                                                 name=thread_name,
-                                                auto_archive_duration=1440,
+                                                auto_archive_duration=60,
                                             )
                                         except Exception as e:
                                             logger.warning(f"Failed to create thread for {symbol}: {e}")

@@ -605,7 +605,7 @@ class LevelsResultView(discord.ui.View):
         try:
             thread = await setup_message.create_thread(
                 name=f"{self.token}-{self.direction}-{setup_message.created_at.strftime('%H%M')}",
-                auto_archive_duration=1440,  # 24h
+                auto_archive_duration=60,  # 1h (Session 456 request)
             )
 
             # Build condensed PTC summary for thread

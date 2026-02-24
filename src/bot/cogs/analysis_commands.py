@@ -634,7 +634,7 @@ class AnalysisCommands(commands.Cog):
                 # Create a thread for this analysis
                 thread = await ctx.message.create_thread(
                     name=f"Analysis: {symbol.upper()}",
-                    auto_archive_duration=1440 # 24 hours
+                    auto_archive_duration=60 # 1 hour
                 )
                 # Reply INSIDE the new thread
                 status_msg = await thread.send(f"🔍 Resolving **{symbol.upper()}**...")
@@ -715,7 +715,7 @@ class AnalysisCommands(commands.Cog):
         try:
             thread = await status_msg.create_thread(
                 name=f"Analysis: {symbol}",
-                auto_archive_duration=1440,
+                auto_archive_duration=60,
             )
             thread_status = await thread.send(
                 f"🔍 Analyzing **{symbol}**... (this may take 10-20s)"
@@ -836,7 +836,7 @@ class AnalysisCommands(commands.Cog):
             try:
                 thread = await status_msg.create_thread(
                     name=f"Analysis: {symbol}",
-                    auto_archive_duration=1440,
+                    auto_archive_duration=60,
                 )
                 thread_status = await thread.send(
                     f"Analyzing **{symbol}**... (this may take 10-20s)"
