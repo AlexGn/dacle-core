@@ -51,8 +51,8 @@ class SystemDoctor:
         
         # Define critical process signatures (unique parts of cmdline)
         critical_processes = {
-            "API (uvicorn)": ["uvicorn", "api.main:app"],
-            "Bot (dacle-bot)": ["scripts/bot/run_bot.py"]
+            "API (uvicorn)": ["uvicorn", "api.main"],
+            "Bot (dacle-bot)": ["run_bot.py"]
         }
         
         found = {name: False for name in critical_processes}
