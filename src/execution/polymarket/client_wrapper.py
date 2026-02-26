@@ -60,7 +60,7 @@ class PolymarketClientWrapper:
                 
                 meta = {
                     "tick_size": float(tick_size) if tick_size else 0.01,
-                    "min_order_size": 1.0, # Default safe min size
+                    "min_order_size": 5.0, # Updated based on test results (Min 5 shares)
                     "neg_risk": bool(neg_risk)
                 }
                 self._market_metadata[token_id] = meta
@@ -68,14 +68,25 @@ class PolymarketClientWrapper:
             except Exception as e:
                 logger.warning(f"Failed to fetch market metadata for {token_id}: {e}")
                 
-            return {"tick_size": 0.01, "min_order_size": 1.0, "neg_risk": False}
+            return {"tick_size": 0.01, "min_order_size": 5.0, "neg_risk": False}
 
-    def normalize_price(self, price: float, tick_size: float) -> float:
-        """Round price to the nearest tick_size."""
+    def normalize_price(self, price: float, tick_size: float, side: str = "BUY") -> float:
+        """Round price to the nearest tick_size and enforce hard caps."""
         if tick_size <= 0:
-            return price
-        # Round to 4 decimals as standard for Polymarket price (0.0001 - 0.9999)
-        return round(round(price / tick_size) * tick_size, 4)
+            tick_size = 0.01
+            
+        # Round to nearest tick
+        norm = round(round(price / tick_size) * tick_size, 4)
+        
+        # Hard Caps to avoid 'invalid amount' or 'crosses the book' errors
+        if side.upper() == "BUY":
+            # Buy price must be < 1.0
+            if norm >= 0.9999: norm = 0.99
+        else:
+            # Sell price must be > 0.0
+            if norm <= 0.0001: norm = 0.01
+            
+        return norm
 
     async def create_order(
         self,
@@ -89,10 +100,6 @@ class PolymarketClientWrapper:
     ) -> Dict[str, Any]:
         """
         Create and post an order to Polymarket.
-        
-        Args:
-            side: "BUY" or "SELL"
-            order_type: "GTC", "GTD", "FOK", "FAK"
         """
         side_val = side.upper()
         if side_val not in ("BUY", "SELL"):
@@ -104,24 +111,25 @@ class PolymarketClientWrapper:
         
         # 1. Resolve Metadata
         meta = await self.get_market_metadata(token_id)
-        norm_price = self.normalize_price(price, meta["tick_size"])
+        norm_price = self.normalize_price(price, meta["tick_size"], side_val)
         
-        # 2. Min Size Guard
-        if qty < meta["min_order_size"]:
+        # 2. Enforce Integer Quantities (Fix for 'max of 4 decimals' errors)
+        # Polymarket shares are essentially ERC1155 tokens, integer shares are safer.
+        qty_int = int(qty)
+        if qty_int < meta["min_order_size"]:
             return {
                 "status": "error",
-                "error": f"Quantity {qty} below minimum {meta['min_order_size']}",
+                "error": f"Quantity {qty_int} below minimum {meta['min_order_size']}",
                 "error_code": "MIN_SIZE_REJECT"
             }
 
         # 3. Idempotency Key (Client Order ID)
         if not client_order_id:
-            # We use a distinct prefix for recovery tracking
             client_order_id = f"dacle_{int(time.time() * 1000)}"
 
         # 4. Shadow Mode Bypass
         if self._is_shadow_mode():
-            logger.info(f"[SHADOW] Post Order: {side_val} {qty} @ {norm_price} (token={token_id}, type={order_type})")
+            logger.info(f"[SHADOW] Post Order: {side_val} {qty_int} @ {norm_price} (token={token_id}, type={order_type})")
             return {
                 "status": "success",
                 "shadow": True,
@@ -137,7 +145,7 @@ class PolymarketClientWrapper:
         # 6. Build Order Arguments
         order_args = OrderArgs(
             price=norm_price,
-            size=qty,
+            size=qty_int,
             side=side_val,
             token_id=token_id,
             expiration=exp
@@ -180,3 +188,34 @@ class PolymarketClientWrapper:
         except Exception as e:
             logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
+
+    async def get_balance(self, token_id: Optional[str] = None) -> float:
+        """
+        Fetch balance for USDC.e (if token_id is None) or shares (if token_id is provided).
+        """
+        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
+        try:
+            if token_id:
+                params = BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=token_id)
+            else:
+                params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
+                
+            resp = await asyncio.to_thread(self.client.get_balance_allowance, params)
+            raw_bal = float(resp.get("balance", "0"))
+            return raw_bal / 1000000.0 # Standard 6 decimal precision for Polymarket
+        except Exception as e:
+            logger.error(f"Failed to fetch balance for {token_id or 'USDC.e'}: {e}")
+            return 0.0
+
+    async def wait_for_balance(self, token_id: str, target_qty: float, timeout_sec: int = 60) -> bool:
+        """
+        Poll the balance until target_qty is reached or timeout.
+        Ensures shares are settled on-chain before attempting a sell.
+        """
+        start_time = time.time()
+        while time.time() - start_time < timeout_sec:
+            bal = await self.get_balance(token_id)
+            if bal >= target_qty:
+                return True
+            await asyncio.sleep(5)
+        return False
