@@ -107,13 +107,21 @@ def compute_execution_score(
     # If in Rocket Mode (High Vol + Price > EMA200), we allow decoupling from macro
     is_decoupling = (
         direction.upper() == "LONG" 
-        and (volume_ratio or 1.0) > 3.0 
+        and (volume_ratio or 1.0) >= 3.0 
         and (ema_200_distance_pct or 0) > 0
     )
     
     if is_decoupling:
-        threshold = LONG_EXECUTION_THRESHOLD
-        threshold_reason = "Macro Decoupling (Rocket Momentum confirmed)"
+        # Session 460: Adaptive Rocket Threshold
+        # For momentum leaders with strong technical alignment (BQS >= 65),
+        # we lower the entry gate to 5.5 to capture the front-run.
+        bqs_val = bqs_score if isinstance(bqs_score, (int, float)) else 0.0
+        if bqs_val >= 65.0:
+            threshold = 5.5
+            threshold_reason = "Adaptive Rocket Threshold (Rocket + High BQS)"
+        else:
+            threshold = LONG_EXECUTION_THRESHOLD
+            threshold_reason = "Macro Decoupling (Rocket Momentum confirmed)"
     else:
         threshold, threshold_reason = _compute_threshold(direction, market_direction)
 

@@ -262,7 +262,11 @@ def get_btc_cache_status() -> dict:
 
 
 # Convenience function for calculating position modifier (L081)
-def calculate_btc_position_modifier(btc_context: dict, direction: str = "SHORT") -> float:
+def calculate_btc_position_modifier(
+    btc_context: dict, 
+    direction: str = "SHORT",
+    is_rocket: bool = False,
+) -> float:
     """
     Calculate position size modifier based on BTC context and trade direction.
 
@@ -271,6 +275,7 @@ def calculate_btc_position_modifier(btc_context: dict, direction: str = "SHORT")
     Args:
         btc_context: BTC macro context dict
         direction: "SHORT" or "LONG"
+        is_rocket: If True, waive certain BTC penalties (Session 460)
 
     Returns:
         Position modifier (0.5x - 1.25x)
@@ -308,7 +313,10 @@ def calculate_btc_position_modifier(btc_context: dict, direction: str = "SHORT")
         elif regime == "OVERSOLD":
             modifier = 1.25  # Bounce expected
         elif regime == "OVERBOUGHT":
-            modifier = 0.5  # Rejection risk
+            if is_rocket:
+                modifier = 1.0  # Session 460: waive OVERBOUGHT penalty for Rockets
+            else:
+                modifier = 0.5  # Rejection risk
 
     # Additional RSI adjustment
     if direction.upper() == "SHORT" and rsi > 70:
