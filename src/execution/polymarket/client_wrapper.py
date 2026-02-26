@@ -140,7 +140,11 @@ class PolymarketClientWrapper:
             }
 
         # 5. Expiration
-        exp = int(time.time() + (expiration_sec or self.default_expiration_sec))
+        if order_type == "GTD":
+            exp = int(time.time() + (expiration_sec or self.default_expiration_sec))
+        else:
+            # GTC, FOK, FAK must have expiration 0
+            exp = 0
 
         # 6. Build Order Arguments
         order_args = OrderArgs(
