@@ -103,6 +103,7 @@ yarn-debug.log*
 yarn-error.log*
 # API cost tracking (runtime data)
 data/api_costs/
+data/analytics/brief_history.json
 
 # Conflict logs (daily append files, latest.json kept for reference)
 data/conflicts/????-??-??.json
