@@ -12,6 +12,8 @@ from typing import Optional
 import sentry_sdk
 from sentry_sdk.integrations.logging import LoggingIntegration
 
+from src.utils.redaction import redact_string, redact_value
+
 logger = logging.getLogger(__name__)
 
 
@@ -133,6 +135,10 @@ def _before_send(event, hint):
     Returns:
         Modified event or None to drop event
     """
+    # Redact payload fields before any routing/tagging logic.
+    event = redact_value(event)
+    hint = redact_value(hint)
+
     # Add custom tags for DACLE-specific context
     if "tags" not in event:
         event["tags"] = {}
@@ -153,7 +159,7 @@ def _before_send(event, hint):
             event["tags"]["component"] = "data_validation"
 
     # Drop noisy errors (optional - customize as needed)
-    if "exception" in hint:
+    if hint and "exception" in hint:
         exc_type = hint["exception"]
         # Example: Drop certain expected errors
         if isinstance(exc_type, KeyboardInterrupt):
@@ -177,8 +183,9 @@ def capture_exception(error: Exception, context: Optional[dict] = None):
         ...     capture_exception(e, {"token": "MONAD", "conviction": 8.2})
     """
     if context:
+        safe_context = redact_value(context)
         with sentry_sdk.push_scope() as scope:
-            for key, value in context.items():
+            for key, value in safe_context.items():
                 scope.set_extra(key, value)
             sentry_sdk.capture_exception(error)
     else:
@@ -197,13 +204,15 @@ def capture_message(message: str, level: str = "info", context: Optional[dict] =
     Example:
         >>> capture_message("ML model drift detected", level="warning", {"accuracy": 0.52})
     """
+    safe_message = redact_string(message, max_length=2000)
     if context:
+        safe_context = redact_value(context)
         with sentry_sdk.push_scope() as scope:
-            for key, value in context.items():
+            for key, value in safe_context.items():
                 scope.set_extra(key, value)
-            sentry_sdk.capture_message(message, level=level)
+            sentry_sdk.capture_message(safe_message, level=level)
     else:
-        sentry_sdk.capture_message(message, level=level)
+        sentry_sdk.capture_message(safe_message, level=level)
 
 
 def set_user_context(user_id: Optional[str] = None, email: Optional[str] = None):
@@ -249,4 +258,4 @@ def set_context(name: str, context: dict):
         ...     "fdv_mc_ratio": 6.7
         ... })
     """
-    sentry_sdk.set_context(name, context)
+    sentry_sdk.set_context(name, redact_value(context))

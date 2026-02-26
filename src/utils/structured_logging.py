@@ -64,6 +64,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional, TypeVar
 
+from src.utils.redaction import redact_value
+
 # Thread-local context for correlation IDs
 import threading
 
@@ -133,19 +135,20 @@ class StructuredFormatter(logging.Formatter):
 
         for key, value in record.__dict__.items():
             if key not in standard_attrs and not key.startswith('_'):
+                safe_value = redact_value(value, key=key)
                 # Serialize non-JSON types
-                if isinstance(value, (datetime,)):
-                    log_entry[key] = value.isoformat()
-                elif isinstance(value, (set, frozenset)):
-                    log_entry[key] = list(value)
-                elif hasattr(value, '__dict__'):
-                    log_entry[key] = str(value)
+                if isinstance(safe_value, (datetime,)):
+                    log_entry[key] = safe_value.isoformat()
+                elif isinstance(safe_value, (set, frozenset)):
+                    log_entry[key] = list(safe_value)
+                elif hasattr(safe_value, '__dict__'):
+                    log_entry[key] = str(safe_value)
                 else:
                     try:
-                        json.dumps(value)
-                        log_entry[key] = value
+                        json.dumps(safe_value)
+                        log_entry[key] = safe_value
                     except (TypeError, ValueError):
-                        log_entry[key] = str(value)
+                        log_entry[key] = str(safe_value)
 
         # Add correlation ID if set
         correlation_id = getattr(_context, 'correlation_id', None)
@@ -186,10 +189,11 @@ class HumanFormatter(logging.Formatter):
         extras = []
         for key, value in record.__dict__.items():
             if key not in standard_attrs and not key.startswith('_'):
-                if isinstance(value, float):
-                    extras.append(f"{key}={value:.2f}")
+                safe_value = redact_value(value, key=key)
+                if isinstance(safe_value, float):
+                    extras.append(f"{key}={safe_value:.2f}")
                 else:
-                    extras.append(f"{key}={value}")
+                    extras.append(f"{key}={safe_value}")
 
         if extras:
             base += " | " + " ".join(extras)

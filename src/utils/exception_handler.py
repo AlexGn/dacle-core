@@ -67,6 +67,8 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, Union
 
+from src.utils.redaction import redact_string, redact_value
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar('T')
@@ -218,13 +220,15 @@ def log_exception(
     if category is None:
         category = categorize_exception(e)
 
+    safe_extra = redact_value(extra or {})
+
     # Build context
     context = ExceptionContext(
         operation=operation,
         category=category,
-        extra=extra or {},
+        extra=safe_extra,
         exception_type=type(e).__name__,
-        message=str(e),
+        message=redact_string(str(e)),
         stack_trace=traceback.format_exc() if include_trace else ""
     )
 
@@ -246,8 +250,8 @@ def log_exception(
     log_msg = (
         f"[{category.value.upper()}] {operation} failed: {context.exception_type}: {context.message}"
     )
-    if extra:
-        log_msg += f" | Context: {extra}"
+    if safe_extra:
+        log_msg += f" | Context: {safe_extra}"
 
     # Log at appropriate level
     if level == logging.DEBUG:
@@ -280,7 +284,7 @@ def _send_to_sentry(e: Exception, context: ExceptionContext) -> None:
             with sentry_sdk.push_scope() as scope:
                 scope.set_tag("category", context.category.value)
                 scope.set_tag("operation", context.operation)
-                scope.set_extra("context", context.extra)
+                scope.set_extra("context", redact_value(context.extra))
                 sentry_sdk.capture_exception(e)
     except ImportError:
         pass  # Sentry not installed
