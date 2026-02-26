@@ -46,7 +46,11 @@ dependencies = [
     "aiohttp>=3.8.0",
     "lighter-sdk>=1.0.3",
     "orjson>=3.9.0",
-    "pydantic>=2.5.2",
+    "py-clob-client>=0.34.6",
+    "poly-eip712-structs>=0.0.1",
+    "py-order-utils>=0.3.2",
+    "py-builder-signing-sdk>=0.0.2",
+    "python-dotenv>=1.0.1",
     "redis[hiredis]>=5.0.1",  # Tier 4: Vector database for long-term memory (Session 402)
 ]
 
