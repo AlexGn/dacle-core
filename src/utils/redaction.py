@@ -31,7 +31,7 @@ _PRIVATE_IP_RE = re.compile(
     r"\b(?:10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})\b"
 )
 _LOCAL_PATH_RE = re.compile(
-    r"(?<!https?:)//?((?:Users|home|root|var|tmp|etc|opt|srv|mnt)/[^\s\"'<>]+)"
+    r"(?<!http:)(?<!https:)//?((?:Users|home|root|var|tmp|etc|opt|srv|mnt)/[^\s\"'<>]+)"
 )
 _QUERY_SECRET_RE = re.compile(r"(?i)\b(api[_-]?key|token|secret|password)=([^&\s]+)")
 
