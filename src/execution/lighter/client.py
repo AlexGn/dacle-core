@@ -199,32 +199,31 @@ class LighterRealClient:
             url = f"{api_url}/sendTx"
             try:
                 async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-                    async with session.post(url, json=payload) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            result = {"status": "success", "order_id": data.get("orderId"), "raw": data}
-                            result["filled_qty"] = data.get("filled_qty") or data.get("filledQty")
-                            result["filled_price"] = data.get("filled_price") or data.get("filledPrice")
-                            return result
-                        err_text = await resp.text()
-                        # Structured error classification
-                        error_code = "API_ERROR"
-                        try:
-                            err_json = json.loads(err_text)
-                            err_code_field = str(err_json.get("code", "") or err_json.get("error_code", "")).lower()
-                            if "nonce" in err_code_field or "sequence" in err_code_field:
-                                error_code = "NONCE_ERROR"
-                        except (json.JSONDecodeError, AttributeError):
-                            # Fallback: substring match on raw text
-                            lower_text = err_text.lower()
-                            if "nonce" in lower_text or "sequence" in lower_text:
-                                error_code = "NONCE_ERROR"
-                        return {
-                            "status": "error",
-                            "error": f"HTTP {resp.status}: {err_text}",
-                            "error_code": error_code,
-                            "http_status": resp.status,
-                        }
+                    status, payload, err_text = await self._post_json(session, url, json_payload=payload)
+                    if status == 200:
+                        data = payload
+                        result = {"status": "success", "order_id": data.get("orderId"), "raw": data}
+                        result["filled_qty"] = data.get("filled_qty") or data.get("filledQty")
+                        result["filled_price"] = data.get("filled_price") or data.get("filledPrice")
+                        return result
+                    
+                    # Structured error classification
+                    error_code = "API_ERROR"
+                    try:
+                        err_code_field = str(payload.get("code", "") or payload.get("error_code", "")).lower() if payload else ""
+                        if "nonce" in err_code_field or "sequence" in err_code_field:
+                            error_code = "NONCE_ERROR"
+                    except Exception:
+                        # Fallback: substring match on raw text
+                        lower_text = err_text.lower()
+                        if "nonce" in lower_text or "sequence" in lower_text:
+                            error_code = "NONCE_ERROR"
+                    return {
+                        "status": "error",
+                        "error": f"HTTP {status}: {err_text}",
+                        "error_code": error_code,
+                        "http_status": status,
+                    }
             except _FAILOVER_ERRORS as e:
                 logger.warning(f"Failover: {api_url}/sendTx failed ({type(e).__name__}: {e}), trying next URL")
                 last_error = e
@@ -481,19 +480,44 @@ class LighterRealClient:
 
             # Auth expiry detection (Day 3)
             if status in (401, 403):
-                self._auth_expired_at = time.monotonic()
-                logger.critical("Auth token expired: HTTP %d from %s", status, url)
-                if self._auth_expired_callback:
-                    try:
-                        result = self._auth_expired_callback()
-                        if asyncio.iscoroutine(result):
-                            asyncio.get_running_loop().create_task(result)
-                    except Exception:
-                        pass  # Best-effort; callback handles its own scheduling
+                await self._handle_auth_failure(status, url)
 
             if payload is None:
                 return status, None, await resp.text()
             return status, payload, ""
+
+    async def _post_json(
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        json_payload: Dict[str, Any],
+    ) -> Tuple[int, Any, str]:
+        """POST wrapper with auth-expiry detection."""
+        async with session.post(url, json=json_payload) as resp:
+            status = resp.status
+            try:
+                payload = await resp.json(content_type=None)
+            except Exception:
+                payload = None
+
+            if status in (401, 403):
+                await self._handle_auth_failure(status, url)
+
+            if payload is None:
+                return status, None, await resp.text()
+            return status, payload, ""
+
+    async def _handle_auth_failure(self, status: int, url: str):
+        """Standardized auth failure handling and callback trigger."""
+        self._auth_expired_at = time.monotonic()
+        logger.critical("Auth token expired: HTTP %d from %s", status, url)
+        if self._auth_expired_callback:
+            try:
+                result = self._auth_expired_callback()
+                if asyncio.iscoroutine(result):
+                    asyncio.get_running_loop().create_task(result)
+            except Exception as e:
+                logger.error("Failed to trigger auth-expired callback: %s", e)
 
     def _extract_trades(self, payload: Any) -> List[Dict[str, Any]]:
         if isinstance(payload, list):
@@ -965,10 +989,9 @@ class LighterRealClient:
                 logger.warning(f"Failed to sign cancel for order {order_id}: {e}")
 
         try:
-            async with session.post(url, json=payload) as resp:
-                if resp.status == 200:
-                    return {"status": "success"}
-                err_text = await resp.text()
-                return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
+            status, payload, err_text = await self._post_json(session, url, json_payload=payload)
+            if status == 200:
+                return {"status": "success"}
+            return {"status": "error", "error": f"HTTP {status}: {err_text}"}
         except Exception as e:
             return {"status": "error", "error": str(e)}

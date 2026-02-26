@@ -1675,8 +1675,8 @@ def check_near_miss_opportunities(
 # Scalper Daemon Health Check (Session 445)
 # =============================================================================
 
-# Token TTL threshold: warn when remaining seconds drops below this
-SCALPER_TOKEN_TTL_WARN_SEC = 300
+# Token TTL threshold: warn when remaining seconds drops below this (Session 458: 10m target)
+SCALPER_TOKEN_TTL_WARN_SEC = 600
 
 
 def check_scalper_health(
