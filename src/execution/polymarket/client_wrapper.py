@@ -9,7 +9,7 @@ import time
 import asyncio
 from typing import Any, Dict, Optional, List
 from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, ApiCreds
+from py_clob_client.clob_types import OrderArgs, ApiCreds, OrderType
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,13 @@ logger = logging.getLogger(__name__)
 # GTD: Good Till Date (Requires expiration)
 # FOK: Fill or Kill
 # FAK: Fill and Kill (Partial fill allowed, remainder cancelled)
-VALID_ORDER_TYPES = ["GTC", "GTD", "FOK", "FAK"]
+ORDER_TYPE_MAP = {
+    "GTC": OrderType.GTC,
+    "GTD": OrderType.GTD,
+    "FOK": OrderType.FOK,
+    "FAK": OrderType.FAK
+}
+VALID_ORDER_TYPES = list(ORDER_TYPE_MAP.keys())
 
 class PolymarketClientWrapper:
     def __init__(self, config: dict, client: ClobClient):
@@ -39,7 +45,7 @@ class PolymarketClientWrapper:
         return self.mode == "SHADOW"
 
     async def get_market_metadata(self, token_id: str) -> Dict[str, Any]:
-        """Fetch and cache tickSize and minOrderSize for a specific token."""
+        """Fetch and cache tickSize and negRisk for a specific token."""
         if token_id in self._market_metadata:
             return self._market_metadata[token_id]
             
@@ -48,15 +54,17 @@ class PolymarketClientWrapper:
                 return self._market_metadata[token_id]
                 
             try:
-                market = await asyncio.to_thread(self.client.get_market, token_id)
-                if market:
-                    meta = {
-                        "tick_size": float(market.get("tick_size", 0.01)),
-                        "min_order_size": float(market.get("minimum_order_size", 1.0)),
-                        "neg_risk": bool(market.get("neg_risk", False))
-                    }
-                    self._market_metadata[token_id] = meta
-                    return meta
+                # Use endpoints that work with token_id directly
+                tick_size = await asyncio.to_thread(self.client.get_tick_size, token_id)
+                neg_risk = await asyncio.to_thread(self.client.get_neg_risk, token_id)
+                
+                meta = {
+                    "tick_size": float(tick_size) if tick_size else 0.01,
+                    "min_order_size": 1.0, # Default safe min size
+                    "neg_risk": bool(neg_risk)
+                }
+                self._market_metadata[token_id] = meta
+                return meta
             except Exception as e:
                 logger.warning(f"Failed to fetch market metadata for {token_id}: {e}")
                 
@@ -137,10 +145,14 @@ class PolymarketClientWrapper:
 
         # 7. Execute
         try:
-            # create_and_post_order handles the type mapping internally via OrderArgs
-            # Note: For explicit FOK/FAK we might need to use create_order + post_order 
-            # with specific parameters if the SDK wrapper is too opaque.
-            resp = await asyncio.to_thread(self.client.create_and_post_order, order_args)
+            # Note: For explicit FOK/FAK we must use create_order + post_order 
+            # as create_and_post_order does not expose the order_type parameter.
+            target_type = ORDER_TYPE_MAP.get(order_type, OrderType.GTD)
+            
+            # Step A: Sign
+            signed = await asyncio.to_thread(self.client.create_order, order_args)
+            # Step B: Post
+            resp = await asyncio.to_thread(self.client.post_order, signed, orderType=target_type)
             
             if resp and resp.get("success"):
                 return {
