@@ -56,6 +56,7 @@ class LighterRealClient:
         # Auth expiry detection (Day 3)
         self._auth_expired_at: float = 0.0
         self._auth_expired_callback = None
+        self._reactive_auth_lock = asyncio.Lock()
 
         # 5.8: Execution timeouts — strict 500ms default on ALL REST calls.
         timeout_sec = float(config.get("timeout_sec", 0.5))
@@ -137,6 +138,7 @@ class LighterRealClient:
         nonce: int,
         order_type: str = "IOC",
         is_reduce_only: bool = False,
+        is_emergency_exit: bool = False,
     ) -> dict:
         """
         Creates an authenticated order on Lighter.xyz.
@@ -148,9 +150,11 @@ class LighterRealClient:
                         POST_ONLY -> timeInForce "POST_ONLY" (maker-only, better fees)
             is_reduce_only: When True, bypass notional-cap risk checks so exit orders
                         can always flatten exposure.
+            is_emergency_exit: Enables reactive auth refresh + single retry on 401/403.
 
         In SHADOW mode this function fail-closes by returning a mock ack before any network I/O.
         """
+        emergency_exit_mode = bool(is_emergency_exit or is_reduce_only)
         order_type = order_type.upper() if order_type else "IOC"
         tif = _ORDER_TYPE_TO_TIF.get(order_type)
         if tif is None:
@@ -212,6 +216,7 @@ class LighterRealClient:
         last_error: Optional[Exception] = None
         for api_url in self.api_urls:
             url = f"{api_url}/sendTx"
+            did_reactive_retry = False
             try:
                 # 2. Mid-cycle kill-switch check right before transmit
                 if self.risk_ledger:
@@ -225,9 +230,17 @@ class LighterRealClient:
                         return {"status": "error", "error": f"BLOCKED_MID_CYCLE: {reason}", "error_code": "RISK_BLOCK"}
 
                 async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-                    status, payload, err_text = await self._post_json(session, url, json_payload=payload)
+                    status, response_payload, err_text = await self._post_json(session, url, json_payload=payload)
+
+                    # Exit safety: on auth expiry, trigger immediate refresh and retry once.
+                    if status in (401, 403) and emergency_exit_mode and not did_reactive_retry:
+                        refreshed = await self._reactive_auth_refresh_once("create_order_401_403")
+                        if refreshed:
+                            did_reactive_retry = True
+                            status, response_payload, err_text = await self._post_json(session, url, json_payload=payload)
+
                     if status == 200:
-                        data = payload
+                        data = response_payload
                         result = {"status": "success", "order_id": data.get("orderId"), "raw": data}
                         result["filled_qty"] = data.get("filled_qty") or data.get("filledQty")
                         result["filled_price"] = data.get("filled_price") or data.get("filledPrice")
@@ -236,7 +249,7 @@ class LighterRealClient:
                     # Structured error classification
                     error_code = "API_ERROR"
                     try:
-                        err_code_field = str(payload.get("code", "") or payload.get("error_code", "")).lower() if payload else ""
+                        err_code_field = str(response_payload.get("code", "") or response_payload.get("error_code", "")).lower() if response_payload else ""
                         if "nonce" in err_code_field or "sequence" in err_code_field:
                             error_code = "NONCE_ERROR"
                     except Exception:
@@ -544,6 +557,36 @@ class LighterRealClient:
                     asyncio.get_running_loop().create_task(result)
             except Exception as e:
                 logger.error("Failed to trigger auth-expired callback: %s", e)
+
+    async def _reactive_auth_refresh_once(self, reason: str, timeout_sec: float = 8.0) -> bool:
+        """Single-flight reactive refresh for runtime 401/403 recovery."""
+        if not self._auth_expired_callback:
+            logger.error("Reactive auth refresh skipped (%s): callback unavailable", reason)
+            return False
+
+        async with self._reactive_auth_lock:
+            before_token = str(self.auth_token or "")
+            logger.warning("Reactive auth refresh triggered: %s", reason)
+            try:
+                result = self._auth_expired_callback()
+                if asyncio.iscoroutine(result) or asyncio.isfuture(result):
+                    await result
+            except Exception as e:
+                logger.error("Reactive auth refresh callback failed (%s): %s", reason, e)
+                return False
+
+            # Callback may schedule work asynchronously; wait for token/state change.
+            deadline = time.monotonic() + timeout_sec
+            while time.monotonic() < deadline:
+                token_now = str(self.auth_token or "")
+                if token_now and token_now != before_token:
+                    self.clear_auth_expired()
+                    return True
+                if not self.is_auth_expired():
+                    return True
+                await asyncio.sleep(0.2)
+
+            return not self.is_auth_expired()
 
     def _extract_trades(self, payload: Any) -> List[Dict[str, Any]]:
         if isinstance(payload, list):
@@ -976,6 +1019,10 @@ class LighterRealClient:
             params["auth"] = self.auth_token
 
         status, payload, err_text = await self._get_json(session, url, params=params)
+        if status in (401, 403):
+            refreshed = await self._reactive_auth_refresh_once("fetch_open_orders_401_403")
+            if refreshed:
+                status, payload, err_text = await self._get_json(session, url, params=params)
         if status != 200:
             logger.error(f"_fetch_open_orders HTTP {status}: {err_text}")
             return None

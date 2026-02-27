@@ -302,10 +302,11 @@ class PolymarketClientWrapper:
         import httpx
 
         request_path = "/balance-allowance"
+        sig_type = os.getenv("POLY_SIGNATURE_TYPE", "2")
         if token_id:
-            url = f"https://clob.polymarket.com{request_path}?asset_type=CONDITIONAL&token_id={token_id}"
+            url = f"https://clob.polymarket.com{request_path}?asset_type=CONDITIONAL&token_id={token_id}&signature_type={sig_type}"
         else:
-            url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL"
+            url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL&signature_type={sig_type}"
 
         try:
             headers = self._build_l2_headers("GET", request_path)
@@ -337,8 +338,9 @@ class PolymarketClientWrapper:
         """
         import httpx
 
+        sig_type = os.getenv("POLY_SIGNATURE_TYPE", "2")
         request_path = "/balance-allowance"
-        url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL"
+        url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL&signature_type={sig_type}"
         try:
             headers = self._build_l2_headers("GET", request_path)
             async with httpx.AsyncClient(timeout=10) as client:

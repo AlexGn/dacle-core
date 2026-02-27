@@ -45,6 +45,7 @@ class VirtualLighter:
         nonce: int,
         order_type: str = "IOC",
         is_reduce_only: bool = False,
+        is_emergency_exit: bool = False,
     ) -> dict:
         """
         Simulates the Lighter Standard Tier order creation.
