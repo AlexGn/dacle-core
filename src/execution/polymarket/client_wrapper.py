@@ -5,6 +5,7 @@ Handles: tick-size normalization, idempotency, GTD orders, and fail-fast safety.
 """
 
 import logging
+import os
 import time
 import asyncio
 from typing import Any, Dict, Optional, List
@@ -31,53 +32,81 @@ class PolymarketClientWrapper:
         self.config = config
         self.client = client
         self.mode = config.get("mode", "SHADOW").upper()
-        
+
+        # Env var override takes priority over config
+        env_mode = os.getenv("POLY_MODE", "").upper()
+        if env_mode in ("SHADOW", "PAPER", "LIVE"):
+            self.mode = env_mode
+
+        # LIVE mode requires both POLY_LIVE_ENABLED=true AND mode=LIVE
+        live_enabled = os.getenv("POLY_LIVE_ENABLED", "false").lower() == "true"
+        if self.mode == "LIVE" and not live_enabled:
+            logger.warning("POLY_MODE=LIVE but POLY_LIVE_ENABLED is not true. Falling back to SHADOW.")
+            self.mode = "SHADOW"
+
         # Execution settings
         exec_cfg = config.get("execution", {})
         self.default_expiration_sec = exec_cfg.get("order_timeout_sec", 60)
         self.max_retries = exec_cfg.get("max_retries", 3)
-        
-        # Internal caches
+
+        # Internal caches with TTL
         self._market_metadata: Dict[str, Dict[str, Any]] = {}
         self._metadata_lock = asyncio.Lock()
+        self._metadata_ttl_sec: float = 3600.0
+
+        # Latency monitoring (rolling last 10)
+        self._order_latencies: List[float] = []
+        self._latency_lock = asyncio.Lock()
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
 
+    def get_p95_latency_ms(self) -> float:
+        if not self._order_latencies:
+            return 0.0
+        sorted_lat = sorted(self._order_latencies)
+        idx = max(0, int(len(sorted_lat) * 0.95) - 1)
+        return sorted_lat[idx]
+
     async def get_market_metadata(self, token_id: str) -> Dict[str, Any]:
         """Fetch and cache tickSize and negRisk for a specific token."""
         if token_id in self._market_metadata:
-            return self._market_metadata[token_id]
-            
+            cached = self._market_metadata[token_id]
+            if time.time() - cached.get("_cached_at", 0) <= self._metadata_ttl_sec:
+                return cached
+
         async with self._metadata_lock:
             if token_id in self._market_metadata:
-                return self._market_metadata[token_id]
-                
+                cached = self._market_metadata[token_id]
+                if time.time() - cached.get("_cached_at", 0) <= self._metadata_ttl_sec:
+                    return cached
+
             try:
                 # Use endpoints that work with token_id directly
                 tick_size = await asyncio.to_thread(self.client.get_tick_size, token_id)
                 neg_risk = await asyncio.to_thread(self.client.get_neg_risk, token_id)
-                
+
                 meta = {
                     "tick_size": float(tick_size) if tick_size else 0.01,
                     "min_order_size": 5.0, # Updated based on test results (Min 5 shares)
-                    "neg_risk": bool(neg_risk)
+                    "neg_risk": bool(neg_risk),
+                    "_cached_at": time.time()
                 }
                 self._market_metadata[token_id] = meta
                 return meta
             except Exception as e:
                 logger.warning(f"Failed to fetch market metadata for {token_id}: {e}")
-                
-            return {"tick_size": 0.01, "min_order_size": 5.0, "neg_risk": False}
+
+            return {"tick_size": 0.01, "min_order_size": 5.0, "neg_risk": False, "_cached_at": 0}
 
     def normalize_price(self, price: float, tick_size: float, side: str = "BUY") -> float:
         """Round price to the nearest tick_size and enforce hard caps."""
         if tick_size <= 0:
             tick_size = 0.01
-            
+
         # Round to nearest tick
         norm = round(round(price / tick_size) * tick_size, 4)
-        
+
         # Hard Caps to avoid 'invalid amount' or 'crosses the book' errors
         if side.upper() == "BUY":
             # Buy price must be < 1.0
@@ -85,7 +114,7 @@ class PolymarketClientWrapper:
         else:
             # Sell price must be > 0.0
             if norm <= 0.0001: norm = 0.01
-            
+
         return norm
 
     async def create_order(
@@ -104,15 +133,15 @@ class PolymarketClientWrapper:
         side_val = side.upper()
         if side_val not in ("BUY", "SELL"):
             return {"status": "error", "error": f"Invalid side: {side}"}
-            
+
         order_type = order_type.upper()
         if order_type not in VALID_ORDER_TYPES:
             return {"status": "error", "error": f"Invalid order_type: {order_type}"}
-        
+
         # 1. Resolve Metadata
         meta = await self.get_market_metadata(token_id)
         norm_price = self.normalize_price(price, meta["tick_size"], side_val)
-        
+
         # 2. Enforce Integer Quantities (Fix for 'max of 4 decimals' errors)
         # Polymarket shares are essentially ERC1155 tokens, integer shares are safer.
         qty_int = int(qty)
@@ -139,6 +168,27 @@ class PolymarketClientWrapper:
                 "filled_price": 0.0
             }
 
+        # 4b. Paper Mode: place real order at $0.01 POST_ONLY+GTD, then cancel immediately
+        if self.mode == "PAPER":
+            paper_price = 0.01
+            norm_paper = self.normalize_price(paper_price, meta["tick_size"], side_val)
+            logger.info(f"[PAPER] POST_ONLY order: {side_val} {qty_int} @ {norm_paper} (token={token_id})")
+            exp = int(time.time() + 30)  # 30s GTD
+            paper_args = OrderArgs(price=norm_paper, size=qty_int, side=side_val, token_id=token_id, expiration=exp)
+            try:
+                signed = await asyncio.to_thread(self.client.create_order, paper_args)
+                resp = await asyncio.to_thread(self.client.post_order, signed, orderType=OrderType.GTD)
+                if resp and resp.get("success"):
+                    paper_order_id = resp.get("orderID")
+                    logger.info(f"[PAPER] Order placed: {paper_order_id}. Cancelling immediately...")
+                    await asyncio.sleep(0.5)
+                    await self.cancel_order(paper_order_id)
+                    return {"status": "success", "paper": True, "order_id": paper_order_id, "client_order_id": client_order_id}
+                else:
+                    return {"status": "error", "error": resp.get("errorMsg", "Paper order failed"), "error_code": "PAPER_REJECT"}
+            except Exception as e:
+                return {"status": "error", "error": str(e), "error_code": "PAPER_EXCEPTION"}
+
         # 5. Expiration
         if order_type == "GTD":
             exp = int(time.time() + (expiration_sec or self.default_expiration_sec))
@@ -155,17 +205,29 @@ class PolymarketClientWrapper:
             expiration=exp
         )
 
-        # 7. Execute
+        # 7. Execute with latency tracking
         try:
-            # Note: For explicit FOK/FAK we must use create_order + post_order 
+            # Note: For explicit FOK/FAK we must use create_order + post_order
             # as create_and_post_order does not expose the order_type parameter.
             target_type = ORDER_TYPE_MAP.get(order_type, OrderType.GTD)
-            
+
+            t_start = time.time()
             # Step A: Sign
             signed = await asyncio.to_thread(self.client.create_order, order_args)
             # Step B: Post
             resp = await asyncio.to_thread(self.client.post_order, signed, orderType=target_type)
-            
+            latency_ms = (time.time() - t_start) * 1000
+
+            # Track latency
+            async with self._latency_lock:
+                self._order_latencies.append(latency_ms)
+                if len(self._order_latencies) > 10:
+                    self._order_latencies.pop(0)
+                p95_latency = self.get_p95_latency_ms()
+                if p95_latency > 500:
+                    penalty_bps = (p95_latency - 200) / 100 * 10
+                    logger.warning(f"High relayer latency P95={p95_latency:.0f}ms, penalty={penalty_bps:.0f}bps")
+
             if resp and resp.get("success"):
                 return {
                     "status": "success",
@@ -203,7 +265,7 @@ class PolymarketClientWrapper:
                 params = BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=token_id)
             else:
                 params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
-                
+
             resp = await asyncio.to_thread(self.client.get_balance_allowance, params)
             raw_bal = float(resp.get("balance", "0"))
             return raw_bal / 1000000.0 # Standard 6 decimal precision for Polymarket

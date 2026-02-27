@@ -52,6 +52,7 @@ dependencies = [
     "py-builder-signing-sdk>=0.0.2",
     "python-dotenv>=1.0.1",
     "redis[hiredis]>=5.0.1",  # Tier 4: Vector database for long-term memory (Session 402)
+    "sortedcontainers>=2.4.0",  # Session 464: L2 order book for Polymarket (polymarket_order_book.py)
 ]
 
 [project.optional-dependencies]
