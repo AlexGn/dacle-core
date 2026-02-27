@@ -35,9 +35,10 @@ class MarketMetadata:
         self.size_decimals = size_decimals
 
 class LighterRealClient:
-    def __init__(self, config: dict, signer: Optional[LighterSigner] = None):
+    def __init__(self, config: dict, signer: Optional[LighterSigner] = None, risk_ledger=None):
         self.api_url = config.get("api_url", "https://mainnet.zklighter.elliot.ai/api/v1")
         self.signer = signer
+        self.risk_ledger = risk_ledger
         self.market_id = config.get("market_id", 1)
         self.account_type = config.get("account_type", "STANDARD")
         self.mode = str(config.get("mode", "SHADOW")).upper()
@@ -161,6 +162,14 @@ class LighterRealClient:
         if not self.signer:
             return {"status": "error", "error": "No signer provided for LIVE mode."}
 
+        # 1. Pre-send check against real-time risk ledger
+        if self.risk_ledger:
+            intent_notional = price * qty
+            is_allowed, reason = await self.risk_ledger.check_order_allowed(intent_notional)
+            if not is_allowed:
+                logger.warning(f"Order blocked by Risk Ledger: {reason}")
+                return {"status": "error", "error": f"BLOCKED_BY_RISK_LEDGER: {reason}", "error_code": "RISK_BLOCK"}
+
         # Resolve Decimals
         meta = await self._get_market_metadata(self.market_id)
         
@@ -198,6 +207,14 @@ class LighterRealClient:
         for api_url in self.api_urls:
             url = f"{api_url}/sendTx"
             try:
+                # 2. Mid-cycle kill-switch check right before transmit
+                if self.risk_ledger:
+                    intent_notional = price * qty
+                    is_allowed, reason = await self.risk_ledger.check_order_allowed(intent_notional)
+                    if not is_allowed:
+                        logger.critical(f"Transmission blocked mid-cycle by Risk Ledger: {reason}")
+                        return {"status": "error", "error": f"BLOCKED_MID_CYCLE: {reason}", "error_code": "RISK_BLOCK"}
+
                 async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
                     status, payload, err_text = await self._post_json(session, url, json_payload=payload)
                     if status == 200:
