@@ -255,23 +255,100 @@ class PolymarketClientWrapper:
             logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
 
+    def _build_l2_headers(self, method: str, request_path: str) -> dict:
+        """
+        Generate Polymarket Level 2 auth headers for a REST call.
+
+        Bypasses py_clob_client header generation to avoid a known bug where
+        AssetType.__str__() returns 'AssetType.COLLATERAL' (with class prefix)
+        instead of plain 'COLLATERAL' in Python 3.11+, causing the backend to
+        return '400 assetAddress invalid hex address'.
+
+        Signature: base64url( HMAC-SHA256( base64url_decode(secret), ts+method+path ) )
+        """
+        import hmac as _hmac
+        import hashlib
+        import base64
+
+        key = os.getenv("POLY_API_KEY", "")
+        secret = os.getenv("POLY_API_SECRET", "")
+        passphrase = os.getenv("POLY_API_PASSPHRASE", "")
+        address = os.getenv("POLY_ADDRESS", "")
+
+        ts = str(int(time.time()))
+        msg = ts + method.upper() + request_path
+        secret_padded = secret + "=" * ((4 - len(secret) % 4) % 4)
+        secret_bytes = base64.urlsafe_b64decode(secret_padded)
+        sig = base64.urlsafe_b64encode(
+            _hmac.new(secret_bytes, msg.encode(), hashlib.sha256).digest()
+        ).decode()
+
+        return {
+            "POLY_ADDRESS": address,
+            "POLY_API_KEY": key,
+            "POLY_SIGNATURE": sig,
+            "POLY_TIMESTAMP": ts,
+            "POLY_PASSPHRASE": passphrase,
+        }
+
     async def get_balance(self, token_id: Optional[str] = None) -> float:
         """
         Fetch balance for USDC.e (if token_id is None) or shares (if token_id is provided).
-        """
-        from py_clob_client.clob_types import BalanceAllowanceParams, AssetType
-        try:
-            if token_id:
-                params = BalanceAllowanceParams(asset_type=AssetType.CONDITIONAL, token_id=token_id)
-            else:
-                params = BalanceAllowanceParams(asset_type=AssetType.COLLATERAL)
 
-            resp = await asyncio.to_thread(self.client.get_balance_allowance, params)
-            raw_bal = float(resp.get("balance", "0"))
-            return raw_bal / 1000000.0 # Standard 6 decimal precision for Polymarket
+        Uses a direct aiohttp call instead of py_clob_client.get_balance_allowance()
+        to avoid a Python 3.11+ enum.__str__ regression that causes the backend to
+        receive '?asset_type=AssetType.COLLATERAL' and reject with 400.
+        """
+        import aiohttp
+
+        request_path = "/balance-allowance"
+        if token_id:
+            url = f"https://clob.polymarket.com{request_path}?asset_type=CONDITIONAL&token_id={token_id}"
+        else:
+            url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL"
+
+        try:
+            headers = self._build_l2_headers("GET", request_path)
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        raw_bal = float(data.get("balance", "0"))
+                        return raw_bal / 1_000_000  # USDC.e has 6 decimals
+                    text = await resp.text()
+                    logger.error(f"balance-allowance HTTP {resp.status}: {text[:200]}")
+                    return 0.0
         except Exception as e:
-            logger.error(f"Failed to fetch balance for {token_id or 'USDC.e'}: {e}")
+            logger.error(f"Direct balance check failed for {token_id or 'USDC.e'}: {e}")
             return 0.0
+
+    async def get_usdc_balance_and_allowance(self) -> dict:
+        """
+        Returns both USDC.e balance and CTF Exchange allowance in a single call.
+        Useful for pre-trade checks: need balance > order_cost AND allowance > order_cost.
+        Returns: {"balance_usdc": float, "allowance_usdc": float, "ok": bool}
+        """
+        import aiohttp
+
+        request_path = "/balance-allowance"
+        url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL"
+        try:
+            headers = self._build_l2_headers("GET", request_path)
+            timeout = aiohttp.ClientTimeout(total=10)
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers, timeout=timeout) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        balance = float(data.get("balance", "0")) / 1_000_000
+                        allowance = float(data.get("allowance", "0")) / 1_000_000
+                        return {"balance_usdc": balance, "allowance_usdc": allowance, "ok": True}
+                    text = await resp.text()
+                    logger.error(f"get_usdc_balance_and_allowance HTTP {resp.status}: {text[:200]}")
+                    return {"balance_usdc": 0.0, "allowance_usdc": 0.0, "ok": False, "error": text[:200]}
+        except Exception as e:
+            logger.error(f"get_usdc_balance_and_allowance failed: {e}")
+            return {"balance_usdc": 0.0, "allowance_usdc": 0.0, "ok": False, "error": str(e)}
 
     async def wait_for_balance(self, token_id: str, target_qty: float, timeout_sec: int = 60) -> bool:
         """
