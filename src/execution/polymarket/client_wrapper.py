@@ -295,11 +295,11 @@ class PolymarketClientWrapper:
         """
         Fetch balance for USDC.e (if token_id is None) or shares (if token_id is provided).
 
-        Uses a direct aiohttp call instead of py_clob_client.get_balance_allowance()
+        Uses a direct httpx call instead of py_clob_client.get_balance_allowance()
         to avoid a Python 3.11+ enum.__str__ regression that causes the backend to
         receive '?asset_type=AssetType.COLLATERAL' and reject with 400.
         """
-        import aiohttp
+        import httpx
 
         request_path = "/balance-allowance"
         if token_id:
@@ -309,16 +309,14 @@ class PolymarketClientWrapper:
 
         try:
             headers = self._build_l2_headers("GET", request_path)
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=timeout) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        raw_bal = float(data.get("balance", "0"))
-                        return raw_bal / 1_000_000  # USDC.e has 6 decimals
-                    text = await resp.text()
-                    logger.error(f"balance-allowance HTTP {resp.status}: {text[:200]}")
-                    return 0.0
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    raw_bal = float(data.get("balance", "0"))
+                    return raw_bal / 1_000_000  # USDC.e has 6 decimals
+                logger.error(f"balance-allowance HTTP {resp.status_code}: {resp.text[:200]}")
+                return 0.0
         except Exception as e:
             logger.error(f"Direct balance check failed for {token_id or 'USDC.e'}: {e}")
             return 0.0
@@ -329,23 +327,21 @@ class PolymarketClientWrapper:
         Useful for pre-trade checks: need balance > order_cost AND allowance > order_cost.
         Returns: {"balance_usdc": float, "allowance_usdc": float, "ok": bool}
         """
-        import aiohttp
+        import httpx
 
         request_path = "/balance-allowance"
         url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL"
         try:
             headers = self._build_l2_headers("GET", request_path)
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, headers=headers, timeout=timeout) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        balance = float(data.get("balance", "0")) / 1_000_000
-                        allowance = float(data.get("allowance", "0")) / 1_000_000
-                        return {"balance_usdc": balance, "allowance_usdc": allowance, "ok": True}
-                    text = await resp.text()
-                    logger.error(f"get_usdc_balance_and_allowance HTTP {resp.status}: {text[:200]}")
-                    return {"balance_usdc": 0.0, "allowance_usdc": 0.0, "ok": False, "error": text[:200]}
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    balance = float(data.get("balance", "0")) / 1_000_000
+                    allowance = float(data.get("allowance", "0")) / 1_000_000
+                    return {"balance_usdc": balance, "allowance_usdc": allowance, "ok": True}
+                logger.error(f"get_usdc_balance_and_allowance HTTP {resp.status_code}: {resp.text[:200]}")
+                return {"balance_usdc": 0.0, "allowance_usdc": 0.0, "ok": False, "error": resp.text[:200]}
         except Exception as e:
             logger.error(f"get_usdc_balance_and_allowance failed: {e}")
             return {"balance_usdc": 0.0, "allowance_usdc": 0.0, "ok": False, "error": str(e)}
