@@ -321,10 +321,18 @@ class PolymarketClientWrapper:
             logger.error(f"Direct balance check failed for {token_id or 'USDC.e'}: {e}")
             return 0.0
 
+    # CTF Exchange address on Polygon — the contract that needs USDC.e allowance
+    CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
+
     async def get_usdc_balance_and_allowance(self) -> dict:
         """
         Returns both USDC.e balance and CTF Exchange allowance in a single call.
         Useful for pre-trade checks: need balance > order_cost AND allowance > order_cost.
+
+        The CLOB API returns:
+          {"balance": "12345678", "allowances": {"0x4bFb...": "99999999", ...}}
+        Note: "allowances" is a dict keyed by contract address, NOT a single "allowance" field.
+
         Returns: {"balance_usdc": float, "allowance_usdc": float, "ok": bool}
         """
         import httpx
@@ -338,8 +346,16 @@ class PolymarketClientWrapper:
                 if resp.status_code == 200:
                     data = resp.json()
                     balance = float(data.get("balance", "0")) / 1_000_000
-                    allowance = float(data.get("allowance", "0")) / 1_000_000
-                    return {"balance_usdc": balance, "allowance_usdc": allowance, "ok": True}
+                    # allowances is a dict of {contract_address: amount_str}
+                    allowances = data.get("allowances", {})
+                    ctf_raw = allowances.get(self.CTF_EXCHANGE, "0")
+                    allowance = float(ctf_raw) / 1_000_000
+                    return {
+                        "balance_usdc": balance,
+                        "allowance_usdc": allowance,
+                        "allowances_raw": allowances,
+                        "ok": True,
+                    }
                 logger.error(f"get_usdc_balance_and_allowance HTTP {resp.status_code}: {resp.text[:200]}")
                 return {"balance_usdc": 0.0, "allowance_usdc": 0.0, "ok": False, "error": resp.text[:200]}
         except Exception as e:
