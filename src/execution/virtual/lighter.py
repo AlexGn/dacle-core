@@ -44,6 +44,7 @@ class VirtualLighter:
         qty: float,
         nonce: int,
         order_type: str = "IOC",
+        is_reduce_only: bool = False,
     ) -> dict:
         """
         Simulates the Lighter Standard Tier order creation.

@@ -136,6 +136,7 @@ class LighterRealClient:
         qty: float,
         nonce: int,
         order_type: str = "IOC",
+        is_reduce_only: bool = False,
     ) -> dict:
         """
         Creates an authenticated order on Lighter.xyz.
@@ -145,6 +146,8 @@ class LighterRealClient:
                         IOC   -> timeInForce "IOC"   (immediate-or-cancel, taker)
                         LIMIT -> timeInForce "GTC"   (good-till-cancelled, maker/taker)
                         POST_ONLY -> timeInForce "POST_ONLY" (maker-only, better fees)
+            is_reduce_only: When True, bypass notional-cap risk checks so exit orders
+                        can always flatten exposure.
 
         In SHADOW mode this function fail-closes by returning a mock ack before any network I/O.
         """
@@ -165,7 +168,10 @@ class LighterRealClient:
         # 1. Pre-send check against real-time risk ledger
         if self.risk_ledger:
             intent_notional = price * qty
-            is_allowed, reason = await self.risk_ledger.check_order_allowed(intent_notional)
+            is_allowed, reason = await self.risk_ledger.check_order_allowed(
+                intent_notional,
+                is_reduce_only=is_reduce_only,
+            )
             if not is_allowed:
                 logger.warning(f"Order blocked by Risk Ledger: {reason}")
                 return {"status": "error", "error": f"BLOCKED_BY_RISK_LEDGER: {reason}", "error_code": "RISK_BLOCK"}
@@ -210,7 +216,10 @@ class LighterRealClient:
                 # 2. Mid-cycle kill-switch check right before transmit
                 if self.risk_ledger:
                     intent_notional = price * qty
-                    is_allowed, reason = await self.risk_ledger.check_order_allowed(intent_notional)
+                    is_allowed, reason = await self.risk_ledger.check_order_allowed(
+                        intent_notional,
+                        is_reduce_only=is_reduce_only,
+                    )
                     if not is_allowed:
                         logger.critical(f"Transmission blocked mid-cycle by Risk Ledger: {reason}")
                         return {"status": "error", "error": f"BLOCKED_MID_CYCLE: {reason}", "error_code": "RISK_BLOCK"}
