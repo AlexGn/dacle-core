@@ -795,12 +795,16 @@ class LighterRealClient:
         for api_url in self.api_urls:
             url = f"{api_url}/orderBooks"
             params = {"market_id": target_market}
+            if self.auth_token:
+                params["auth"] = self.auth_token
             try:
                 async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
                     async with session.get(url, params=params) as resp:
                         last_http_status = int(resp.status)
                         payload = await resp.json(content_type=None)
                         if resp.status != 200:
+                            if resp.status in (401, 403):
+                                await self._handle_auth_failure(resp.status, url)
                             last_error = self._extract_error_message(payload) or await resp.text()
                             continue
                         snapshot = self._extract_snapshot_from_orderbooks_payload(payload, target_market)
@@ -1045,13 +1049,19 @@ class LighterRealClient:
                 return {"status": "error", "error": f"Account resolution error: {e}"}
 
         url = f"{self.api_url}/account/{account_index}/nonce"
+        params = {}
+        if self.auth_token:
+            params["auth"] = self.auth_token
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as resp:
+            async with aiohttp.ClientSession(headers=get_standard_headers()) as session:
+                async with session.get(url, params=params) as resp:
                     if resp.status == 200:
                         data = await resp.json(content_type=None)
                         nonce_val = data if isinstance(data, int) else data.get("nonce", 0) if isinstance(data, dict) else 0
                         return {"status": "success", "nonce": int(nonce_val)}
+                    
+                    if resp.status in (401, 403):
+                        await self._handle_auth_failure(resp.status, url)
                     err_text = await resp.text()
                     return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
         except Exception as e:
