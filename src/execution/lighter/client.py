@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -43,6 +44,7 @@ class LighterRealClient:
         self.account_type = config.get("account_type", "STANDARD")
         self.mode = str(config.get("mode", "SHADOW")).upper()
         self.account_index = config.get("account_index")
+        self.auth_refresh_interval_sec = int(config.get("auth_refresh_interval_sec", 1200))
         self.auth_token = (config.get("auth_token") or os.getenv("SCALPER_AUTH_TOKEN") or "").strip()
         self._resolved_account_index: Optional[int] = self._to_int(self.account_index)
         self._shadow_order_counter = 0
@@ -106,6 +108,113 @@ class LighterRealClient:
 
     def clear_auth_expired(self):
         self._auth_expired_at = 0.0
+
+    def _api_root_url(self, api_url: str) -> str:
+        url = str(api_url or "").strip().rstrip("/")
+        marker = "/api/"
+        idx = url.find(marker)
+        if idx > 0:
+            return url[:idx]
+        return url
+
+    async def _resolve_runtime_account_index(self) -> Tuple[Optional[int], Optional[str]]:
+        cached = self._to_int(self._resolved_account_index)
+        if cached is not None:
+            return cached, None
+
+        explicit = self._to_int(self.account_index)
+        if explicit is not None:
+            self._resolved_account_index = explicit
+            return explicit, None
+
+        env_idx = self._to_int(os.getenv("SCALPER_ACCOUNT_INDEX"))
+        if env_idx is not None:
+            self._resolved_account_index = env_idx
+            return env_idx, None
+
+        if not self.signer:
+            return None, "missing signer"
+
+        try:
+            async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
+                account_index, err = await self._resolve_account_index(session)
+                if err:
+                    return None, err
+                return account_index, None
+        except Exception as exc:
+            return None, str(exc)
+
+    async def refresh_auth_token_runtime(self, reason: str = "runtime_refresh") -> dict:
+        """Regenerate auth token in-process without writing .env."""
+        if self._is_shadow_mode():
+            return {"status": "success", "source": "shadow", "token_changed": False}
+
+        api_private_key = (os.getenv("LIGHTER_API_PRIVATE_KEY") or "").strip()
+        if not api_private_key:
+            return {"status": "error", "retryable": False, "error": "LIGHTER_API_PRIVATE_KEY missing"}
+
+        account_index, idx_err = await self._resolve_runtime_account_index()
+        if idx_err or account_index is None:
+            return {"status": "error", "retryable": True, "error": f"account_index_unavailable: {idx_err}"}
+
+        api_key_index = self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=0)
+        token_ttl_sec = self._to_int(os.getenv("SCALPER_AUTH_TOKEN_TTL_SEC"), default=None)
+        if token_ttl_sec is None:
+            token_ttl_sec = max(600, int(self.auth_refresh_interval_sec) + 120)
+        else:
+            token_ttl_sec = max(60, int(token_ttl_sec))
+
+        root_url = self._api_root_url(self.api_url)
+        if not root_url:
+            return {"status": "error", "retryable": False, "error": "api_url_missing"}
+
+        signer_client = None
+        try:
+            from lighter.signer_client import SignerClient
+
+            signer_client = SignerClient(
+                url=root_url,
+                account_index=int(account_index),
+                api_private_keys={int(api_key_index): api_private_key},
+            )
+            token, err = signer_client.create_auth_token_with_expiry(
+                deadline=int(token_ttl_sec),
+                api_key_index=int(api_key_index),
+            )
+            if err:
+                return {"status": "error", "retryable": True, "error": str(err)}
+            token = str(token or "").strip()
+            if not token:
+                return {"status": "error", "retryable": False, "error": "empty token generated"}
+
+            previous = str(self.auth_token or "")
+            self.auth_token = token
+            self.clear_auth_expired()
+            logger.info(
+                "AUTH_RUNTIME_REFRESH_OK reason=%s account_index=%s api_key_index=%s ttl_sec=%s changed=%s",
+                reason,
+                account_index,
+                api_key_index,
+                token_ttl_sec,
+                token != previous,
+            )
+            return {
+                "status": "success",
+                "source": "runtime",
+                "token_changed": token != previous,
+                "account_index": int(account_index),
+                "api_key_index": int(api_key_index),
+            }
+        except Exception as exc:
+            return {"status": "error", "retryable": True, "error": str(exc)}
+        finally:
+            if signer_client is not None:
+                api_client = getattr(signer_client, "api_client", None)
+                if api_client is not None:
+                    try:
+                        await api_client.close()
+                    except Exception:
+                        pass
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
@@ -565,6 +674,9 @@ class LighterRealClient:
             return False
 
         async with self._reactive_auth_lock:
+            if not self.is_auth_expired() and str(self.auth_token or "").strip():
+                logger.info("Reactive auth refresh fast-path skip: %s", reason)
+                return True
             before_token = str(self.auth_token or "")
             logger.warning("Reactive auth refresh triggered: %s", reason)
             try:
@@ -587,6 +699,136 @@ class LighterRealClient:
                 await asyncio.sleep(0.2)
 
             return not self.is_auth_expired()
+
+    def _normalize_book_levels(self, raw_levels: Any) -> List[Dict[str, str]]:
+        levels: List[Dict[str, str]] = []
+        if not isinstance(raw_levels, list):
+            return levels
+        for entry in raw_levels:
+            price: Optional[float] = None
+            size: Optional[float] = None
+            if isinstance(entry, dict):
+                price = self._safe_float(
+                    entry.get("price")
+                    or entry.get("px")
+                    or entry.get("p")
+                )
+                size = self._safe_float(
+                    entry.get("size")
+                    or entry.get("qty")
+                    or entry.get("amount")
+                    or entry.get("q")
+                )
+            elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                price = self._safe_float(entry[0])
+                size = self._safe_float(entry[1])
+            if price is None or size is None or price <= 0 or size <= 0:
+                continue
+            levels.append({"price": str(price), "size": str(size)})
+        return levels
+
+    def _extract_snapshot_from_orderbooks_payload(
+        self,
+        payload: Any,
+        market_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        records: List[Dict[str, Any]] = []
+        if isinstance(payload, dict):
+            if isinstance(payload.get("order_books"), list):
+                records = [x for x in payload.get("order_books", []) if isinstance(x, dict)]
+            elif any(k in payload for k in ("bids", "asks")):
+                records = [payload]
+        elif isinstance(payload, list):
+            records = [x for x in payload if isinstance(x, dict)]
+
+        target_record: Optional[Dict[str, Any]] = None
+        for rec in records:
+            mid = self._to_int(rec.get("market_id") or rec.get("marketId"), default=market_id)
+            if mid == market_id:
+                target_record = rec
+                break
+
+        if target_record is None:
+            return None
+
+        bids = self._normalize_book_levels(
+            target_record.get("bids")
+            or target_record.get("bid_levels")
+            or target_record.get("bidLevels")
+        )
+        asks = self._normalize_book_levels(
+            target_record.get("asks")
+            or target_record.get("ask_levels")
+            or target_record.get("askLevels")
+        )
+        if not bids or not asks:
+            return None
+
+        nonce = self._to_int(
+            target_record.get("nonce")
+            or target_record.get("sequence")
+            or target_record.get("seq"),
+            default=0,
+        )
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        return {
+            "timestamp": now_ms,
+            "order_book": {
+                "begin_nonce": 0,
+                "nonce": int(nonce or 0),
+                "bids": bids,
+                "asks": asks,
+            },
+        }
+
+    async def get_order_book_snapshot_checked(
+        self,
+        market_id: Optional[int] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Fetch a normalized order-book snapshot from REST with status metadata."""
+        target_market = int(market_id or self.market_id)
+        effective_timeout = aiohttp.ClientTimeout(total=timeout_sec) if timeout_sec else self.timeout
+        last_error: Optional[str] = None
+        last_http_status: Optional[int] = None
+
+        for api_url in self.api_urls:
+            url = f"{api_url}/orderBooks"
+            params = {"market_id": target_market}
+            try:
+                async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
+                    async with session.get(url, params=params) as resp:
+                        last_http_status = int(resp.status)
+                        payload = await resp.json(content_type=None)
+                        if resp.status != 200:
+                            last_error = self._extract_error_message(payload) or await resp.text()
+                            continue
+                        snapshot = self._extract_snapshot_from_orderbooks_payload(payload, target_market)
+                        if snapshot:
+                            return {"status": "success", "snapshot": snapshot, "http_status": resp.status}
+                        last_error = "orderbook payload missing bids/asks"
+            except _FAILOVER_ERRORS as exc:
+                last_error = str(exc)
+                continue
+            except Exception as exc:
+                last_error = str(exc)
+                break
+
+        return {
+            "status": "error",
+            "snapshot": None,
+            "http_status": last_http_status,
+            "error": last_error or "orderbook snapshot unavailable",
+        }
+
+    async def get_order_book_snapshot(
+        self,
+        market_id: Optional[int] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Backward-compatible snapshot fetcher used by daemon sequence-gap recovery."""
+        result = await self.get_order_book_snapshot_checked(market_id=market_id, timeout_sec=timeout_sec)
+        return result.get("snapshot")
 
     def _extract_trades(self, payload: Any) -> List[Dict[str, Any]]:
         if isinstance(payload, list):
