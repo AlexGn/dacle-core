@@ -994,14 +994,20 @@ class LighterRealClient:
 
         for api_url in self.api_urls:
             url = self._build_balance_url(api_url)
+            params = {}
+            if self.auth_token:
+                params["auth"] = self.auth_token
             try:
-                async with aiohttp.ClientSession(timeout=effective_timeout) as session:
-                    async with session.get(url) as resp:
+                async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
+                    async with session.get(url, params=params) as resp:
                         if resp.status == 200:
                             raw = await resp.json(content_type=None)
                             normalized = self._normalize_balance_payload(raw)
                             return (True, normalized)
                         else:
+                            # Auth expiry detection (Day 3)
+                            if resp.status in (401, 403):
+                                await self._handle_auth_failure(resp.status, url)
                             logger.warning(f"get_balance_checked HTTP {resp.status} from {url}")
             except _FAILOVER_ERRORS as e:
                 logger.warning(f"get_balance_checked failover: {url} ({type(e).__name__}: {e})")
