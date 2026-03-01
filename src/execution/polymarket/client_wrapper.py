@@ -50,6 +50,7 @@ class PolymarketClientWrapper:
         self.default_expiration_sec = exec_cfg.get("order_timeout_sec", 60)
         self.max_retries = exec_cfg.get("max_retries", 3)
         self.qty_precision = max(0, int(exec_cfg.get("qty_precision", 4)))
+        self.strict_signing_precision = bool(exec_cfg.get("strict_signing_precision", True))
 
         # Internal caches with TTL
         self._market_metadata: Dict[str, Dict[str, Any]] = {}
@@ -129,6 +130,46 @@ class PolymarketClientWrapper:
         except (InvalidOperation, ValueError, TypeError):
             return 0.0
 
+    def validate_signable_order(
+        self,
+        *,
+        price: float,
+        qty: float,
+        side: str,
+        tick_size: float,
+        min_order_size: float,
+        strict_precision: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Validate an order is signable before signature generation."""
+        strict = self.strict_signing_precision if strict_precision is None else bool(strict_precision)
+        norm_price = self.normalize_price(price, tick_size, side)
+        norm_qty = self.normalize_qty(qty)
+
+        if norm_qty <= 0:
+            return {"ok": False, "error_code": "INVALID_QTY", "error": f"Invalid quantity: {qty}"}
+        if norm_qty < float(min_order_size):
+            return {
+                "ok": False,
+                "error_code": "MIN_SIZE_REJECT",
+                "error": f"Quantity {norm_qty} below minimum {min_order_size}",
+            }
+
+        if strict:
+            if abs(float(price) - float(norm_price)) > 1e-9:
+                return {
+                    "ok": False,
+                    "error_code": "INVALID_PRECISION",
+                    "error": f"Price precision invalid: {price} (tick={tick_size})",
+                }
+            if abs(float(qty) - float(norm_qty)) > 1e-9:
+                return {
+                    "ok": False,
+                    "error_code": "INVALID_PRECISION",
+                    "error": f"Quantity precision invalid: {qty} (precision={self.qty_precision})",
+                }
+
+        return {"ok": True, "normalized_price": norm_price, "normalized_qty": norm_qty}
+
     async def create_order(
         self,
         token_id: str,
@@ -152,18 +193,22 @@ class PolymarketClientWrapper:
 
         # 1. Resolve Metadata
         meta = await self.get_market_metadata(token_id)
-        norm_price = self.normalize_price(price, meta["tick_size"], side_val)
-
-        # 2. Normalize quantity to venue precision and validate minimum size.
-        qty_norm = self.normalize_qty(qty)
-        if qty_norm <= 0:
-            return {"status": "error", "error": f"Invalid quantity: {qty}", "error_code": "INVALID_QTY"}
-        if qty_norm < float(meta["min_order_size"]):
+        validation = self.validate_signable_order(
+            price=price,
+            qty=qty,
+            side=side_val,
+            tick_size=float(meta["tick_size"]),
+            min_order_size=float(meta["min_order_size"]),
+        )
+        if not validation.get("ok"):
             return {
                 "status": "error",
-                "error": f"Quantity {qty_norm} below minimum {meta['min_order_size']}",
-                "error_code": "MIN_SIZE_REJECT"
+                "error": validation.get("error", "Order failed signability checks"),
+                "error_code": validation.get("error_code", "VALIDATION_REJECT"),
             }
+
+        norm_price = float(validation["normalized_price"])
+        qty_norm = float(validation["normalized_qty"])
 
         # 3. Idempotency Key (Client Order ID)
         if not client_order_id:
@@ -258,6 +303,61 @@ class PolymarketClientWrapper:
         except Exception as e:
             logger.error(f"Polymarket Execution Exception: {e}")
             return {"status": "error", "error": str(e), "error_code": "EXCEPTION"}
+
+    async def get_order_status(self, order_id: str) -> Optional[str]:
+        """Fetch order status for verification/recovery flows."""
+        if self._is_shadow_mode():
+            return "FILLED"
+
+        getter = getattr(self.client, "get_order", None)
+        if not callable(getter):
+            return None
+
+        try:
+            resp = await asyncio.to_thread(getter, order_id)
+            if isinstance(resp, dict):
+                status = resp.get("status")
+                return str(status).upper() if status else None
+            return None
+        except Exception as e:
+            logger.error(f"Failed to query order status for {order_id}: {e}")
+            return None
+
+    async def get_open_orders(self) -> List[Dict[str, Any]]:
+        """Fetch open orders when the underlying client supports it."""
+        if self._is_shadow_mode():
+            return []
+
+        getter = getattr(self.client, "get_open_orders", None)
+        if callable(getter):
+            try:
+                resp = await asyncio.to_thread(getter)
+                if isinstance(resp, list):
+                    return resp
+                if isinstance(resp, dict):
+                    for key in ("data", "orders", "items", "results"):
+                        value = resp.get(key)
+                        if isinstance(value, list):
+                            return value
+            except Exception as e:
+                logger.warning(f"get_open_orders failed: {e}")
+            return []
+
+        getter = getattr(self.client, "get_orders", None)
+        if callable(getter):
+            try:
+                resp = await asyncio.to_thread(getter)
+                if isinstance(resp, list):
+                    return resp
+                if isinstance(resp, dict):
+                    for key in ("data", "orders", "items", "results"):
+                        value = resp.get(key)
+                        if isinstance(value, list):
+                            return value
+            except Exception as e:
+                logger.warning(f"get_orders failed while fetching open orders: {e}")
+
+        return []
 
     async def cancel_order(self, order_id: str) -> bool:
         if self._is_shadow_mode(): return True
