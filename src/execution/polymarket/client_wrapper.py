@@ -8,6 +8,7 @@ import logging
 import os
 import time
 import asyncio
+from decimal import Decimal, ROUND_DOWN, InvalidOperation
 from typing import Any, Dict, Optional, List
 from py_clob_client.client import ClobClient
 from py_clob_client.clob_types import OrderArgs, ApiCreds, OrderType
@@ -48,6 +49,7 @@ class PolymarketClientWrapper:
         exec_cfg = config.get("execution", {})
         self.default_expiration_sec = exec_cfg.get("order_timeout_sec", 60)
         self.max_retries = exec_cfg.get("max_retries", 3)
+        self.qty_precision = max(0, int(exec_cfg.get("qty_precision", 4)))
 
         # Internal caches with TTL
         self._market_metadata: Dict[str, Dict[str, Any]] = {}
@@ -117,6 +119,16 @@ class PolymarketClientWrapper:
 
         return norm
 
+    def normalize_qty(self, qty: float, precision: Optional[int] = None) -> float:
+        """Normalize quantity to configured precision using round-down semantics."""
+        use_precision = self.qty_precision if precision is None else max(0, int(precision))
+        try:
+            q_dec = Decimal(str(qty))
+            step = Decimal("1").scaleb(-use_precision)
+            return float(q_dec.quantize(step, rounding=ROUND_DOWN))
+        except (InvalidOperation, ValueError, TypeError):
+            return 0.0
+
     async def create_order(
         self,
         token_id: str,
@@ -142,13 +154,14 @@ class PolymarketClientWrapper:
         meta = await self.get_market_metadata(token_id)
         norm_price = self.normalize_price(price, meta["tick_size"], side_val)
 
-        # 2. Enforce Integer Quantities (Fix for 'max of 4 decimals' errors)
-        # Polymarket shares are essentially ERC1155 tokens, integer shares are safer.
-        qty_int = int(qty)
-        if qty_int < meta["min_order_size"]:
+        # 2. Normalize quantity to venue precision and validate minimum size.
+        qty_norm = self.normalize_qty(qty)
+        if qty_norm <= 0:
+            return {"status": "error", "error": f"Invalid quantity: {qty}", "error_code": "INVALID_QTY"}
+        if qty_norm < float(meta["min_order_size"]):
             return {
                 "status": "error",
-                "error": f"Quantity {qty_int} below minimum {meta['min_order_size']}",
+                "error": f"Quantity {qty_norm} below minimum {meta['min_order_size']}",
                 "error_code": "MIN_SIZE_REJECT"
             }
 
@@ -158,7 +171,7 @@ class PolymarketClientWrapper:
 
         # 4. Shadow Mode Bypass
         if self._is_shadow_mode():
-            logger.info(f"[SHADOW] Post Order: {side_val} {qty_int} @ {norm_price} (token={token_id}, type={order_type})")
+            logger.info(f"[SHADOW] Post Order: {side_val} {qty_norm} @ {norm_price} (token={token_id}, type={order_type})")
             return {
                 "status": "success",
                 "shadow": True,
@@ -172,9 +185,9 @@ class PolymarketClientWrapper:
         if self.mode == "PAPER":
             paper_price = 0.01
             norm_paper = self.normalize_price(paper_price, meta["tick_size"], side_val)
-            logger.info(f"[PAPER] POST_ONLY order: {side_val} {qty_int} @ {norm_paper} (token={token_id})")
+            logger.info(f"[PAPER] POST_ONLY order: {side_val} {qty_norm} @ {norm_paper} (token={token_id})")
             exp = int(time.time() + 30)  # 30s GTD
-            paper_args = OrderArgs(price=norm_paper, size=qty_int, side=side_val, token_id=token_id, expiration=exp)
+            paper_args = OrderArgs(price=norm_paper, size=qty_norm, side=side_val, token_id=token_id, expiration=exp)
             try:
                 signed = await asyncio.to_thread(self.client.create_order, paper_args)
                 resp = await asyncio.to_thread(self.client.post_order, signed, orderType=OrderType.GTD)
@@ -199,7 +212,7 @@ class PolymarketClientWrapper:
         # 6. Build Order Arguments
         order_args = OrderArgs(
             price=norm_price,
-            size=qty_int,
+            size=qty_norm,
             side=side_val,
             token_id=token_id,
             expiration=exp
