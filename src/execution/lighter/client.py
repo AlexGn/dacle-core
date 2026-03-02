@@ -36,7 +36,7 @@ class MarketMetadata:
         self.size_decimals = size_decimals
 
 class LighterRealClient:
-    def __init__(self, config: dict, signer: Optional[LighterSigner] = None, risk_ledger=None):
+    def __init__(self, config: dict, signer: Optional[LighterSigner] = None, risk_ledger=None, redis_client=None):
         self.api_url = config.get("api_url", "https://mainnet.zklighter.elliot.ai/api/v1")
         self.signer = signer
         self.risk_ledger = risk_ledger
@@ -48,6 +48,13 @@ class LighterRealClient:
         self.auth_token = (config.get("auth_token") or os.getenv("SCALPER_AUTH_TOKEN") or "").strip()
         self._resolved_account_index: Optional[int] = self._to_int(self.account_index)
         self._shadow_order_counter = 0
+        
+        # Phase 2: Account Metadata Cache
+        self.redis = redis_client
+        self.cache = None
+        if self.redis:
+            from src.execution.lighter.account_cache import LighterAccountCache
+            self.cache = LighterAccountCache(self.redis)
         
         # Market Metadata Cache
         self._market_metadata: Dict[int, MarketMetadata] = {
@@ -506,6 +513,14 @@ class LighterRealClient:
         if not self.signer or not self.signer.address:
             return None, "No signer address available for account lookup."
 
+        # Phase 2: Check cache first
+        if self.cache:
+            cached = await self.cache.get_account_info(self.signer.address)
+            if cached and "index" in cached:
+                self._resolved_account_index = int(cached["index"])
+                logger.debug(f"Resolved account index {self._resolved_account_index} from cache.")
+                return self._resolved_account_index, None
+
         url = f"{self.api_url}/accountsByL1Address"
         status, payload, err_text = await self._get_json(
             session,
@@ -532,6 +547,11 @@ class LighterRealClient:
             return None, "Unable to resolve account index from sub_accounts."
 
         self._resolved_account_index = chosen
+        
+        # Phase 2: Persist to cache
+        if self.cache:
+            await self.cache.set_account_info(self.signer.address, {"index": chosen})
+            
         return chosen, None
 
     def _choose_account_index(self, sub_accounts: List[Dict[str, Any]]) -> Optional[int]:
@@ -702,6 +722,11 @@ class LighterRealClient:
         """Standardized auth failure handling and callback trigger."""
         self._auth_expired_at = time.monotonic()
         logger.critical("Auth token expired: HTTP %d from %s", status, url)
+        
+        # Phase 2: Invalidate cache
+        if self.cache and self.signer:
+            await self.cache.invalidate(self.signer.address, reason=f"auth_failure_{status}")
+
         if self._auth_expired_callback:
             try:
                 result = self._auth_expired_callback()
@@ -1053,6 +1078,13 @@ class LighterRealClient:
         if not self.signer:
             return (False, {})
 
+        # Phase 2: Check cache first (with 10m sentinel window)
+        if self.cache:
+            cached = await self.cache.get_account_info(self.signer.address, sentinel_window_sec=600)
+            if cached and "balances" in cached:
+                logger.debug("Returning authoritative balances from cache.")
+                return (True, cached["balances"])
+
         effective_timeout = aiohttp.ClientTimeout(total=timeout_sec) if timeout_sec else self.timeout
 
         for api_url in self.api_urls:
@@ -1066,8 +1098,20 @@ class LighterRealClient:
                         if resp.status == 200:
                             raw = await resp.json(content_type=None)
                             normalized = self._normalize_balance_payload(raw)
+                            
+                            # Phase 2: Persist to cache
+                            if self.cache:
+                                # We merge with existing index if available
+                                existing = await self.cache.get_account_info(self.signer.address) or {}
+                                existing["balances"] = normalized
+                                await self.cache.set_account_info(self.signer.address, existing)
+                                
                             return (True, normalized)
                         else:
+                            # Phase 2: Invalidate on 429
+                            if resp.status == 429 and self.cache:
+                                await self.cache.handle_transport_error(self.signer.address, resp.status)
+                                
                             # Auth expiry detection (Day 3)
                             if resp.status in (401, 403):
                                 await self._handle_auth_failure(resp.status, url)
