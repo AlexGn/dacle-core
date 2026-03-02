@@ -14,7 +14,7 @@ import logging
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 import requests
@@ -93,10 +93,18 @@ class MacroDataService:
             if cached:
                 return cached
 
-        # 2. Try Live API (Placeholder for full implementation from economic_calendar.py)
-        # Note: In production, we'll likely move the actual fetch logic here 
-        # but for now we'll focus on the caching architecture.
+        # 2. Try Disk Fallback
         return self._load_from_disk(ECON_CACHE_FILE, max_age_hours=48) or []
+
+    def set_economic_calendar(self, events: List[Dict[str, Any]]):
+        """
+        Update the economic calendar cache.
+        """
+        cache_key = "economic_calendar"
+        # Save to Redis
+        self.redis.set(cache_key, events, ttl_seconds=ECON_TTL, namespace="macro")
+        # Save to Disk
+        self._save_to_disk(ECON_CACHE_FILE, events)
 
     def _save_to_disk(self, path: Path, data: Any):
         """Save data to local JSON cache."""

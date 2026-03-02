@@ -127,15 +127,12 @@ class EconomicCalendar:
         Returns:
             List of upcoming economic events
         """
+        # Session 474: Use centralized MacroDataService for caching/429 protection
+        from src.data.macro_cache_service import get_macro_data_service
+        macro_svc = get_macro_data_service()
+        
         # Check cache
-        if self._cache and self._cache_time:
-            cache_age = (datetime.utcnow() - self._cache_time).total_seconds() / 60
-            if cache_age < self.CACHE_DURATION:
-                events = self._cache
-            else:
-                events = self._fetch_events()
-        else:
-            events = self._fetch_events()
+        events = self._fetch_events()
 
         # Filter by time
         now = datetime.utcnow()
@@ -178,20 +175,43 @@ class EconomicCalendar:
 
     def _fetch_events(self) -> List[EconomicEvent]:
         """
-        Fetch events from Investing.com API.
-
-        Falls back to alternative sources if primary fails.
+        Fetch events using MacroDataService.
         """
-        # Try primary source
+        # Session 474: Use centralized MacroDataService
+        from src.data.macro_cache_service import get_macro_data_service
+        macro_svc = get_macro_data_service()
+        
+        cached_data = macro_svc.get_economic_calendar()
+        if cached_data:
+            return [EconomicEvent(
+                name=e["name"],
+                country=e["country"],
+                time=datetime.fromisoformat(e["time"]),
+                impact=EventImpact(e["impact"]),
+                actual=e.get("actual"),
+                forecast=e.get("forecast"),
+                previous=e.get("previous")
+            ) for e in cached_data]
+
+        # If not in cache, fetch fresh
         try:
             events = self._fetch_from_investing()
             if events:
-                self._cache = events
-                self._cache_time = datetime.utcnow()
+                # Save to service for caching
+                data_to_cache = [{
+                    "name": e.name,
+                    "country": e.country,
+                    "time": e.time.isoformat(),
+                    "impact": e.impact.value,
+                    "actual": e.actual,
+                    "forecast": e.forecast,
+                    "previous": e.previous
+                } for e in events]
+                
+                macro_svc.set_economic_calendar(data_to_cache)
                 return events
         except Exception as e:
             logger.warning(f"Investing.com fetch failed: {e}")
-            # Session 456: Degrade gracefully instead of crashing
             return []
 
         return []
