@@ -591,7 +591,10 @@ class LighterRealClient:
         status, payload, err_text = await self._get_json(session, url, params=params)
         if status != 200:
             msg = self._extract_error_message(payload) or err_text
-            return {"status": "error", "error": f"HTTP {status}: {msg}"}
+            res = {"status": "error", "error": f"HTTP {status}: {msg}"}
+            if status == 429 and isinstance(payload, dict) and "retry_after_sec" in payload:
+                res["retry_after_sec"] = payload["retry_after_sec"]
+            return res
         if not isinstance(payload, dict):
             return {"status": "error", "error": "Invalid trades payload.", "raw": payload}
         code = self._to_int(payload.get("code"))
@@ -610,7 +613,10 @@ class LighterRealClient:
         status, payload, err_text = await self._get_json(session, url, params=params)
         if status != 200:
             msg = self._extract_error_message(payload) or err_text
-            return {"status": "error", "error": f"HTTP {status}: {msg}"}
+            res = {"status": "error", "error": f"HTTP {status}: {msg}"}
+            if status == 429 and isinstance(payload, dict) and "retry_after_sec" in payload:
+                res["retry_after_sec"] = payload["retry_after_sec"]
+            return res
         if not isinstance(payload, dict):
             return {"status": "error", "error": "Invalid recentTrades payload.", "raw": payload}
         code = self._to_int(payload.get("code"))
@@ -838,11 +844,27 @@ class LighterRealClient:
                 async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
                     async with session.get(url, params=params) as resp:
                         last_http_status = int(resp.status)
-                        payload = await resp.json(content_type=None)
+                        try:
+                            payload = await resp.json(content_type=None)
+                        except Exception:
+                            payload = None
+
                         if resp.status != 200:
                             if resp.status in (401, 403):
                                 await self._handle_auth_failure(resp.status, url)
+                            
+                            retry_after_raw = resp.headers.get("Retry-After")
+                            retry_after_sec = self._parse_retry_after(retry_after_raw)
+                            
                             last_error = self._extract_error_message(payload) or await resp.text()
+                            if resp.status == 429:
+                                return {
+                                    "status": "error", 
+                                    "snapshot": None, 
+                                    "http_status": resp.status, 
+                                    "error": last_error,
+                                    "retry_after_sec": retry_after_sec
+                                }
                             continue
                         snapshot = self._extract_snapshot_from_orderbooks_payload(payload, target_market)
                         if snapshot:
