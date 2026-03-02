@@ -368,6 +368,19 @@ class PolymarketClientWrapper:
             logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
 
+    async def cancel_all_orders(self) -> bool:
+        """Cancel all open orders for the funder address."""
+        if self._is_shadow_mode():
+            logger.info("[SHADOW] cancel_all_orders requested")
+            return True
+        try:
+            # Note: py_clob_client has cancel_all() method
+            resp = await asyncio.to_thread(self.client.cancel_all)
+            return bool(resp and resp.get("success"))
+        except Exception as e:
+            logger.error(f"Failed to cancel all orders: {e}")
+            return False
+
     def _build_l2_headers(self, method: str, request_path: str) -> dict:
         """
         Generate Polymarket Level 2 auth headers for a REST call.
