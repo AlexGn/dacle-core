@@ -5,6 +5,7 @@ Discord UI components (buttons) for approving or vetoing trade candidates.
 
 import json
 import os
+import hashlib
 from pathlib import Path
 from typing import Any, Optional
 
@@ -307,11 +308,15 @@ class TradeApprovalView(discord.ui.View):
     @discord.ui.button(label="Approve", style=discord.ButtonStyle.green, emoji="✅")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         direction = self.direction or "SHORT"
+        token_upper = self.symbol.upper()
 
-        # Try to load playbook execution state
+        # 1. Inform user revalidation is starting
+        await interaction.response.defer(ephemeral=False)
+
+        # 2. Load playbook execution state
         exec_state = _load_execution_state(self.symbol, direction)
         if not exec_state:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 f"✅ **Trade Approved**: No playbook found for **{self.symbol}** {direction}. "
                 f"Run `/setup {self.symbol} {direction}` to post a setup to #trades.",
                 ephemeral=False,
@@ -321,57 +326,70 @@ class TradeApprovalView(discord.ui.View):
             await interaction.edit_original_response(view=self)
             return
 
-        setup_msg = _format_setup_message(self.symbol, direction, exec_state)
+        levels = exec_state.get("execution_levels", {})
+        entry = levels.get("entry") or levels.get("entry_low")
+        sl = levels.get("stop_loss")
+        tp = levels.get("target_1")
 
-        # Generate lifecycle_id for Approve → #trades flow
-        lifecycle_id = generate_lifecycle_id(self.symbol, direction)
-        try:
-            record_setup(lifecycle_id, self.symbol, direction)
-            # Save lifecycle_id to execution state
-            exec_state["lifecycle_id"] = lifecycle_id
-            token_dir = TOKENS_DIR / self.symbol.upper() / "playbooks"
-            candidates = [
-                token_dir / f"{self.symbol.upper()}_{direction.lower()}_execution_state.json",
-                token_dir / f"{self.symbol.upper()}_execution_state.json",
-            ]
-            for path in candidates:
-                if path.exists():
-                    path.write_text(json.dumps(exec_state, indent=2))
-                    break
-        except Exception as e:
-            logger.warning(f"Failed to record lifecycle for approve: {e}")
-
-        # Post to #trades channel
-        trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
-        if not trades_channel:
-            await interaction.response.send_message(
-                f"✅ **Trade Approved** but could not find #trades channel. "
-                f"Post manually:\n```\n{setup_msg}\n```",
-                ephemeral=False,
-            )
-            for child in self.children:
-                child.disabled = True
-            await interaction.edit_original_response(view=self)
+        if not all([entry, sl, tp]):
+            await interaction.followup.send(f"⚠️ **Approval Aborted**: Setup levels incomplete for **{self.symbol}**.")
             return
 
-        try:
-            await trades_channel.send(setup_msg)
-            await interaction.response.send_message(
-                f"✅ **Setup posted to #trades** for **{self.symbol}** {direction}. "
-                f"Trade router will run pre-trade-check automatically.",
-                ephemeral=False,
-            )
-        except Exception as e:
-            logger.error(f"Failed to post setup to #trades: {e}")
-            await interaction.response.send_message(
-                f"✅ **Trade Approved** but failed to post to #trades: {e}\n"
-                f"Post manually:\n```\n{setup_msg}\n```",
-                ephemeral=False,
-            )
+        # 3. Call v2 Approve-and-Execute Orchestration
+        from api.routers.execution_v2 import approve_and_execute_v2
+        from src.execution.v2_models import ApproveAndExecuteRequestV2, ExecutionState
 
-        for child in self.children:
-            child.disabled = True
-        await interaction.edit_original_response(view=self)
+        # Deterministic key prevents duplicate orders from repeated button clicks/retries.
+        key_material = f"{interaction.message.id}:{interaction.user.id}:{token_upper}:{direction}:{entry}:{sl}:{tp}"
+        idempotency_key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:32]
+        
+        request = ApproveAndExecuteRequestV2(
+            setup_id=f"discord_{interaction.message.id}",
+            approval_id=str(interaction.user.id),
+            idempotency_key=idempotency_key,
+            symbol=token_upper,
+            side=direction.lower(),
+            entry=entry,
+            stop_loss=sl,
+            take_profit=tp,
+            size_usd=1500.0, # Default Phase 2 size
+            dry_run=True # Force Dry-Run for initial rollout
+        )
+
+        try:
+            result = await approve_and_execute_v2(request)
+            
+            if result.state == ExecutionState.VETOED:
+                reasons = ", ".join([r.value for r in result.veto_reasons])
+                await interaction.followup.send(
+                    f"🚫 **TRADE VETOED** (Freshness Snap Failed)\n"
+                    f"**Reason**: {reasons}\n"
+                    f"**Drift**: {result.revalidation_snapshot.price_drift_pct:.2f}%\n"
+                    f"**Action**: Setup invalidated by market movement. Wait for next cluster.",
+                    ephemeral=False
+                )
+                return
+
+            if result.state == ExecutionState.SUBMITTED:
+                order_id = result.order_ids[0] if result.order_ids else "DRY_RUN"
+                await interaction.followup.send(
+                    f"🚀 **EXECUTION SUBMITTED** (v2 Bridge)\n"
+                    f"**Token**: {token_upper} {direction}\n"
+                    f"**Price**: {entry}\n"
+                    f"**Order ID**: `{order_id}`\n"
+                    f"**Effective Size**: ${result.effective_size_usd:.0f}\n"
+                    f"**Status**: {'[DRY RUN - No real order]' if request.dry_run else '[LIVE]'}",
+                    ephemeral=False
+                )
+                
+                # Disable buttons
+                for child in self.children:
+                    child.disabled = True
+                await interaction.edit_original_response(view=self)
+                
+        except Exception as e:
+            logger.error(f"Execution orchestration failed: {e}")
+            await interaction.followup.send(f"❌ **System Error**: Execution failed during revalidation: {e}")
 
     @discord.ui.button(label="Set Levels", style=discord.ButtonStyle.blurple, emoji="\U0001f4d0")
     async def set_levels(self, interaction: discord.Interaction, button: discord.ui.Button):
