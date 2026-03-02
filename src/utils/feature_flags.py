@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class FeatureFlag:
     """Feature flag constants"""
     ENHANCED_CONFLUENCE_DISPLAY = "enhanced_confluence_display"
+    POLYMARKET_UNIVERSE_SCANNER = "polymarket_universe_scanner"
 
 
 
