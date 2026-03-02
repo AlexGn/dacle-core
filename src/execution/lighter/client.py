@@ -619,6 +619,23 @@ class LighterRealClient:
             return {"status": "error", "error": f"recentTrades error {code}: {msg}", "raw": payload}
         return {"status": "success", "raw": payload}
 
+    def _parse_retry_after(self, retry_after: Optional[str]) -> float:
+        """
+        Robustly parse Retry-After header.
+        Supports: 
+        - Numeric seconds (e.g. "30")
+        - UTC Epoch (> 1,000,000,000)
+        """
+        if not retry_after:
+            return 0.0
+        try:
+            val = float(str(retry_after).strip())
+            if val > 1_000_000_000: # UTC Epoch
+                return max(0.0, val - time.time())
+            return max(0.0, val)
+        except (ValueError, TypeError):
+            return 0.0
+
     async def _get_json(
         self,
         session: aiohttp.ClientSession,
@@ -636,20 +653,22 @@ class LighterRealClient:
             if status in (401, 403):
                 await self._handle_auth_failure(status, url)
 
+            retry_after_raw = resp.headers.get("Retry-After")
+            retry_after_sec = self._parse_retry_after(retry_after_raw)
+
             if payload is None:
                 text = await resp.text()
-                if status == 429:
-                    retry_after = resp.headers.get("Retry-After")
-                    if retry_after:
-                        text = f"{text} (Retry-After: {retry_after}s)".strip()
+                if status == 429 and retry_after_sec > 0:
+                    text = f"{text} (Retry-After: {retry_after_sec:.1f}s)".strip()
                 return status, None, text
+            
             if status == 429:
-                retry_after = resp.headers.get("Retry-After")
-                if retry_after:
+                if isinstance(payload, dict):
+                    payload = dict(payload)
                     message = self._extract_error_message(payload)
-                    if isinstance(payload, dict):
-                        payload = dict(payload)
-                        payload["message"] = f"{message} (Retry-After: {retry_after}s)".strip()
+                    if retry_after_sec > 0:
+                        payload["message"] = f"{message} (Retry-After: {retry_after_sec:.1f}s)".strip()
+                    payload["retry_after_sec"] = retry_after_sec
             return status, payload, ""
 
     async def _post_json(
