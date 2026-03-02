@@ -469,13 +469,19 @@ class LighterRealClient:
                     "account_index": account_index,
                 }
 
+            trades_error = str(trades_result.get("error") or "")
+            # Do not compound provider throttling by immediately hitting a second endpoint
+            # when the primary account-trades call already returned 429.
+            if "HTTP 429" in trades_error or "429" in trades_error:
+                return {"status": "error", "error": trades_error}
+
             # Fallback path when auth token missing/invalid or endpoint shape drifts.
             fallback_result = await self._fetch_recent_trades(session=session, limit=limit)
             if fallback_result["status"] != "success":
                 return {
                     "status": "error",
                     "error": (
-                        f"trades failed ({trades_result.get('error')}); "
+                        f"trades failed ({trades_error}); "
                         f"fallback failed ({fallback_result.get('error')})"
                     ),
                 }
@@ -631,7 +637,19 @@ class LighterRealClient:
                 await self._handle_auth_failure(status, url)
 
             if payload is None:
-                return status, None, await resp.text()
+                text = await resp.text()
+                if status == 429:
+                    retry_after = resp.headers.get("Retry-After")
+                    if retry_after:
+                        text = f"{text} (Retry-After: {retry_after}s)".strip()
+                return status, None, text
+            if status == 429:
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    message = self._extract_error_message(payload)
+                    if isinstance(payload, dict):
+                        payload = dict(payload)
+                        payload["message"] = f"{message} (Retry-After: {retry_after}s)".strip()
             return status, payload, ""
 
     async def _post_json(
