@@ -15,11 +15,21 @@ class ExecutionState(str, Enum):
     READY = "READY"
     SUBMITTING = "SUBMITTING"
     SUBMITTED = "SUBMITTED"
+    PROTECTION_SUBMITTING = "PROTECTION_SUBMITTING"
+    PROTECTION_ARMED = "PROTECTION_ARMED"
+    PROTECTION_FAILED = "PROTECTION_FAILED"
     PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
     CANCELED = "CANCELED"
     EXPIRED = "EXPIRED"
     FAILED = "FAILED"
+
+class ProtectionStatus(str, Enum):
+    """Status of protective orders (SL/TP)."""
+    PENDING = "PENDING"
+    ARMED = "ARMED"
+    FAILED = "FAILED"
+    N_A = "N/A"
 
 class VetoReasonCode(str, Enum):
     """Explicit reasons for execution veto."""
@@ -124,6 +134,9 @@ class ApproveAndExecuteResponseV2(BaseModel):
     execution_id: str
     state: ExecutionState
     effective_size_usd: float
+    entry_order_id: Optional[str] = None
+    protective_order_ids: Dict[str, str] = Field(default_factory=dict)
+    protection_status: ProtectionStatus = ProtectionStatus.N_A
     order_ids: List[str] = []
     veto_reasons: List[VetoReasonCode] = []
     warnings: List[WarningCode] = []

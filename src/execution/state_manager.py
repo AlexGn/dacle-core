@@ -201,7 +201,7 @@ class ExecutionStateManager:
 
     def _is_valid_transition(self, from_state: ExecutionState, to_state: ExecutionState) -> bool:
         """
-        Enforce the State Transition Table logic.
+        Enforce the State Transition Table logic (Phase 2 Expanded).
         """
         # Define allowed transitions
         allowed = {
@@ -210,7 +210,9 @@ class ExecutionStateManager:
             ExecutionState.APPROVED_RECEIVED: [ExecutionState.REVALIDATING],
             ExecutionState.REVALIDATING: [ExecutionState.READY, ExecutionState.VETOED],
             ExecutionState.READY: [ExecutionState.SUBMITTING, ExecutionState.VETOED],
-            ExecutionState.SUBMITTING: [ExecutionState.SUBMITTED, ExecutionState.FAILED],
+            ExecutionState.SUBMITTING: [ExecutionState.PROTECTION_SUBMITTING, ExecutionState.SUBMITTED, ExecutionState.FAILED],
+            ExecutionState.PROTECTION_SUBMITTING: [ExecutionState.PROTECTION_ARMED, ExecutionState.PROTECTION_FAILED],
+            ExecutionState.PROTECTION_ARMED: [ExecutionState.SUBMITTED, ExecutionState.FAILED],
             ExecutionState.SUBMITTED: [ExecutionState.PARTIALLY_FILLED, ExecutionState.FILLED, ExecutionState.CANCELED, ExecutionState.EXPIRED, ExecutionState.FAILED],
             ExecutionState.PARTIALLY_FILLED: [ExecutionState.FILLED, ExecutionState.CANCELED, ExecutionState.EXPIRED, ExecutionState.FAILED],
         }
