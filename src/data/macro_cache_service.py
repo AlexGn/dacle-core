@@ -96,6 +96,32 @@ class MacroDataService:
         # 2. Try Disk Fallback
         return self._load_from_disk(ECON_CACHE_FILE, max_age_hours=48) or []
 
+    def cache_age_sec(self) -> Optional[float]:
+        """Return seconds since last successful CoinGecko fetch, or None if cache empty."""
+        if not CG_CACHE_FILE.exists():
+            return None
+        try:
+            with open(CG_CACHE_FILE) as f:
+                payload = json.load(f)
+            ts = datetime.fromisoformat(payload["timestamp"])
+            return (datetime.utcnow() - ts).total_seconds()
+        except Exception:
+            return None
+
+    def warmup_probe(self) -> None:
+        """Pre-populate macro cache at startup. Logs result, does not raise."""
+        try:
+            result = self.get_coingecko_global()
+            if result:
+                logger.info(
+                    "L088 macro cache warm-up OK (btcdom=%.1f%%)",
+                    result.get("market_cap_percentage", {}).get("btc", 0),
+                )
+            else:
+                logger.warning("L088 macro cache warm-up: no data available (API down?)")
+        except Exception as e:
+            logger.error("L088 macro cache warm-up failed: %s", e)
+
     def set_economic_calendar(self, events: List[Dict[str, Any]]):
         """
         Update the economic calendar cache.

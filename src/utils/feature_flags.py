@@ -21,6 +21,7 @@ class FeatureFlag:
     """Feature flag constants"""
     ENHANCED_CONFLUENCE_DISPLAY = "enhanced_confluence_display"
     POLYMARKET_UNIVERSE_SCANNER = "polymarket_universe_scanner"
+    DISCOVERY_ENSEMBLE_FUNNEL = "discovery_ensemble_funnel"
 
 
 
