@@ -1,6 +1,6 @@
 [project]
 name = "dacle"
-version = "1.8.5"
+version = "2.0.0"
 description = "David's Automated Crypto Learning Engine - Second Brain Knowledge Management System"
 authors = [
     {name = "Alex", email = "alex@example.com"}
