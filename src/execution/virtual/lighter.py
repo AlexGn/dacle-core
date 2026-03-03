@@ -10,7 +10,7 @@ Enforces:
 import asyncio
 import time
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -94,3 +94,8 @@ class VirtualLighter:
         count = len(self.orders)
         self.orders.clear()
         logger.info(f"Virtual: Cancelled {count} orders.")
+
+    async def cancel_order(self, order_id: Any, nonce: int) -> dict:
+        """Stub for interface parity with LighterRealClient."""
+        self.orders.pop(str(order_id), None)
+        return {"status": "success", "order_id": str(order_id), "nonce": nonce}
