@@ -28,6 +28,7 @@ class FeatureFlag:
     POLYMARKET_DYNAMIC_PAIR_WIRING = "polymarket_dynamic_pair_wiring"
     DISCOVERY_ENSEMBLE_FUNNEL = "discovery_ensemble_funnel"
     DISCOVERY_RANK_DRIFT_TELEMETRY = "discovery_rank_drift_telemetry"
+    CAPITAL_UNIFIED_PRIORITY = "capital_unified_priority"
 
 
 
