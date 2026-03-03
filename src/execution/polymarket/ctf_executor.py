@@ -42,6 +42,28 @@ CTF_EXCHANGE_ABI = [
         "outputs": [],
         "stateMutability": "nonpayable",
         "type": "function"
+    },
+    {
+        "inputs": [
+            {"internalType": "address", "name": "account", "type": "address"},
+            {"internalType": "uint256", "name": "id", "type": "uint256"}
+        ],
+        "name": "balanceOf",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {"internalType": "address", "name": "collateralToken", "type": "address"},
+            {"internalType": "bytes32", "name": "parentCollectionId", "type": "bytes32"},
+            {"internalType": "bytes32", "name": "conditionId", "type": "bytes32"},
+            {"internalType": "uint256[]", "name": "indexSets", "type": "uint256[]"}
+        ],
+        "name": "getPositionId",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "pure",
+        "type": "function"
     }
 ]
 
@@ -205,3 +227,42 @@ class PolymarketCTFExecutor:
         except Exception as e:
             logger.error(f"mergePositions failed: {e}")
             return {"status": "error", "error": str(e)}
+
+    async def get_position_id(
+        self,
+        condition_id: str,
+        index_set: int,
+        parent_collection_id: str = "0x" + "0" * 64
+    ) -> int:
+        """Calculate the ERC1155 token ID for a specific conditional outcome."""
+        return await asyncio.to_thread(
+            self.ctf_contract.functions.getPositionId(
+                self.USDC_E,
+                parent_collection_id,
+                condition_id,
+                [index_set]
+            ).call
+        )
+
+    async def get_conditional_balance(
+        self,
+        condition_id: str,
+        index_set: int,
+        parent_collection_id: str = "0x" + "0" * 64
+    ) -> float:
+        """Read settled on-chain balance for a specific outcome share."""
+        if not self.address:
+            return 0.0
+            
+        try:
+            pos_id = await self.get_position_id(condition_id, index_set, parent_collection_id)
+            raw_bal = await asyncio.to_thread(
+                self.ctf_contract.functions.balanceOf(
+                    self.address,
+                    pos_id
+                ).call
+            )
+            return float(raw_bal) / 1_000_000
+        except Exception as e:
+            logger.error(f"Failed to fetch conditional balance: {e}")
+            return 0.0

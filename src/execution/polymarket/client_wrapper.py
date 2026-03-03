@@ -363,6 +363,10 @@ class PolymarketClientWrapper:
 
         return []
 
+    async def fetch_open_orders(self) -> List[Dict[str, Any]]:
+        """Alias for get_open_orders to support legacy/standardized naming."""
+        return await self.get_open_orders()
+
     async def cancel_order(self, order_id: str) -> bool:
         if self._is_shadow_mode(): return True
         try:
