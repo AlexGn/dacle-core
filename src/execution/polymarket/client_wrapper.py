@@ -34,6 +34,10 @@ class PolymarketClientWrapper:
         self.client = client
         self.mode = config.get("mode", "SHADOW").upper()
 
+        # Batch C: Private RPC
+        self.base_url = os.getenv("POLY_CLOB_API_BASE_URL") or config.get("host", "https://clob.polymarket.com")
+        self.fallback_url = "https://clob.polymarket.com"
+
         # Env var override takes priority over config
         env_mode = os.getenv("POLY_MODE", "").upper()
         if env_mode in ("SHADOW", "PAPER", "LIVE"):
@@ -430,9 +434,9 @@ class PolymarketClientWrapper:
         request_path = "/balance-allowance"
         sig_type = os.getenv("POLY_SIGNATURE_TYPE", "2")
         if token_id:
-            url = f"https://clob.polymarket.com{request_path}?asset_type=CONDITIONAL&token_id={token_id}&signature_type={sig_type}"
+            url = f"{self.base_url}{request_path}?asset_type=CONDITIONAL&token_id={token_id}&signature_type={sig_type}"
         else:
-            url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL&signature_type={sig_type}"
+            url = f"{self.base_url}{request_path}?asset_type=COLLATERAL&signature_type={sig_type}"
 
         try:
             headers = self._build_l2_headers("GET", request_path)
@@ -466,7 +470,7 @@ class PolymarketClientWrapper:
 
         sig_type = os.getenv("POLY_SIGNATURE_TYPE", "2")
         request_path = "/balance-allowance"
-        url = f"https://clob.polymarket.com{request_path}?asset_type=COLLATERAL&signature_type={sig_type}"
+        url = f"{self.base_url}{request_path}?asset_type=COLLATERAL&signature_type={sig_type}"
         try:
             headers = self._build_l2_headers("GET", request_path)
             async with httpx.AsyncClient(timeout=10) as client:
