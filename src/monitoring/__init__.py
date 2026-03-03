@@ -4,16 +4,5 @@ DACLE Monitoring Module
 Provides monitoring, health checks, and observability tools.
 """
 
-from src.monitoring.endpoint_usage_tracker import (
-    EndpointUsageMiddleware,
-    analyze_usage,
-    get_endpoint_stats,
-    load_usage_data,
-)
-
-__all__ = [
-    "EndpointUsageMiddleware",
-    "analyze_usage",
-    "get_endpoint_stats",
-    "load_usage_data",
-]
+# Session 482: Removed eager imports to prevent ModuleNotFoundError (starlette) 
+# during unit test collection when only a subset of dependencies are needed.
