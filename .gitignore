@@ -58,6 +58,8 @@
 .env
 .env.*.local
 .env.local
+.env.secret
+.env.*.secret
 .idea/
 .installed.cfg
 .ipynb_checkpoints/

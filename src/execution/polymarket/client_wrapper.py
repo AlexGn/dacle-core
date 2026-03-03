@@ -10,8 +10,30 @@ import time
 import asyncio
 from decimal import Decimal, ROUND_DOWN, InvalidOperation
 from typing import Any, Dict, Optional, List
-from py_clob_client.client import ClobClient
-from py_clob_client.clob_types import OrderArgs, ApiCreds, OrderType
+
+try:
+    from py_clob_client.client import ClobClient
+    from py_clob_client.clob_types import OrderArgs, ApiCreds, OrderType
+except ModuleNotFoundError:  # pragma: no cover - local/dev fallback
+    class ClobClient:  # type: ignore[no-redef]
+        pass
+
+    class OrderArgs:  # type: ignore[no-redef]
+        def __init__(self, **kwargs):
+            for key, value in kwargs.items():
+                setattr(self, key, value)
+
+    class ApiCreds:  # type: ignore[no-redef]
+        def __init__(self, api_key: str, api_secret: str, api_passphrase: str):
+            self.api_key = api_key
+            self.api_secret = api_secret
+            self.api_passphrase = api_passphrase
+
+    class OrderType:  # type: ignore[no-redef]
+        GTC = "GTC"
+        GTD = "GTD"
+        FOK = "FOK"
+        FAK = "FAK"
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +77,8 @@ class PolymarketClientWrapper:
         self.max_retries = exec_cfg.get("max_retries", 3)
         self.qty_precision = max(0, int(exec_cfg.get("qty_precision", 4)))
         self.strict_signing_precision = bool(exec_cfg.get("strict_signing_precision", True))
+        max_concurrent = int(exec_cfg.get("max_concurrent_requests", 5))
+        self._exec_semaphore = asyncio.Semaphore(max(1, max_concurrent))
 
         # Internal caches with TTL
         self._market_metadata: Dict[str, Dict[str, Any]] = {}
@@ -239,7 +263,8 @@ class PolymarketClientWrapper:
             paper_args = OrderArgs(price=norm_paper, size=qty_norm, side=side_val, token_id=token_id, expiration=exp)
             try:
                 signed = await asyncio.to_thread(self.client.create_order, paper_args)
-                resp = await asyncio.to_thread(self.client.post_order, signed, orderType=OrderType.GTD)
+                async with self._exec_semaphore:
+                    resp = await asyncio.to_thread(self.client.post_order, signed, orderType=OrderType.GTD)
                 if resp and resp.get("success"):
                     paper_order_id = resp.get("orderID")
                     logger.info(f"[PAPER] Order placed: {paper_order_id}. Cancelling immediately...")
@@ -277,7 +302,8 @@ class PolymarketClientWrapper:
             # Step A: Sign
             signed = await asyncio.to_thread(self.client.create_order, order_args)
             # Step B: Post
-            resp = await asyncio.to_thread(self.client.post_order, signed, orderType=target_type)
+            async with self._exec_semaphore:
+                resp = await asyncio.to_thread(self.client.post_order, signed, orderType=target_type)
             latency_ms = (time.time() - t_start) * 1000
 
             # Track latency
@@ -370,7 +396,8 @@ class PolymarketClientWrapper:
     async def cancel_order(self, order_id: str) -> bool:
         if self._is_shadow_mode(): return True
         try:
-            resp = await asyncio.to_thread(self.client.cancel, order_id)
+            async with self._exec_semaphore:
+                resp = await asyncio.to_thread(self.client.cancel, order_id)
             return bool(resp and resp.get("success"))
         except Exception as e:
             logger.error(f"Failed to cancel order {order_id}: {e}")

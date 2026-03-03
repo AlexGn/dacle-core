@@ -8,7 +8,9 @@ import logging
 import os
 import time
 import asyncio
+import json
 from typing import Any, Dict, Optional, List
+from datetime import datetime, timezone
 from web3 import Web3
 from eth_account import Account
 from decimal import Decimal
@@ -97,14 +99,21 @@ class PolymarketCTFExecutor:
         self.config = config
         rpc_url = os.getenv("POLYGON_RPC_URL") or "https://polygon-rpc.com"
         self.w3 = Web3(Web3.HTTPProvider(rpc_url))
-        
+        self.account = None
+        self.address = None
+        # Best-effort eager load for valid keys; invalid values are ignored until first use.
         pk = os.getenv("POLY_WALLET_PRIVATE_KEY")
         if pk:
-            self.account = Account.from_key(pk)
-            self.address = self.account.address
-        else:
-            self.account = None
-            self.address = None
+            try:
+                self.account = Account.from_key(pk)
+                self.address = self.account.address
+            except Exception:
+                self.account = None
+                self.address = None
+        self.journal_path = config.get("state", {}).get(
+            "journal_path",
+            "data/audit/polymarket_trade_journal.jsonl",
+        )
 
         self.mode = config.get("mode", "SHADOW").upper()
         self.ctf_contract = self.w3.eth.contract(address=self.CTF_EXCHANGE, abi=CTF_EXCHANGE_ABI)
@@ -112,6 +121,56 @@ class PolymarketCTFExecutor:
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
+
+    def _ensure_account(self) -> bool:
+        """Lazily load signing account on first live execution call."""
+        if self.account is not None:
+            self.address = self.address or getattr(self.account, "address", None)
+            if self.address is not None:
+                return True
+        pk = os.getenv("POLY_WALLET_PRIVATE_KEY")
+        if not pk:
+            return False
+        try:
+            self.account = Account.from_key(pk)
+            self.address = self.account.address
+            return True
+        except Exception as e:
+            logger.error(f"Failed to load POLY_WALLET_PRIVATE_KEY: {e}")
+            self.account = None
+            self.address = None
+            return False
+
+    @staticmethod
+    def _receipt_value(receipt: Any, key: str, default: Any = None) -> Any:
+        if isinstance(receipt, dict):
+            return receipt.get(key, default)
+        return getattr(receipt, key, default)
+
+    def _write_gas_telemetry(self, tx_hash: str, receipt: Any) -> None:
+        """Best-effort gas telemetry for merge executions."""
+        try:
+            gas_used_raw = self._receipt_value(receipt, "gasUsed")
+            gas_price_raw = self._receipt_value(receipt, "effectiveGasPrice")
+            if gas_used_raw is None or gas_price_raw is None:
+                logger.warning("mergePositions gas telemetry unavailable for tx=%s", tx_hash)
+                return
+
+            gas_used = int(gas_used_raw)
+            gas_price_wei = int(gas_price_raw)
+            entry = {
+                "entry_type": "gas_used",
+                "tx_hash": tx_hash,
+                "gas_used": gas_used,
+                "gas_price_gwei": float(gas_price_wei) / 1_000_000_000.0,
+                "gas_cost_matic": float(gas_used * gas_price_wei) / 1_000_000_000_000_000_000.0,
+                "ts": datetime.now(timezone.utc).isoformat(),
+            }
+            os.makedirs(os.path.dirname(self.journal_path), exist_ok=True)
+            with open(self.journal_path, "a", encoding="utf-8") as fh:
+                fh.write(json.dumps(entry) + "\n")
+        except Exception as e:
+            logger.warning("Failed to write merge gas telemetry for tx=%s: %s", tx_hash, e)
 
     async def split_position(
         self, 
@@ -127,7 +186,7 @@ class PolymarketCTFExecutor:
             logger.info(f"[SHADOW] splitPosition: {amount_usdc} USDC.e for condition {condition_id}")
             return {"status": "success", "tx_hash": "shadow_tx", "shadow": True}
 
-        if not self.account:
+        if not self._ensure_account():
             return {"status": "error", "error": "Private key not configured"}
 
         amount_raw = int(amount_usdc * 1_000_000)
@@ -163,8 +222,8 @@ class PolymarketCTFExecutor:
             
             # Wait for receipt
             receipt = await asyncio.to_thread(self.w3.eth.wait_for_transaction_receipt, tx_hash, timeout=60)
-            
-            if receipt.status == 1:
+
+            if int(self._receipt_value(receipt, "status", 0) or 0) == 1:
                 return {"status": "success", "tx_hash": tx_hash.hex(), "receipt": receipt}
             else:
                 return {"status": "error", "error": "Transaction reverted", "receipt": receipt}
@@ -187,7 +246,7 @@ class PolymarketCTFExecutor:
             logger.info(f"[SHADOW] mergePositions: {amount_shares} shares for condition {condition_id}")
             return {"status": "success", "tx_hash": "shadow_tx", "shadow": True}
 
-        if not self.account:
+        if not self._ensure_account():
             return {"status": "error", "error": "Private key not configured"}
 
         amount_raw = int(amount_shares * 1_000_000)
@@ -218,9 +277,11 @@ class PolymarketCTFExecutor:
             logger.info(f"mergePositions sent: {tx_hash.hex()}")
             
             receipt = await asyncio.to_thread(self.w3.eth.wait_for_transaction_receipt, tx_hash, timeout=60)
-            
-            if receipt.status == 1:
-                return {"status": "success", "tx_hash": tx_hash.hex(), "receipt": receipt}
+
+            tx_hash_hex = tx_hash.hex()
+            if int(self._receipt_value(receipt, "status", 0) or 0) == 1:
+                self._write_gas_telemetry(tx_hash_hex, receipt)
+                return {"status": "success", "tx_hash": tx_hash_hex, "receipt": receipt}
             else:
                 return {"status": "error", "error": "Transaction reverted", "receipt": receipt}
 
