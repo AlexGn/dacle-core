@@ -861,7 +861,7 @@ class LighterRealClient:
         last_http_status: Optional[int] = None
 
         for api_url in self.api_urls:
-            url = f"{api_url}/orderBooks"
+            url = f"{api_url}/orderbook"
             params = {"market_id": target_market}
             if self.auth_token:
                 params["auth"] = self.auth_token
