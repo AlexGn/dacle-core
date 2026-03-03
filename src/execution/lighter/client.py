@@ -48,6 +48,7 @@ class LighterRealClient:
         self.auth_token = (config.get("auth_token") or os.getenv("SCALPER_AUTH_TOKEN") or "").strip()
         self._resolved_account_index: Optional[int] = self._to_int(self.account_index)
         self._shadow_order_counter = 0
+        self.degraded_snapshot_spread_bps = float(config.get("degraded_snapshot_spread_bps", 2.0))
         
         # Phase 2: Account Metadata Cache
         self.redis = redis_client
@@ -861,40 +862,101 @@ class LighterRealClient:
         last_http_status: Optional[int] = None
 
         for api_url in self.api_urls:
-            url = f"{api_url}/orderbook"
-            params = {"market_id": target_market}
-            if self.auth_token:
-                params["auth"] = self.auth_token
             try:
                 async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
-                    async with session.get(url, params=params) as resp:
+                    # Primary REST depth endpoint (known to be provider-gated in some environments).
+                    url = f"{api_url}/orderbook"
+                    async with session.get(url, params={"market_id": target_market}) as resp:
                         last_http_status = int(resp.status)
                         try:
                             payload = await resp.json(content_type=None)
                         except Exception:
                             payload = None
 
-                        if resp.status != 200:
-                            if resp.status in (401, 403):
-                                await self._handle_auth_failure(resp.status, url)
-                            
+                        if resp.status == 200:
+                            snapshot = self._extract_snapshot_from_orderbooks_payload(payload, target_market)
+                            if snapshot:
+                                return {
+                                    "status": "success",
+                                    "snapshot": snapshot,
+                                    "http_status": resp.status,
+                                    "source": "orderbook",
+                                }
+                            last_error = "orderbook payload missing bids/asks"
+                        else:
                             retry_after_raw = resp.headers.get("Retry-After")
                             retry_after_sec = self._parse_retry_after(retry_after_raw)
-                            
                             last_error = self._extract_error_message(payload) or await resp.text()
                             if resp.status == 429:
                                 return {
-                                    "status": "error", 
-                                    "snapshot": None, 
-                                    "http_status": resp.status, 
+                                    "status": "error",
+                                    "snapshot": None,
+                                    "http_status": resp.status,
                                     "error": last_error,
-                                    "retry_after_sec": retry_after_sec
+                                    "retry_after_sec": retry_after_sec,
                                 }
-                            continue
-                        snapshot = self._extract_snapshot_from_orderbooks_payload(payload, target_market)
+
+                    # Compatibility fallback: /orderBooks (some deployments expose only metadata here).
+                    books_url = f"{api_url}/orderBooks"
+                    books_status, books_payload, books_err = await self._get_json(
+                        session,
+                        books_url,
+                        params={"market_id": target_market},
+                    )
+                    last_http_status = int(books_status)
+                    if books_status == 200:
+                        snapshot = self._extract_snapshot_from_orderbooks_payload(books_payload, target_market)
                         if snapshot:
-                            return {"status": "success", "snapshot": snapshot, "http_status": resp.status}
-                        last_error = "orderbook payload missing bids/asks"
+                            return {
+                                "status": "success",
+                                "snapshot": snapshot,
+                                "http_status": books_status,
+                                "source": "orderBooks",
+                            }
+                        last_error = "orderBooks payload missing bids/asks"
+                    elif books_status == 429:
+                        return {
+                            "status": "error",
+                            "snapshot": None,
+                            "http_status": books_status,
+                            "error": self._extract_error_message(books_payload) or books_err,
+                            "retry_after_sec": float(books_payload.get("retry_after_sec", 0.0))
+                            if isinstance(books_payload, dict)
+                            else 0.0,
+                        }
+                    else:
+                        last_error = self._extract_error_message(books_payload) or books_err
+
+                    # Final degraded fallback: synthesize a one-level snapshot from recent trades.
+                    recent_url = f"{api_url}/recentTrades"
+                    recent_status, recent_payload, recent_err = await self._get_json(
+                        session,
+                        recent_url,
+                        params={"market_id": target_market, "limit": 1},
+                    )
+                    last_http_status = int(recent_status)
+                    if recent_status == 200:
+                        synthetic = self._snapshot_from_recent_trades_payload(recent_payload, target_market)
+                        if synthetic:
+                            return {
+                                "status": "success",
+                                "snapshot": synthetic,
+                                "http_status": recent_status,
+                                "source": "recentTrades_synthetic",
+                            }
+                        last_error = "recentTrades payload missing price/size"
+                    elif recent_status == 429:
+                        return {
+                            "status": "error",
+                            "snapshot": None,
+                            "http_status": recent_status,
+                            "error": self._extract_error_message(recent_payload) or recent_err,
+                            "retry_after_sec": float(recent_payload.get("retry_after_sec", 0.0))
+                            if isinstance(recent_payload, dict)
+                            else 0.0,
+                        }
+                    else:
+                        last_error = self._extract_error_message(recent_payload) or recent_err
             except _FAILOVER_ERRORS as exc:
                 last_error = str(exc)
                 continue
@@ -1371,19 +1433,22 @@ class LighterRealClient:
     async def _fetch_open_orders(self, session: aiohttp.ClientSession) -> Optional[List[Dict[str, Any]]]:
         """Fetch open orders via GET /orders."""
         url = f"{self.api_url}/orders"
-        params: Dict[str, Any] = {"market_id": self.market_id}
-
         account_idx = self._resolved_account_index
-        if account_idx is not None:
-            params["account_index"] = account_idx
-        if self.auth_token:
-            params["auth"] = self.auth_token
 
-        status, payload, err_text = await self._get_json(session, url, params=params)
+        def _build_params() -> Dict[str, Any]:
+            params: Dict[str, Any] = {"market_id": self.market_id}
+            if account_idx is not None:
+                params["account_index"] = account_idx
+            token = str(self.auth_token or "").strip()
+            if token:
+                params["auth"] = token
+            return params
+
+        status, payload, err_text = await self._get_json(session, url, params=_build_params())
         if status in (401, 403):
             refreshed = await self._reactive_auth_refresh_once("fetch_open_orders_401_403")
             if refreshed:
-                status, payload, err_text = await self._get_json(session, url, params=params)
+                status, payload, err_text = await self._get_json(session, url, params=_build_params())
         if status != 200:
             logger.error(f"_fetch_open_orders HTTP {status}: {err_text}")
             return None
@@ -1399,6 +1464,45 @@ class LighterRealClient:
         if isinstance(payload, list):
             return payload
         return []
+
+    def _snapshot_from_recent_trades_payload(
+        self,
+        payload: Any,
+        market_id: int,
+    ) -> Optional[Dict[str, Any]]:
+        trades = self._extract_trades(payload)
+        if not trades:
+            return None
+
+        trade = trades[0]
+        price = self._safe_float(trade.get("price") or trade.get("execution_price"))
+        if price <= 0:
+            return None
+
+        size = self._safe_float(trade.get("size") or trade.get("qty") or trade.get("base_amount"))
+        if size <= 0:
+            size = 0.0001
+
+        spread_bps = max(float(self.degraded_snapshot_spread_bps), 0.1)
+        half_spread = max(price * (spread_bps / 10000.0) * 0.5, 0.0001)
+        bid = max(price - half_spread, 0.0001)
+        ask = max(price + half_spread, bid + 0.0001)
+        nonce = self._to_int(trade.get("trade_id") or trade.get("id"), default=0) or 0
+        ts_default = int(datetime.now(timezone.utc).timestamp() * 1000)
+        ts_ms = self._to_int(trade.get("timestamp") or trade.get("transaction_time"), default=ts_default) or ts_default
+
+        return {
+            "timestamp": int(ts_ms),
+            "order_book": {
+                "begin_nonce": 0,
+                "nonce": int(nonce),
+                "bids": [{"price": str(bid), "size": str(size)}],
+                "asks": [{"price": str(ask), "size": str(size)}],
+            },
+            "synthetic": True,
+            "source": "recentTrades",
+            "market_id": int(market_id),
+        }
 
     async def _cancel_order(self, session: aiohttp.ClientSession, order_id: Any, nonce: int) -> dict:
         """Cancel a single order via POST /sendTx."""
