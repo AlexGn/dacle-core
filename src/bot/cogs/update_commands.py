@@ -143,13 +143,29 @@ class UpdateCommands(commands.Cog):
     def _retry_delay(self, attempt: int) -> float:
         return self.api_retry_backoff_seconds * max(1, attempt)
 
+    @staticmethod
+    def _normalize_refresh_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Accept legacy and envelope-style responses for refresh endpoints."""
+        if not isinstance(payload, dict):
+            return {}
+
+        data = payload.get("data")
+        if isinstance(data, dict):
+            merged = dict(payload)
+            for key in ("request_status", "run", "cooldown_until", "remaining_seconds", "message", "reason"):
+                if key in data and key not in merged:
+                    merged[key] = data[key]
+            return merged
+
+        return payload
+
     async def _api_post(self, path: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         url = f"{self.api_url}{path}"
         for attempt in range(1, self.api_post_attempts + 1):
             try:
                 async with httpx.AsyncClient(timeout=20) as client:
                     resp = await client.post(url, json=payload, headers=self._headers())
-                if resp.status_code == 200:
+                if 200 <= resp.status_code < 300:
                     data = resp.json()
                     return data if isinstance(data, dict) else None
 
@@ -185,7 +201,7 @@ class UpdateCommands(commands.Cog):
             try:
                 async with httpx.AsyncClient(timeout=20) as client:
                     resp = await client.get(url, headers=self._headers())
-                if resp.status_code == 200:
+                if 200 <= resp.status_code < 300:
                     data = resp.json()
                     return data if isinstance(data, dict) else None
 
@@ -259,7 +275,9 @@ class UpdateCommands(commands.Cog):
             return False
 
     async def _handle_start_failure(self, interaction: discord.Interaction) -> None:
-        latest_payload = await self._api_get("/api/futures/refresh/latest")
+        latest_payload = self._normalize_refresh_payload(
+            await self._api_get("/api/futures/refresh/latest")
+        )
         run = latest_payload.get("run") if isinstance(latest_payload, dict) else None
         if isinstance(run, dict):
             status = str(run.get("status") or "").upper()
@@ -310,6 +328,15 @@ class UpdateCommands(commands.Cog):
             f"Last run: `{run.get('run_id', '?')}` ({run.get('status', 'unknown')})\n"
             f"Cooldown until: {_fmt_utc(payload.get('cooldown_until') or run.get('cooldown_until'))}\n"
             f"Try again in about {mins} minute(s)."
+        )
+
+    def _blocked_message(self, payload: Dict[str, Any]) -> str:
+        reason = str(payload.get("reason") or "unknown_block").strip()
+        detail = str(payload.get("message") or "Manual refresh is temporarily blocked.").strip()
+        return (
+            "🚫 Manual refresh is currently blocked.\n"
+            f"Reason: `{reason}`\n"
+            f"{detail}"
         )
 
     def _as_setup_obj(self, raw: Dict[str, Any]) -> Optional[SimpleNamespace]:
@@ -442,7 +469,9 @@ class UpdateCommands(commands.Cog):
     async def _watch_run_completion(self, run_id: str, channel: discord.abc.Messageable) -> None:
         deadline = datetime.now(timezone.utc).timestamp() + float(self.poll_timeout_seconds)
         while datetime.now(timezone.utc).timestamp() < deadline:
-            payload = await self._api_get(f"/api/futures/refresh/run/{run_id}")
+            payload = self._normalize_refresh_payload(
+                await self._api_get(f"/api/futures/refresh/run/{run_id}")
+            )
             if payload and isinstance(payload.get("run"), dict):
                 run = payload["run"]
                 status = str(run.get("status") or "").upper()
@@ -494,7 +523,9 @@ class UpdateCommands(commands.Cog):
             "triggered_by": str(interaction.user),
             "requested_channel_id": str(interaction.channel_id),
         }
-        result = await self._api_post("/api/futures/refresh/run", payload)
+        result = self._normalize_refresh_payload(
+            await self._api_post("/api/futures/refresh/run", payload)
+        )
         if not result:
             await self._handle_start_failure(interaction)
             return
@@ -531,7 +562,15 @@ class UpdateCommands(commands.Cog):
                     )
             return
 
-        await self._send_followup(interaction, "⚠️ Unexpected refresh response. Please try again.")
+        if request_status == "blocked":
+            await self._send_followup(interaction, self._blocked_message(result), ephemeral=True)
+            return
+
+        await self._send_followup(
+            interaction,
+            "⚠️ Unexpected refresh response. "
+            f"(status={request_status or 'unknown'}) Please try again.",
+        )
 
     async def cog_app_command_error(self, interaction, error):
         logger.error(f"[UpdateCommands] {error}", exc_info=error)

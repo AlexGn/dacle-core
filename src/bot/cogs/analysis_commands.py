@@ -52,6 +52,11 @@ ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240
 MAX_BATCH_SYMBOLS = 5
 BATCH_CONCURRENCY = 3
 TA_FRESHNESS_THRESHOLD_MINUTES = 30
+API_CONNECT_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_CONNECT_TIMEOUT_SECONDS", "5"))
+API_READ_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_READ_TIMEOUT_SECONDS", "90"))
+API_STATUS_READ_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_STATUS_READ_TIMEOUT_SECONDS", "15"))
+API_KICKOFF_RETRIES = int(os.getenv("DACLE_API_KICKOFF_RETRIES", "2"))
+API_KICKOFF_RETRY_DELAY_SECONDS = float(os.getenv("DACLE_API_KICKOFF_RETRY_DELAY_SECONDS", "2"))
 
 
 def _check_ta_freshness(symbol: str) -> bool:
@@ -65,6 +70,30 @@ def _check_ta_freshness(symbol: str) -> bool:
         return age_min < TA_FRESHNESS_THRESHOLD_MINUTES
     except Exception:
         return False
+
+
+def _request_with_retry(
+    method: str,
+    url: str,
+    *,
+    retries: int = 0,
+    retry_delay_seconds: float = 1.0,
+    **kwargs: Any,
+) -> requests.Response:
+    """Execute an HTTP request with optional timeout retries."""
+    for attempt in range(1, retries + 2):
+        try:
+            return requests.request(method=method, url=url, **kwargs)
+        except requests.Timeout:
+            if attempt > retries:
+                raise
+            logger.warning(
+                f"HTTP timeout on {method} {url} (attempt {attempt}/{retries + 1}); "
+                f"retrying in {retry_delay_seconds}s"
+            )
+            time.sleep(retry_delay_seconds)
+
+    raise RuntimeError(f"Unexpected retry exhaustion for {method} {url}")
 
 
 def parse_batch_symbols(symbols_str: str) -> list[str]:
@@ -453,7 +482,15 @@ class AnalysisCommands(commands.Cog):
     def _search_token(self, symbol: str) -> List[Dict[str, Any]]:
         api_base = _get_api_base_url()
         url = f"{api_base}/api/tokens/search"
-        resp = requests.post(url, json={"symbol": symbol.upper()}, headers=_api_headers(), timeout=15)
+        resp = _request_with_retry(
+            "POST",
+            url,
+            json={"symbol": symbol.upper()},
+            headers=_api_headers(),
+            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
+            retries=1,
+            retry_delay_seconds=1.0,
+        )
         resp.raise_for_status()
         payload = resp.json() or {}
         return payload.get("matches") or []
@@ -461,7 +498,15 @@ class AnalysisCommands(commands.Cog):
     def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
         api_base = _get_api_base_url()
         url = f"{api_base}/api/tokens/research"
-        resp = requests.post(url, json={"symbol": symbol.upper(), "name": name}, headers=_api_headers(), timeout=20)
+        resp = _request_with_retry(
+            "POST",
+            url,
+            json={"symbol": symbol.upper(), "name": name},
+            headers=_api_headers(),
+            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_READ_TIMEOUT_SECONDS),
+            retries=API_KICKOFF_RETRIES,
+            retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
+        )
         resp.raise_for_status()
         payload = resp.json()
         task_id = payload.get("task_id")
@@ -471,7 +516,14 @@ class AnalysisCommands(commands.Cog):
         status_url = f"{api_base}/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            status_resp = requests.get(status_url, headers=_api_headers(), timeout=15)
+            status_resp = _request_with_retry(
+                "GET",
+                status_url,
+                headers=_api_headers(),
+                timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
+                retries=1,
+                retry_delay_seconds=1.0,
+            )
             if status_resp.status_code == 404:
                 time.sleep(2)
                 continue
@@ -486,11 +538,32 @@ class AnalysisCommands(commands.Cog):
                 raise TimeoutError("Research timed out after 300s")
             time.sleep(2)
 
+    def _refresh_or_research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
+        """Prefer refetch for existing tokens; fallback to research for missing tokens."""
+        try:
+            return self._refresh_token_data(symbol)
+        except requests.HTTPError as e:
+            status = getattr(getattr(e, "response", None), "status_code", None)
+            if status == 404:
+                logger.info(
+                    f"[{symbol}] Refetch returned 404, falling back to research with name='{name}'"
+                )
+                return self._research_token_data(symbol, name)
+            raise
+
     def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
         """Trigger token refetch and wait for completion."""
         api_base = _get_api_base_url()
         url = f"{api_base}/api/tokens/{symbol}/refetch"
-        resp = requests.post(url, params={"force": "true", "auto_analyze": "false"}, headers=_api_headers(), timeout=15)
+        resp = _request_with_retry(
+            "POST",
+            url,
+            params={"force": "true", "auto_analyze": "false"},
+            headers=_api_headers(),
+            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_READ_TIMEOUT_SECONDS),
+            retries=API_KICKOFF_RETRIES,
+            retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
+        )
         resp.raise_for_status()
         payload = resp.json()
         task_id = payload.get("task_id")
@@ -500,7 +573,14 @@ class AnalysisCommands(commands.Cog):
         status_url = f"{api_base}/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            status_resp = requests.get(status_url, headers=_api_headers(), timeout=15)
+            status_resp = _request_with_retry(
+                "GET",
+                status_url,
+                headers=_api_headers(),
+                timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
+                retries=1,
+                retry_delay_seconds=1.0,
+            )
             if status_resp.status_code == 404:
                 time.sleep(2)
                 continue
@@ -655,7 +735,7 @@ class AnalysisCommands(commands.Cog):
             return
         resolved_symbol, resolved_name = resolved
         await status_msg.edit(
-            content=f"🔍 Analyzing **{resolved_symbol.upper()}**... (this may take 10-20s)"
+            content=f"🔍 Analyzing **{resolved_symbol.upper()}**... (this may take up to 2-3m)"
         )
 
         # Run analysis in background task
@@ -718,7 +798,7 @@ class AnalysisCommands(commands.Cog):
                 auto_archive_duration=60,
             )
             thread_status = await thread.send(
-                f"🔍 Analyzing **{symbol}**... (this may take 10-20s)"
+                f"🔍 Analyzing **{symbol}**... (this may take up to 2-3m)"
             )
             status_msg = thread_status
             target_channel = thread
@@ -733,7 +813,7 @@ class AnalysisCommands(commands.Cog):
                 return
             resolved_symbol, resolved_name = resolved
             await status_msg.edit(
-                content=f"🔍 Analyzing **{resolved_symbol}**... (this may take 10-20s)"
+                content=f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
             )
 
             safe_create_task(
@@ -839,7 +919,7 @@ class AnalysisCommands(commands.Cog):
                     auto_archive_duration=60,
                 )
                 thread_status = await thread.send(
-                    f"Analyzing **{symbol}**... (this may take 10-20s)"
+                    f"Analyzing **{symbol}**... (this may take up to 2-3m)"
                 )
                 status_msg = thread_status
                 target_channel = thread
@@ -853,7 +933,7 @@ class AnalysisCommands(commands.Cog):
                     return symbol, False
                 resolved_symbol, resolved_name = resolved
                 await status_msg.edit(
-                    content=f"Analyzing **{resolved_symbol}**... (this may take 10-20s)"
+                    content=f"Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
                 )
 
                 await self._run_analysis_task(
@@ -896,7 +976,10 @@ class AnalysisCommands(commands.Cog):
             try:
                 if resolved_name:
                     await asyncio.wait_for(
-                        loop.run_in_executor(None, lambda: self._research_token_data(symbol, resolved_name)),
+                        loop.run_in_executor(
+                            None,
+                            lambda: self._refresh_or_research_token_data(symbol, resolved_name),
+                        ),
                         timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
                     )
                 else:
@@ -908,6 +991,20 @@ class AnalysisCommands(commands.Cog):
                     loop.run_in_executor(None, lambda: self._load_consolidated(symbol)),
                     timeout=30,
                 )
+            except requests.Timeout:
+                logger.error(
+                    "ANALYZE_SLASH_ERROR "
+                    f"request_id={request_id or 'n/a'} "
+                    f"symbol={symbol} "
+                    "reason=api_timeout_during_refresh"
+                )
+                await status_msg.edit(
+                    content=(
+                        f"❌ Analysis timed out while contacting API for **{symbol}**. "
+                        "API may be busy; retry in ~1 minute."
+                    )
+                )
+                return
             except asyncio.TimeoutError:
                 logger.error(
                     "ANALYZE_SLASH_ERROR "
@@ -1045,6 +1142,11 @@ class AnalysisCommands(commands.Cog):
                     err_text = (
                         "Permission denied reading consolidated.json. "
                         "Please fix data folder ownership (clawd) and retry."
+                    )
+                elif isinstance(e, requests.Timeout):
+                    err_text = (
+                        "Timed out waiting for local API response. "
+                        "API may be busy; retry in ~1 minute."
                     )
                 if status_msg:
                     await status_msg.edit(content=f"❌ An error occurred while analyzing **{symbol}**: {err_text}")
