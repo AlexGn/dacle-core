@@ -177,10 +177,9 @@ data/tokens/*/ta/tasks/ta_*.json
 # Reports directory (generated analysis, not source code)
 reports/
 
-# Polymarket audit/research outputs (large, regeneratable, not source)
-data/audit/polymarket_*.csv
-data/audit/polymarket_*.json
-data/audit/polymarket_market_schema.json
+# Runtime audit & metrics (all files in these dirs are VPS-generated, not source)
+data/audit/
+data/metrics/
 polymarket_raw_frames.json
 
 # Prevent claude-mem from creating CLAUDE.md stubs everywhere (Session 382)
