@@ -38,7 +38,7 @@ class SwingAnalyzer:
             
             # Analyze structure on 1d
             struct_1d = self.msa.analyze_from_ohlcv(ohlcv_1d, timeframe="1d")
-            results["trend_1d"] = struct_1d.get("market_regime", "UNKNOWN")
+            results["trend_1d"] = struct_1d.get("current_structure", "UNKNOWN")
             results["support_1d"] = struct_1d.get("strong_support")
             
         if ohlcv_1w:
@@ -48,7 +48,7 @@ class SwingAnalyzer:
             
             # Analyze structure on 1w
             struct_1w = self.msa.analyze_from_ohlcv(ohlcv_1w, timeframe="1w")
-            results["trend_1w"] = struct_1w.get("market_regime", "UNKNOWN")
+            results["trend_1w"] = struct_1w.get("current_structure", "UNKNOWN")
             
         return results
 
