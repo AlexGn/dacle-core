@@ -21,6 +21,9 @@ class FeatureFlag:
     """Feature flag constants"""
     ENHANCED_CONFLUENCE_DISPLAY = "enhanced_confluence_display"
     POLYMARKET_UNIVERSE_SCANNER = "polymarket_universe_scanner"
+    POLYMARKET_STRICT_DUAL_LEG_STALENESS = "polymarket_strict_dual_leg_staleness"
+    POLYMARKET_LEASE_QTY_CAP = "polymarket_lease_qty_cap"
+    POLYMARKET_DYNAMIC_PAIR_WIRING = "polymarket_dynamic_pair_wiring"
     DISCOVERY_ENSEMBLE_FUNNEL = "discovery_ensemble_funnel"
     DISCOVERY_RANK_DRIFT_TELEMETRY = "discovery_rank_drift_telemetry"
 
