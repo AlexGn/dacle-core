@@ -115,10 +115,10 @@ def _load_sync_state() -> Dict[str, Any]:
 
 def _save_sync_state(state: Dict[str, Any]) -> None:
     """Save sync state."""
+    from src.utils.atomic_write import atomic_json_write
     SYNC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     state["last_sync"] = datetime.now(timezone.utc).isoformat()
-    with open(SYNC_STATE_PATH, "w") as f:
-        json.dump(state, f, indent=2)
+    atomic_json_write(SYNC_STATE_PATH, state)
 
 
 def _generate_trade_id(trade: Dict[str, Any]) -> str:
@@ -325,7 +325,7 @@ class BlofinTradeSync:
             logger.error(f"Failed to fetch Blofin position history: {e}")
             return []
 
-    def get_open_positions(self) -> Optional[List[Dict[str, Any]]]:
+    def get_open_positions(self) -> List[Dict[str, Any]]:
         """
         Fetch current open positions from Blofin Futures API.
 
@@ -384,7 +384,7 @@ class BlofinTradeSync:
 
         except Exception as e:
             logger.error(f"Failed to fetch open positions: {e}")
-            return None  # Session 389b: None = error, [] = genuinely 0 positions
+            return []
 
     def get_account_balance(self) -> Dict[str, Any]:
         """
@@ -475,6 +475,8 @@ class BlofinTradeSync:
             - can_open_position: Boolean - True if can open new position
         """
         positions = self.get_open_positions()
+        if not positions:
+            positions = []
         balance = self.get_account_balance()
 
         # Calculate aggregates
