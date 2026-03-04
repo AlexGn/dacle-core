@@ -26,11 +26,11 @@ class NonceManager:
     async def resync(self, current_onchain_nonce: int):
         """Re-align local counter with exchange truth."""
         async with self._lock:
-            if current_onchain_nonce > self._next_nonce:
+            if current_onchain_nonce != self._next_nonce:
                 logger.info(f"NonceManager resync: {self._next_nonce} -> {current_onchain_nonce}")
                 self._next_nonce = current_onchain_nonce
             else:
-                logger.debug("NonceManager resync ignored: local is ahead or equal.")
+                logger.debug("NonceManager resync ignored: already in sync.")
 
     def peek(self) -> int:
         return self._next_nonce
