@@ -78,6 +78,13 @@ class BlofinExecutionBridge:
                 "info": {"dry_run": True}
             }
 
+        if not os.getenv("BLOFIN_LIVE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            return {
+                "error": ExecutionErrorCode.ERR_ORDER_SUBMIT_FAILED,
+                "reason": "LIVE_EXECUTION_DISABLED_IN_BRIDGE",
+                "entry_order_id": None,
+            }
+
         if not self.exchange:
             return {"error": ExecutionErrorCode.ERR_INTERNAL_RETRY_EXHAUSTED, "reason": "Exchange not initialized"}
 

@@ -54,12 +54,20 @@ class ExecutionStateManager:
         self._intents_lock = Lock()
         self._events_lock = Lock()
 
+    def _load_intents(self) -> Dict[str, Dict[str, Any]]:
+        with open(INTENTS_FILE, "r") as f:
+            raw = json.load(f)
+        return raw if isinstance(raw, dict) else {}
+
+    def _save_intents(self, intents: Dict[str, Dict[str, Any]]) -> None:
+        with open(INTENTS_FILE, "w") as f:
+            json.dump(intents, f, indent=4)
+
     def get_intent(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
         """Retrieve execution intent by idempotency key."""
         with self._intents_lock:
             try:
-                with open(INTENTS_FILE, "r") as f:
-                    intents = json.load(f)
+                intents = self._load_intents()
                 return intents.get(idempotency_key)
             except Exception as e:
                 logger.error(f"Failed to read intents: {e}")
@@ -69,24 +77,43 @@ class ExecutionStateManager:
         """Create a new execution intent if it doesn't exist."""
         with self._intents_lock:
             try:
-                with open(INTENTS_FILE, "r") as f:
-                    intents = json.load(f)
+                intents = self._load_intents()
                 
                 if idempotency_key in intents:
                     # Check for conflict
                     existing = intents[idempotency_key]
-                    if existing["symbol"] != payload["symbol"] or existing["side"] != payload["side"]:
+                    existing_symbol = existing.get("symbol")
+                    existing_side = existing.get("side")
+                    incoming_symbol = payload.get("symbol")
+                    incoming_side = payload.get("side")
+                    if (
+                        existing_symbol
+                        and existing_side
+                        and (existing_symbol != incoming_symbol or existing_side != incoming_side)
+                    ):
                         self._log_event(
                             idempotency_key,
                             "IDEMPOTENCY_CONFLICT",
                             {
-                                "existing_symbol": existing.get("symbol"),
-                                "existing_side": existing.get("side"),
-                                "incoming_symbol": payload.get("symbol"),
-                                "incoming_side": payload.get("side"),
+                                "existing_symbol": existing_symbol,
+                                "existing_side": existing_side,
+                                "incoming_symbol": incoming_symbol,
+                                "incoming_side": incoming_side,
                             },
                         )
                         raise ValueError("VETO_IDEMPOTENCY_CONFLICT: payload mismatch for key")
+
+                    # Pre-check snapshot stubs can exist before full approval payload.
+                    changed = False
+                    for key, value in payload.items():
+                        if key not in existing or existing.get(key) is None:
+                            existing[key] = value
+                            changed = True
+                    if changed:
+                        existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+                        intents[idempotency_key] = existing
+                        self._save_intents(intents)
+
                     self._log_event(
                         idempotency_key,
                         "IDEMPOTENCY_REPLAY",
@@ -103,8 +130,7 @@ class ExecutionStateManager:
                 }
                 intents[idempotency_key] = intent
                 
-                with open(INTENTS_FILE, "w") as f:
-                    json.dump(intents, f, indent=4)
+                self._save_intents(intents)
                     
                 self._log_event(idempotency_key, ExecutionState.DISCOVERED)
                 return intent
@@ -119,8 +145,7 @@ class ExecutionStateManager:
         """
         with self._intents_lock:
             try:
-                with open(INTENTS_FILE, "r") as f:
-                    intents = json.load(f)
+                intents = self._load_intents()
                 
                 if idempotency_key not in intents:
                     return False
@@ -148,8 +173,7 @@ class ExecutionStateManager:
                     intent.update(metadata)
                     
                 intents[idempotency_key] = intent
-                with open(INTENTS_FILE, "w") as f:
-                    json.dump(intents, f, indent=4)
+                self._save_intents(intents)
                 
                 self._log_event(idempotency_key, next_state, metadata)
                 return True
@@ -161,8 +185,7 @@ class ExecutionStateManager:
         """List all intents in an active execution state."""
         with self._intents_lock:
             try:
-                with open(INTENTS_FILE, "r") as f:
-                    intents = json.load(f)
+                intents = self._load_intents()
                 
                 active_states = [
                     ExecutionState.SUBMITTED,
@@ -180,8 +203,7 @@ class ExecutionStateManager:
             return True
         with self._intents_lock:
             try:
-                with open(INTENTS_FILE, "r") as f:
-                    intents = json.load(f)
+                intents = self._load_intents()
                 if idempotency_key not in intents:
                     return False
 
@@ -190,14 +212,56 @@ class ExecutionStateManager:
                 intent["updated_at"] = datetime.now(timezone.utc).isoformat()
                 intents[idempotency_key] = intent
 
-                with open(INTENTS_FILE, "w") as f:
-                    json.dump(intents, f, indent=4)
+                self._save_intents(intents)
 
                 self._log_event(idempotency_key, ExecutionState(intent["state"]), {"metadata_update": metadata})
                 return True
             except Exception as e:
                 logger.error(f"Metadata update failed: {e}")
                 return False
+
+    def store_pretrade_snapshot(
+        self,
+        idempotency_key: str,
+        snapshot: Dict[str, Any],
+        *,
+        symbol: Optional[str] = None,
+        side: Optional[str] = None,
+        setup_id: Optional[str] = None,
+    ) -> None:
+        """Upsert pre-trade snapshot by idempotency key."""
+        with self._intents_lock:
+            try:
+                intents = self._load_intents()
+                existing = intents.get(idempotency_key) or {
+                    "idempotency_key": idempotency_key,
+                    "state": ExecutionState.DISCOVERED,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+                if symbol and not existing.get("symbol"):
+                    existing["symbol"] = symbol
+                if side and not existing.get("side"):
+                    existing["side"] = side
+                if setup_id and not existing.get("setup_id"):
+                    existing["setup_id"] = setup_id
+                existing["pretrade_snapshot"] = snapshot
+                existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+                intents[idempotency_key] = existing
+                self._save_intents(intents)
+            except Exception as e:
+                logger.error("Failed to store pre-trade snapshot: %s", e)
+
+    def get_pretrade_snapshot(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+        """Return stored pre-trade snapshot for an idempotency key."""
+        with self._intents_lock:
+            try:
+                intents = self._load_intents()
+                intent = intents.get(idempotency_key) or {}
+                snapshot = intent.get("pretrade_snapshot")
+                return snapshot if isinstance(snapshot, dict) else None
+            except Exception as e:
+                logger.error("Failed to read pre-trade snapshot: %s", e)
+                return None
 
     def _is_valid_transition(self, from_state: ExecutionState, to_state: ExecutionState) -> bool:
         """

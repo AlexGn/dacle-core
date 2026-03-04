@@ -25,7 +25,7 @@ class ActiveConvictionMonitor:
 
     async def monitor_step(self):
         """Perform a single monitoring pass over all active trades."""
-        active_intents = self.state_mgr.list_active_intents()
+        active_intents = await asyncio.to_thread(self.state_mgr.list_active_intents)
         if not active_intents:
             logger.debug("No active intents to monitor")
             return
@@ -59,10 +59,14 @@ class ActiveConvictionMonitor:
             logger.warning(f"🚨 CRITICAL DRIFT: {symbol} score dropped to {current_score:.1f} (Threshold: {self.SURVIVAL_THRESHOLD})")
             await self._trigger_drift_alert(intent, current_result, "SURVIVAL_THRESHOLD_VIOLATION")
             # Update intent metadata without changing state
-            self.state_mgr.update_intent_metadata(id_key, {
-                "warnings": list(set(intent.get("warnings", []) + [WarningCode.WARN_CONVICTION_DRIFT])),
-                "current_score": current_score
-            })
+            await asyncio.to_thread(
+                self.state_mgr.update_intent_metadata,
+                id_key,
+                {
+                    "warnings": list(set(intent.get("warnings", []) + [WarningCode.WARN_CONVICTION_DRIFT])),
+                    "current_score": current_score,
+                },
+            )
             return
 
         # 3. Check for Relative Drift
