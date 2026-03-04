@@ -100,6 +100,22 @@ def _is_timeout_like_error(exc: BaseException) -> bool:
     return False
 
 
+def _format_user_facing_analysis_error(exc: BaseException) -> str:
+    """Convert internal exception details into stable user-facing text."""
+    err_text = str(exc)
+    if "Permission denied" in err_text and "consolidated.json" in err_text:
+        return (
+            "Permission denied reading consolidated.json. "
+            "Please fix data folder ownership (clawd) and retry."
+        )
+    if _is_timeout_like_error(exc):
+        return (
+            "Timed out waiting for local API response. "
+            "API may be busy; retry in ~1 minute."
+        )
+    return err_text
+
+
 def _check_ta_freshness(symbol: str) -> bool:
     """Return True if TA data is fresh (<30 min), False if stale."""
     ta_file = TOKENS_DIR / symbol.upper() / "ta" / "latest.json"
@@ -883,8 +899,9 @@ class AnalysisCommands(commands.Cog):
                 exc_info=True,
             )
             try:
+                user_err = _format_user_facing_analysis_error(e)
                 await status_msg.edit(
-                    content=f"❌ Analysis failed for **{symbol}**: {e}"
+                    content=f"❌ Analysis failed for **{symbol}**: {user_err}"
                 )
             except Exception:
                 pass
@@ -990,8 +1007,9 @@ class AnalysisCommands(commands.Cog):
                 return symbol, True
             except Exception as e:
                 logger.error(f"Batch analysis failed for {symbol}: {e}", exc_info=True)
+                user_err = _format_user_facing_analysis_error(e)
                 try:
-                    await status_msg.edit(content=f"Analysis failed for **{symbol}**: {e}")
+                    await status_msg.edit(content=f"Analysis failed for **{symbol}**: {user_err}")
                 except Exception:
                     pass
                 return symbol, False
@@ -1180,17 +1198,7 @@ class AnalysisCommands(commands.Cog):
             logger.error(f"Error in analyze command: {e}", exc_info=True)
             # Try to report error to the user if possible
             try:
-                err_text = str(e)
-                if "Permission denied" in err_text and "consolidated.json" in err_text:
-                    err_text = (
-                        "Permission denied reading consolidated.json. "
-                        "Please fix data folder ownership (clawd) and retry."
-                    )
-                elif _is_timeout_like_error(e):
-                    err_text = (
-                        "Timed out waiting for local API response. "
-                        "API may be busy; retry in ~1 minute."
-                    )
+                err_text = _format_user_facing_analysis_error(e)
                 if status_msg:
                     await status_msg.edit(content=f"❌ An error occurred while analyzing **{symbol}**: {err_text}")
                 elif notify_channel:
