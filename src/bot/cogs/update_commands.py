@@ -211,7 +211,7 @@ class UpdateCommands(commands.Cog):
 
                 transient = self._is_transient_http_status(resp.status_code)
                 logger.warning(
-                    "/update POST %s failed (attempt %s/%s): HTTP %s",
+                    "/discovery POST %s failed (attempt %s/%s): HTTP %s",
                     path,
                     attempt,
                     self.api_post_attempts,
@@ -223,7 +223,7 @@ class UpdateCommands(commands.Cog):
                 return None
             except Exception as e:
                 logger.warning(
-                    "/update POST %s failed (attempt %s/%s): %s",
+                    "/discovery POST %s failed (attempt %s/%s): %s",
                     path,
                     attempt,
                     self.api_post_attempts,
@@ -247,7 +247,7 @@ class UpdateCommands(commands.Cog):
 
                 transient = self._is_transient_http_status(resp.status_code)
                 logger.warning(
-                    "/update GET %s failed (attempt %s/%s): HTTP %s",
+                    "/discovery GET %s failed (attempt %s/%s): HTTP %s",
                     path,
                     attempt,
                     self.api_get_attempts,
@@ -259,7 +259,7 @@ class UpdateCommands(commands.Cog):
                 return None
             except Exception as e:
                 logger.warning(
-                    "/update GET %s failed (attempt %s/%s): %s",
+                    "/discovery GET %s failed (attempt %s/%s): %s",
                     path,
                     attempt,
                     self.api_get_attempts,
@@ -291,10 +291,10 @@ class UpdateCommands(commands.Cog):
             await interaction.response.defer(ephemeral=False, thinking=True)
             return True
         except discord.NotFound as e:
-            logger.warning("/update interaction expired before defer: %s", e)
+            logger.warning("/discovery interaction expired before defer: %s", e)
             return False
         except discord.HTTPException as e:
-            logger.warning("/update defer failed: %s", e)
+            logger.warning("/discovery defer failed: %s", e)
             return False
 
     async def _send_followup(
@@ -308,10 +308,10 @@ class UpdateCommands(commands.Cog):
             await interaction.followup.send(content, ephemeral=ephemeral)
             return True
         except discord.NotFound as e:
-            logger.warning("/update followup failed (interaction expired): %s", e)
+            logger.warning("/discovery followup failed (interaction expired): %s", e)
             return False
         except discord.HTTPException as e:
-            logger.warning("/update followup failed: %s", e)
+            logger.warning("/discovery followup failed: %s", e)
             return False
 
     async def _handle_start_failure(self, interaction: discord.Interaction) -> None:
@@ -346,7 +346,7 @@ class UpdateCommands(commands.Cog):
 
     def _started_message(self, run: Dict[str, Any]) -> str:
         return (
-            f"🔄 **/update started**\n"
+            f"🔄 **/discovery started**\n"
             f"Run: `{run.get('run_id', '?')}`\n"
             f"Started: {_fmt_utc(run.get('started_at'))}\n"
             f"Status: {run.get('status', 'RUNNING')}"
@@ -461,7 +461,7 @@ class UpdateCommands(commands.Cog):
                 prepared=None,
             )
         except Exception as e:
-            logger.warning(f"Failed to format full discovery report for /update: {e}")
+            logger.warning(f"Failed to format full discovery report for /discovery: {e}")
             return None
 
     @staticmethod
@@ -499,7 +499,7 @@ class UpdateCommands(commands.Cog):
 
     def _build_failure_message(self, run: Dict[str, Any]) -> str:
         return (
-            f"❌ **/update failed**\n"
+            f"❌ **/discovery failed**\n"
             f"Run: `{run.get('run_id', '?')}`\n"
             f"Status: {run.get('status', 'FAILED')}\n"
             f"Error: {run.get('error') or 'unknown'}\n"
@@ -522,7 +522,7 @@ class UpdateCommands(commands.Cog):
                             await self._send_report_chunks(channel, report)
                         else:
                             await channel.send(
-                                f"✅ **/update completed**\n"
+                                f"✅ **/discovery completed**\n"
                                 f"Run: `{run.get('run_id', '?')}` in {run.get('duration_seconds', '?')}s\n"
                                 "⚠️ Could not render full discovery report. "
                                 "Use `/scan` for current snapshot."
@@ -533,25 +533,25 @@ class UpdateCommands(commands.Cog):
             await asyncio.sleep(max(2, self.poll_interval_seconds))
 
         await channel.send(
-            f"⚠️ `/update` watcher timed out waiting for run `{run_id}`. "
-            f"Check `/update` again for current status."
+            f"⚠️ `/discovery` watcher timed out waiting for run `{run_id}`. "
+            f"Check `/discovery` again for current status."
         )
 
     @app_commands.command(
-        name="update",
+        name="discovery",
         description="Run full manual refresh and post fresh market snapshot",
     )
     async def update(self, interaction: discord.Interaction):
         if not self._is_authorized(interaction):
             logger.warning(
-                "/update unauthorized user=%s channel_id=%s channel_name=%s discovery_channel_id=%s",
+                "/discovery unauthorized user=%s channel_id=%s channel_name=%s discovery_channel_id=%s",
                 interaction.user.id,
                 interaction.channel_id,
                 getattr(interaction.channel, "name", "unknown"),
                 self.discovery_channel_id,
             )
             await interaction.response.send_message(
-                "❌ You are not authorized to run `/update` outside owner/discovery scope.",
+                "❌ You are not authorized to run `/discovery` outside owner/discovery scope.",
                 ephemeral=True,
             )
             return
@@ -581,7 +581,7 @@ class UpdateCommands(commands.Cog):
                     self._watch_run_completion(str(run.get("run_id", "")), channel),
                     logger=logger,
                     error_channel=channel,
-                    name=f"update-watch-{run.get('run_id', 'unknown')}",
+                    name=f"discovery-watch-{run.get('run_id', 'unknown')}",
                 )
             return
 
