@@ -59,6 +59,47 @@ API_KICKOFF_RETRIES = int(os.getenv("DACLE_API_KICKOFF_RETRIES", "2"))
 API_KICKOFF_RETRY_DELAY_SECONDS = float(os.getenv("DACLE_API_KICKOFF_RETRY_DELAY_SECONDS", "2"))
 
 
+def _iter_exception_chain(exc: BaseException):
+    """Yield exception plus nested cause/context chain."""
+    seen: set[int] = set()
+    stack: list[Optional[BaseException]] = [exc]
+    while stack:
+        current = stack.pop()
+        if current is None:
+            continue
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        yield current
+        stack.append(getattr(current, "__cause__", None))
+        stack.append(getattr(current, "__context__", None))
+        for arg in getattr(current, "args", ()):
+            if isinstance(arg, BaseException):
+                stack.append(arg)
+
+
+def _is_timeout_like_error(exc: BaseException) -> bool:
+    """Handle wrapped timeout errors that requests may surface as ConnectionError."""
+    for current in _iter_exception_chain(exc):
+        if isinstance(current, (requests.Timeout, asyncio.TimeoutError)):
+            return True
+        name = type(current).__name__.lower()
+        text = str(current).lower()
+        if "timeout" in name:
+            return True
+        if "read timed out" in text or "connect timeout" in text:
+            return True
+        if "timed out" in text and (
+            "httpconnectionpool" in text
+            or "urllib3" in text
+            or "127.0.0.1" in text
+            or "localhost" in text
+        ):
+            return True
+    return False
+
+
 def _check_ta_freshness(symbol: str) -> bool:
     """Return True if TA data is fresh (<30 min), False if stale."""
     ta_file = TOKENS_DIR / symbol.upper() / "ta" / "latest.json"
@@ -84,9 +125,11 @@ def _request_with_retry(
     for attempt in range(1, retries + 2):
         try:
             return requests.request(method=method, url=url, **kwargs)
-        except requests.Timeout:
-            if attempt > retries:
+        except requests.RequestException as exc:
+            if not _is_timeout_like_error(exc):
                 raise
+            if attempt > retries:
+                raise requests.Timeout(str(exc)) from exc
             logger.warning(
                 f"HTTP timeout on {method} {url} (attempt {attempt}/{retries + 1}); "
                 f"retrying in {retry_delay_seconds}s"
@@ -1143,7 +1186,7 @@ class AnalysisCommands(commands.Cog):
                         "Permission denied reading consolidated.json. "
                         "Please fix data folder ownership (clawd) and retry."
                     )
-                elif isinstance(e, requests.Timeout):
+                elif _is_timeout_like_error(e):
                     err_text = (
                         "Timed out waiting for local API response. "
                         "API may be busy; retry in ~1 minute."
