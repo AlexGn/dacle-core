@@ -64,6 +64,88 @@ class TradeRouter(commands.Cog):
         except Exception:
             await interaction.followup.send("⛔ Not authorized.", ephemeral=True)
 
+    async def _safe_defer(
+        self,
+        interaction: discord.Interaction,
+        *,
+        ephemeral: bool,
+        command_name: str,
+    ) -> bool:
+        """Best-effort defer to avoid hard failures on expired interactions."""
+        try:
+            await interaction.response.defer(ephemeral=ephemeral)
+            return True
+        except discord.NotFound:
+            logger.warning(
+                "Interaction expired before defer command=%s user_id=%s interaction_id=%s",
+                command_name,
+                getattr(getattr(interaction, "user", None), "id", None),
+                getattr(interaction, "id", None),
+            )
+            return False
+        except discord.HTTPException as e:
+            # Already acknowledged by Discord; treat as deferred path.
+            if getattr(e, "code", None) == 40060:
+                return True
+            logger.error(
+                "Failed to defer interaction command=%s user_id=%s code=%s",
+                command_name,
+                getattr(getattr(interaction, "user", None), "id", None),
+                getattr(e, "code", None),
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                "Unexpected defer failure command=%s user_id=%s err=%s",
+                command_name,
+                getattr(getattr(interaction, "user", None), "id", None),
+                e,
+            )
+            return False
+
+    async def _send_command_message(
+        self,
+        interaction: discord.Interaction,
+        *,
+        deferred: bool,
+        content: Optional[str] = None,
+        embed: Optional[discord.Embed] = None,
+        view: Optional[discord.ui.View] = None,
+        ephemeral: bool = False,
+    ) -> None:
+        """
+        Send via interaction when possible; fallback to channel send on token expiry.
+        """
+        try:
+            if deferred:
+                await interaction.followup.send(content=content, embed=embed, view=view, ephemeral=ephemeral)
+            else:
+                await interaction.response.send_message(content=content, embed=embed, view=view, ephemeral=ephemeral)
+            return
+        except Exception as e:
+            logger.warning(
+                "Interaction send failed; falling back to channel send user_id=%s err=%s",
+                getattr(getattr(interaction, "user", None), "id", None),
+                e,
+            )
+
+        channel = interaction.channel
+        if channel and hasattr(channel, "send"):
+            kwargs: Dict[str, Any] = {}
+            if content is not None:
+                kwargs["content"] = content
+            if embed is not None:
+                kwargs["embed"] = embed
+            if view is not None:
+                kwargs["view"] = view
+            await channel.send(**kwargs)
+            return
+
+        logger.error(
+            "Unable to send command response (no interaction/channel route) user_id=%s",
+            getattr(getattr(interaction, "user", None), "id", None),
+        )
+
     def _build_api_headers(self) -> Dict[str, str]:
         headers: Dict[str, str] = {}
         if self.api_key:
@@ -162,25 +244,35 @@ class TradeRouter(commands.Cog):
         if not self._is_authorized(interaction.user.id):
             await self._deny_interaction(interaction)
             return
-        await interaction.response.defer(ephemeral=False)
+        deferred = await self._safe_defer(interaction, ephemeral=False, command_name="rerun")
 
         channel = interaction.channel
         if not isinstance(channel, discord.Thread):
-            await interaction.followup.send(
-                "❌ `/rerun` must be used inside a trade thread.", ephemeral=True
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content="❌ `/rerun` must be used inside a trade thread.",
+                ephemeral=True,
             )
             return
         if channel.parent_id != TRADES_CHANNEL_ID:
-            await interaction.followup.send(
-                "❌ `/rerun` only works in `#trades` threads.", ephemeral=True
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content="❌ `/rerun` only works in `#trades` threads.",
+                ephemeral=True,
             )
             return
 
         setup = await self._extract_setup_from_thread(channel)
         if not setup:
-            await interaction.followup.send(
-                "❌ Could not find a trade setup in this thread.\n"
-                "Expected format: `Entry: X.XX`, `SL: X.XX`, etc."
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content=(
+                    "❌ Could not find a trade setup in this thread.\n"
+                    "Expected format: `Entry: X.XX`, `SL: X.XX`, etc."
+                ),
             )
             return
 
@@ -205,7 +297,7 @@ class TradeRouter(commands.Cog):
         else:
             response_text = "❌ Trade rerun failed — DACLE API unavailable."
 
-        await interaction.followup.send(response_text)
+        await self._send_command_message(interaction, deferred=deferred, content=response_text)
 
     async def _extract_setup_from_thread(self, thread: discord.Thread) -> Optional[Dict[str, Any]]:
         """Scan thread messages for the original trade setup."""
@@ -273,7 +365,7 @@ class TradeRouter(commands.Cog):
         if not self._is_authorized(interaction.user.id):
             await self._deny_interaction(interaction)
             return
-        await interaction.response.defer(ephemeral=False)
+        deferred = await self._safe_defer(interaction, ephemeral=False, command_name="setup")
 
         token = token.upper()
         direction = direction.upper()
@@ -349,9 +441,13 @@ class TradeRouter(commands.Cog):
                         continue
 
         if not exec_state and not discord_levels:
-            await interaction.followup.send(
-                f"No playbook found for **{token}** {direction}. "
-                f"Run `/analyze {token}` first to generate a playbook."
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content=(
+                    f"No playbook found for **{token}** {direction}. "
+                    f"Run `/analyze {token}` first to generate a playbook."
+                ),
             )
             return
 
@@ -370,9 +466,13 @@ class TradeRouter(commands.Cog):
             entry_high = levels.get("entry_high")
 
         if not entry_low or not stop_loss:
-            await interaction.followup.send(
-                f"Playbook for **{token}** {direction} is incomplete (missing entry or SL). "
-                f"Re-run `/analyze {token}` to regenerate."
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content=(
+                    f"Playbook for **{token}** {direction} is incomplete (missing entry or SL). "
+                    f"Re-run `/analyze {token}` to regenerate."
+                ),
             )
             return
 
@@ -414,8 +514,10 @@ class TradeRouter(commands.Cog):
         # Post to #trades
         trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
         if not trades_channel:
-            await interaction.followup.send(
-                f"Could not find #trades channel. Post manually:\n```\n{setup_msg}\n```"
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content=f"Could not find #trades channel. Post manually:\n```\n{setup_msg}\n```",
             )
             return
 
@@ -423,16 +525,22 @@ class TradeRouter(commands.Cog):
             await trades_channel.send(setup_msg)
         except Exception as e:
             logger.error(f"/setup failed to post to #trades: {e}")
-            await interaction.followup.send(
-                f"Failed to post to #trades: {e}\nManual setup:\n```\n{setup_msg}\n```"
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content=f"Failed to post to #trades: {e}\nManual setup:\n```\n{setup_msg}\n```",
             )
             return
 
         # Trade router (Node.js) handles pre-trade-check when it detects
         # the setup in #trades — no need to run it here (avoids duplicates).
-        await interaction.followup.send(
-            f"Setup posted to #trades for **{token}** {direction}. "
-            f"Trade router will run pre-trade-check in the thread."
+        await self._send_command_message(
+            interaction,
+            deferred=deferred,
+            content=(
+                f"Setup posted to #trades for **{token}** {direction}. "
+                f"Trade router will run pre-trade-check in the thread."
+            ),
         )
 
     # NOTE: on_message listener removed — trade setup detection is handled by
@@ -464,7 +572,7 @@ class TradeRouter(commands.Cog):
         if not self._is_authorized(interaction.user.id):
             await self._deny_interaction(interaction)
             return
-        await interaction.response.defer(ephemeral=False)
+        deferred = await self._safe_defer(interaction, ephemeral=False, command_name="levels")
 
         token_upper = token.upper()
         direction_value = direction.value
@@ -485,17 +593,27 @@ class TradeRouter(commands.Cog):
                     if response.status == 422:
                         error_data = await response.json()
                         detail = error_data.get("detail", "Validation error")
-                        await interaction.followup.send(f"\u274c {detail}")
+                        await self._send_command_message(
+                            interaction,
+                            deferred=deferred,
+                            content=f"\u274c {detail}",
+                        )
                         return
                     if response.status != 200:
-                        await interaction.followup.send(
-                            f"API error ({response.status}). Check DACLE API logs."
+                        await self._send_command_message(
+                            interaction,
+                            deferred=deferred,
+                            content=f"API error ({response.status}). Check DACLE API logs.",
                         )
                         return
                     api_result = await response.json()
         except Exception as e:
             logger.error(f"/levels API call failed: {e}")
-            await interaction.followup.send("DACLE API unavailable.")
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content="DACLE API unavailable.",
+            )
             return
 
         # Extract results
@@ -562,7 +680,12 @@ class TradeRouter(commands.Cog):
             confluence=confluence,
             rr_ratio=rr_ratio,
         )
-        await interaction.followup.send(embed=embed, view=view)
+        await self._send_command_message(
+            interaction,
+            deferred=deferred,
+            embed=embed,
+            view=view,
+        )
 
 
 class LevelsResultView(discord.ui.View):
