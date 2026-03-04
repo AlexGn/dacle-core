@@ -47,7 +47,7 @@ REQUIRED_FIELDS = {
     # float_percent: scorer handles missing gracefully (0/5 score + "MISSING DATA" flag).
     # Hard-gating here blocks established tokens (e.g. TAO) where sources lack supply data.
 }
-ANALYSIS_REFRESH_TIMEOUT_SECONDS = 180
+ANALYSIS_REFRESH_TIMEOUT_SECONDS = 420
 ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240
 MAX_BATCH_SYMBOLS = 5
 BATCH_CONCURRENCY = 3
@@ -55,6 +55,13 @@ TA_FRESHNESS_THRESHOLD_MINUTES = 30
 API_CONNECT_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_CONNECT_TIMEOUT_SECONDS", "5"))
 API_READ_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_READ_TIMEOUT_SECONDS", "90"))
 API_STATUS_READ_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_STATUS_READ_TIMEOUT_SECONDS", "15"))
+API_REFRESH_KICKOFF_READ_TIMEOUT_SECONDS = float(
+    os.getenv("DACLE_API_REFRESH_KICKOFF_READ_TIMEOUT_SECONDS", "20")
+)
+API_RESEARCH_KICKOFF_READ_TIMEOUT_SECONDS = float(
+    os.getenv("DACLE_API_RESEARCH_KICKOFF_READ_TIMEOUT_SECONDS", "20")
+)
+ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS = int(os.getenv("ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS", "300"))
 API_KICKOFF_RETRIES = int(os.getenv("DACLE_API_KICKOFF_RETRIES", "2"))
 API_KICKOFF_RETRY_DELAY_SECONDS = float(os.getenv("DACLE_API_KICKOFF_RETRY_DELAY_SECONDS", "2"))
 
@@ -562,7 +569,7 @@ class AnalysisCommands(commands.Cog):
             url,
             json={"symbol": symbol.upper(), "name": name},
             headers=_api_headers(),
-            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_READ_TIMEOUT_SECONDS),
+            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_RESEARCH_KICKOFF_READ_TIMEOUT_SECONDS),
             retries=API_KICKOFF_RETRIES,
             retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
         )
@@ -593,8 +600,8 @@ class AnalysisCommands(commands.Cog):
                 return status_payload
             if status in {"failed", "skipped"}:
                 raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
-            if time.time() - start > 300:
-                raise TimeoutError("Research timed out after 300s")
+            if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
+                raise TimeoutError(f"Research timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
             time.sleep(2)
 
     def _refresh_or_research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
@@ -619,7 +626,7 @@ class AnalysisCommands(commands.Cog):
             url,
             params={"force": "true", "auto_analyze": "false"},
             headers=_api_headers(),
-            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_READ_TIMEOUT_SECONDS),
+            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_REFRESH_KICKOFF_READ_TIMEOUT_SECONDS),
             retries=API_KICKOFF_RETRIES,
             retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
         )
@@ -650,8 +657,8 @@ class AnalysisCommands(commands.Cog):
                 return status_payload
             if status in {"failed", "skipped"}:
                 raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Refetch failed")
-            if time.time() - start > 300:
-                raise TimeoutError("Refetch timed out after 300s")
+            if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
+                raise TimeoutError(f"Refetch timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
             time.sleep(2)
 
     def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
@@ -1063,6 +1070,20 @@ class AnalysisCommands(commands.Cog):
                     content=(
                         f"❌ Analysis timed out while contacting API for **{symbol}**. "
                         "API may be busy; retry in ~1 minute."
+                    )
+                )
+                return
+            except TimeoutError:
+                logger.error(
+                    "ANALYZE_SLASH_ERROR "
+                    f"request_id={request_id or 'n/a'} "
+                    f"symbol={symbol} "
+                    "reason=refresh_poll_timed_out"
+                )
+                await status_msg.edit(
+                    content=(
+                        f"❌ Analysis timed out while refreshing **{symbol}**. "
+                        "Please retry in ~1 minute."
                     )
                 )
                 return
