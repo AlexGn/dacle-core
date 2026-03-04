@@ -8,8 +8,9 @@ import asyncio
 import json
 from src.utils.logger import get_logger
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Tuple, Dict, Any, Optional, List
+from typing import Tuple, Dict, Any, Optional, List, Callable
 
 import discord
 from discord import app_commands
@@ -62,6 +63,9 @@ API_RESEARCH_KICKOFF_READ_TIMEOUT_SECONDS = float(
     os.getenv("DACLE_API_RESEARCH_KICKOFF_READ_TIMEOUT_SECONDS", "20")
 )
 ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS = int(os.getenv("ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS", "300"))
+ANALYSIS_REFRESH_FALLBACK_MAX_AGE_MINUTES = int(
+    os.getenv("ANALYSIS_REFRESH_FALLBACK_MAX_AGE_MINUTES", "240")
+)
 API_KICKOFF_RETRIES = int(os.getenv("DACLE_API_KICKOFF_RETRIES", "2"))
 API_KICKOFF_RETRY_DELAY_SECONDS = float(os.getenv("DACLE_API_KICKOFF_RETRY_DELAY_SECONDS", "2"))
 
@@ -160,6 +164,95 @@ def _request_with_retry(
             time.sleep(retry_delay_seconds)
 
     raise RuntimeError(f"Unexpected retry exhaustion for {method} {url}")
+
+
+def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _estimate_snapshot_age_minutes(symbol: str, consolidated: Dict[str, Any]) -> Optional[float]:
+    """Estimate cached snapshot age from metadata timestamps, then file mtime."""
+    now = datetime.now(timezone.utc)
+    for key in ("last_refreshed", "data_fetched_at", "last_updated"):
+        parsed = _parse_iso_datetime(consolidated.get(key))
+        if parsed is not None:
+            return max(0.0, (now - parsed).total_seconds() / 60.0)
+
+    consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
+    try:
+        mtime = consolidated_path.stat().st_mtime
+    except OSError:
+        return None
+    return max(0.0, (time.time() - mtime) / 60.0)
+
+
+async def _load_cached_after_refresh_delay(
+    *,
+    loop: asyncio.AbstractEventLoop,
+    symbol: str,
+    reason: str,
+    request_id: Optional[str],
+    status_msg: discord.Message,
+    load_cached_fn: Callable[[], Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
+    logger.warning(
+        "ANALYZE_SLASH_WARN "
+        f"request_id={request_id or 'n/a'} "
+        f"symbol={symbol} "
+        f"reason={reason} "
+        "action=load_cached_snapshot"
+    )
+    try:
+        cached = await asyncio.wait_for(
+            loop.run_in_executor(None, load_cached_fn),
+            timeout=30,
+        )
+    except Exception:
+        logger.error(
+            "ANALYZE_SLASH_ERROR "
+            f"request_id={request_id or 'n/a'} "
+            f"symbol={symbol} "
+            "reason=refresh_timeout_and_cached_load_failed",
+            exc_info=True,
+        )
+        await status_msg.edit(
+            content=(
+                f"❌ Analysis timed out while refreshing **{symbol}**, and cached data "
+                "could not be loaded. Please retry in ~1 minute."
+            )
+        )
+        return None, None
+
+    age_minutes = _estimate_snapshot_age_minutes(symbol, cached)
+    max_age = max(0, ANALYSIS_REFRESH_FALLBACK_MAX_AGE_MINUTES)
+    if age_minutes is not None and max_age > 0 and age_minutes > float(max_age):
+        await status_msg.edit(
+            content=(
+                f"❌ Analysis refresh timed out and cached data for **{symbol}** is too old "
+                f"({age_minutes:.0f}m > {max_age}m). Retry shortly."
+            )
+        )
+        return None, None
+
+    age_text = f"{age_minutes:.0f}m old" if age_minutes is not None else "age unknown"
+    await status_msg.edit(
+        content=(
+            f"⚠️ Refresh delayed for **{symbol}**. Continuing with latest cached snapshot "
+            f"({age_text})."
+        )
+    )
+    return cached, age_minutes
 
 
 def parse_batch_symbols(symbols_str: str) -> list[str]:
@@ -1041,6 +1134,9 @@ class AnalysisCommands(commands.Cog):
 
             # Force refetch and validate required data (no embed if missing)
             loop = asyncio.get_running_loop()
+            used_refresh_fallback = False
+            refresh_fallback_age_min: Optional[float] = None
+
             try:
                 if resolved_name:
                     await asyncio.wait_for(
@@ -1060,47 +1156,41 @@ class AnalysisCommands(commands.Cog):
                     timeout=30,
                 )
             except requests.Timeout:
-                logger.error(
-                    "ANALYZE_SLASH_ERROR "
-                    f"request_id={request_id or 'n/a'} "
-                    f"symbol={symbol} "
-                    "reason=api_timeout_during_refresh"
+                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
+                    loop=loop,
+                    symbol=symbol,
+                    reason="api_timeout_during_refresh",
+                    request_id=request_id,
+                    status_msg=status_msg,
+                    load_cached_fn=lambda: self._load_consolidated(symbol),
                 )
-                await status_msg.edit(
-                    content=(
-                        f"❌ Analysis timed out while contacting API for **{symbol}**. "
-                        "API may be busy; retry in ~1 minute."
-                    )
-                )
-                return
+                if consolidated is None:
+                    return
+                used_refresh_fallback = True
             except TimeoutError:
-                logger.error(
-                    "ANALYZE_SLASH_ERROR "
-                    f"request_id={request_id or 'n/a'} "
-                    f"symbol={symbol} "
-                    "reason=refresh_poll_timed_out"
+                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
+                    loop=loop,
+                    symbol=symbol,
+                    reason="refresh_poll_timed_out",
+                    request_id=request_id,
+                    status_msg=status_msg,
+                    load_cached_fn=lambda: self._load_consolidated(symbol),
                 )
-                await status_msg.edit(
-                    content=(
-                        f"❌ Analysis timed out while refreshing **{symbol}**. "
-                        "Please retry in ~1 minute."
-                    )
-                )
-                return
+                if consolidated is None:
+                    return
+                used_refresh_fallback = True
             except asyncio.TimeoutError:
-                logger.error(
-                    "ANALYZE_SLASH_ERROR "
-                    f"request_id={request_id or 'n/a'} "
-                    f"symbol={symbol} "
-                    "reason=refresh_timed_out"
+                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
+                    loop=loop,
+                    symbol=symbol,
+                    reason="refresh_timed_out",
+                    request_id=request_id,
+                    status_msg=status_msg,
+                    load_cached_fn=lambda: self._load_consolidated(symbol),
                 )
-                await status_msg.edit(
-                    content=(
-                        f"❌ Analysis timed out while refreshing **{symbol}**. "
-                        "Please retry in ~1 minute."
-                    )
-                )
-                return
+                if consolidated is None:
+                    return
+                used_refresh_fallback = True
             # 4c: TA freshness warning
             if os.getenv("AUTO_REFRESH_ON_ANALYZE", "").lower() == "true":
                 if not _check_ta_freshness(symbol):
@@ -1193,6 +1283,15 @@ class AnalysisCommands(commands.Cog):
             # Send result to the target channel (thread or main channel)
             # We use target_channel.send() instead of ctx.reply() to avoid 
             # "Cannot reply to a message in a different channel" errors when in a thread
+            if used_refresh_fallback:
+                age_text = (
+                    f"{refresh_fallback_age_min:.0f}m old"
+                    if refresh_fallback_age_min is not None
+                    else "age unknown"
+                )
+                await target_channel.send(
+                    f"⚠️ Analysis used cached snapshot for **{symbol}** ({age_text}) because live refresh was delayed."
+                )
             await target_channel.send(embed=embed, view=view)
 
             # Delete status only after successful delivery
