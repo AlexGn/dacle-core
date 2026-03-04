@@ -75,6 +75,7 @@ class PreTradeCheckRequestV2(BaseModel):
     take_profit: float
     size_usd: Optional[float] = None
     qty: Optional[float] = None
+    conviction: float = 8.0
     max_slippage_bps: int = 120
     allow_auto_scale_down: bool = True
     min_trade_size_usd: float = 100.0
@@ -97,6 +98,7 @@ class PreTradeCheckResponseV2(BaseModel):
     estimated_slippage_bps: int
     max_safe_size_usd: float
     recommended_size_usd: float
+    recommended_adaptive_size_usd: Optional[float] = None
     rr_ratio: float
     veto_reasons: List[VetoReasonCode] = []
     warnings: List[WarningCode] = []
@@ -115,6 +117,8 @@ class ApproveAndExecuteRequestV2(BaseModel):
     take_profit: float
     size_usd: Optional[float] = None
     qty: Optional[float] = None
+    conviction: float = 8.0
+    use_adaptive_sizing: bool = False
     max_slippage_bps: int = 120
     allow_auto_scale_down: bool = True
     min_trade_size_usd: float = 100.0
