@@ -141,6 +141,7 @@ class ApproveAndExecuteResponseV2(BaseModel):
     execution_id: str
     state: ExecutionState
     effective_size_usd: float
+    execution_policy: str = "LIMIT_ONLY"
     entry_order_id: Optional[str] = None
     protective_order_ids: Dict[str, str] = Field(default_factory=dict)
     protection_status: ProtectionStatus = ProtectionStatus.N_A

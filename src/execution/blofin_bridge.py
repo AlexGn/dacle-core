@@ -60,7 +60,9 @@ class BlofinExecutionBridge:
         tp_price: float,
         idempotency_key: str,
         dry_run: bool = True,
-        latency_meta: Optional[Dict[str, Any]] = None
+        latency_meta: Optional[Dict[str, Any]] = None,
+        time_in_force: str = "GTC",
+        execution_policy: str = "LIMIT_ONLY"
     ) -> Dict[str, Any]:
         """
         Submit a bracket order (Entry + SL + TP) to Blofin (Phase 2).
@@ -70,7 +72,7 @@ class BlofinExecutionBridge:
         side_norm = side.lower().strip()
         ccxt_side = "buy" if side_norm in {"long", "buy"} else "sell"
         
-        logger.info(f"Submitting BRACKET for {symbol}: Entry {price}, SL {sl_price}, TP {tp_price} [dry_run={dry_run}]")
+        logger.info(f"Submitting BRACKET for {symbol}: Entry {price}, SL {sl_price}, TP {tp_price} [dry_run={dry_run}, policy={execution_policy}, tif={time_in_force}]")
         
         if dry_run:
             t4_ack = time.monotonic_ns()
@@ -98,13 +100,12 @@ class BlofinExecutionBridge:
             return {"error": ExecutionErrorCode.ERR_INTERNAL_RETRY_EXHAUSTED, "reason": "Exchange not initialized"}
 
         try:
-            # Blofin supports stopLoss and takeProfit in the main order call for some instruments
-            # If not supported, we fall back to sequential placement
+            # Map Execution Policy to CCXT params
             params = {
                 'clientOrderId': idempotency_key,
                 'stopLoss': {
                     'triggerPrice': sl_price,
-                    'type': 'limit' # Or market based on config
+                    'type': 'limit'
                 },
                 'takeProfit': {
                     'triggerPrice': tp_price,
@@ -112,8 +113,15 @@ class BlofinExecutionBridge:
                 }
             }
             
-            # Note: CCXT Blofin might have specific parameter names for unified bracketing
-            # Fallback to standard Stop/Take Profit parameters
+            # Time-In-Force
+            if time_in_force:
+                params['timeInForce'] = time_in_force
+                
+            # Post-Only (Maker Only)
+            if execution_policy == "MAKER_ONLY":
+                params['postOnly'] = True
+
+            # Submit order
             order = self.exchange.create_order(
                 symbol=blofin_symbol,
                 type='limit',
