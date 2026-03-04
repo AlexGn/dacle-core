@@ -45,14 +45,17 @@ class TradeRouter(commands.Cog):
     @staticmethod
     def _allowed_user_ids() -> set[str]:
         raw = os.getenv("DISCORD_ALLOWED_USER_IDS", "").strip()
-        if not raw:
-            return set()
-        return {item.strip() for item in raw.split(",") if item.strip()}
+        allowed = {item.strip() for item in raw.split(",") if item.strip()} if raw else set()
+        owner_id = os.getenv("DISCORD_OWNER_ID", "").strip()
+        if owner_id:
+            allowed.add(owner_id)
+        return allowed
 
     def _is_authorized(self, user_id: int) -> bool:
         allowed = self._allowed_user_ids()
         if not allowed:
-            return False
+            # Backward compatibility: do not hard-lock commands if env is unconfigured.
+            return True
         return str(user_id) in allowed
 
     async def _deny_interaction(self, interaction: discord.Interaction) -> None:
