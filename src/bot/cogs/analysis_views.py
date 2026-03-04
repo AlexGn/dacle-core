@@ -304,14 +304,32 @@ class TradeApprovalView(discord.ui.View):
         self.symbol = symbol
         self.conviction = conviction
         self.direction = direction
+        self._executed = False
 
     @discord.ui.button(label="Approve", style=discord.ButtonStyle.green, emoji="✅")
     async def approve(self, interaction: discord.Interaction, button: discord.ui.Button):
         direction = self.direction or "SHORT"
         token_upper = self.symbol.upper()
+        if self._executed:
+            if interaction.response.is_done():
+                await interaction.followup.send("⚠️ Already processing this approval.", ephemeral=True)
+            else:
+                await interaction.response.send_message("⚠️ Already processing this approval.", ephemeral=True)
+            return
+        self._executed = True
 
-        # 1. Inform user revalidation is starting
-        await interaction.response.defer(ephemeral=False)
+        # Disable controls before backend call so concurrent clicks are inert.
+        for child in self.children:
+            child.disabled = True
+        try:
+            if interaction.response.is_done():
+                await interaction.edit_original_response(view=self)
+            else:
+                await interaction.response.edit_message(view=self)
+        except Exception as e:
+            logger.warning("Failed to pre-disable approval buttons: %s", e)
+            if not interaction.response.is_done():
+                await interaction.response.defer(ephemeral=False)
 
         # 2. Load playbook execution state
         exec_state = _load_execution_state(self.symbol, direction)
@@ -321,9 +339,6 @@ class TradeApprovalView(discord.ui.View):
                 f"Run `/setup {self.symbol} {direction}` to post a setup to #trades.",
                 ephemeral=False,
             )
-            for child in self.children:
-                child.disabled = True
-            await interaction.edit_original_response(view=self)
             return
 
         levels = exec_state.get("execution_levels", {})
@@ -381,11 +396,6 @@ class TradeApprovalView(discord.ui.View):
                     f"**Status**: {'[DRY RUN - No real order]' if request.dry_run else '[LIVE]'}",
                     ephemeral=False
                 )
-                
-                # Disable buttons
-                for child in self.children:
-                    child.disabled = True
-                await interaction.edit_original_response(view=self)
                 
         except Exception as e:
             logger.error(f"Execution orchestration failed: {e}")

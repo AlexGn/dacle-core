@@ -381,6 +381,26 @@ class AnalysisCommands(commands.Cog):
         self.bot = bot
         logger.info("AnalysisCommands cog initialized")
 
+    @staticmethod
+    def _allowed_user_ids() -> set[str]:
+        raw = os.getenv("DISCORD_ALLOWED_USER_IDS", "").strip()
+        if not raw:
+            return set()
+        return {item.strip() for item in raw.split(",") if item.strip()}
+
+    def _is_authorized(self, user_id: int) -> bool:
+        allowed = self._allowed_user_ids()
+        if not allowed:
+            return True
+        return str(user_id) in allowed
+
+    async def _deny_interaction(self, interaction: discord.Interaction) -> None:
+        msg = "⛔ Not authorized."
+        try:
+            await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            await interaction.followup.send(msg, ephemeral=True)
+
     @app_commands.command(name="audit", description="Trigger a multi-agent Deep Audit for a token")
     @app_commands.describe(symbol="Token symbol to audit (e.g. MONAD, AZTEC, ETH)")
     async def audit_slash(self, interaction: discord.Interaction, symbol: str):
@@ -388,6 +408,10 @@ class AnalysisCommands(commands.Cog):
         Natively execute a multi-agent Deep Audit by calling internal APIs 
         and synthesizing the result directly in Python.
         """
+        if not self._is_authorized(interaction.user.id):
+            await self._deny_interaction(interaction)
+            return
+
         sym = symbol.strip().lstrip("$").upper()
         audit_channel_id = 1474325144913838232  # #audit-token
         
@@ -867,6 +891,10 @@ class AnalysisCommands(commands.Cog):
         Analyze a token and generate a playbook.
         Usage: @Dacle Bot analyze <SYMBOL>
         """
+        if not self._is_authorized(ctx.author.id):
+            await ctx.reply("⛔ Not authorized.", mention_author=False)
+            return
+
         # Check if we are in a text channel (not a thread/DM)
         if isinstance(ctx.channel, discord.TextChannel):
             try:
@@ -914,6 +942,10 @@ class AnalysisCommands(commands.Cog):
         Slash command version of analyze.
         Usage: /analyze <SYMBOL>
         """
+        if not self._is_authorized(interaction.user.id):
+            await self._deny_interaction(interaction)
+            return
+
         symbol = symbol.upper()
         request_id = f"analyze-{interaction.id}"
         invoke_channel = interaction.channel
@@ -1010,6 +1042,10 @@ class AnalysisCommands(commands.Cog):
     @app_commands.describe(symbols="Comma-separated token symbols (e.g., ZRO, ALCH, DRIFT)")
     async def analyze_batch_slash(self, interaction: discord.Interaction, symbols: str):
         """Slash command to analyze multiple tokens at once."""
+        if not self._is_authorized(interaction.user.id):
+            await self._deny_interaction(interaction)
+            return
+
         parsed = parse_batch_symbols(symbols)
         if not parsed:
             await interaction.response.send_message(

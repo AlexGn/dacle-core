@@ -42,6 +42,25 @@ class TradeRouter(commands.Cog):
         self.api_key = os.getenv("DACLE_API_KEY", "").strip()
         logger.info("TradeRouter cog initialized")
 
+    @staticmethod
+    def _allowed_user_ids() -> set[str]:
+        raw = os.getenv("DISCORD_ALLOWED_USER_IDS", "").strip()
+        if not raw:
+            return set()
+        return {item.strip() for item in raw.split(",") if item.strip()}
+
+    def _is_authorized(self, user_id: int) -> bool:
+        allowed = self._allowed_user_ids()
+        if not allowed:
+            return True
+        return str(user_id) in allowed
+
+    async def _deny_interaction(self, interaction: discord.Interaction) -> None:
+        try:
+            await interaction.response.send_message("⛔ Not authorized.", ephemeral=True)
+        except Exception:
+            await interaction.followup.send("⛔ Not authorized.", ephemeral=True)
+
     def _build_api_headers(self) -> Dict[str, str]:
         headers: Dict[str, str] = {}
         if self.api_key:
@@ -137,6 +156,9 @@ class TradeRouter(commands.Cog):
 
     @app_commands.command(name="rerun", description="Re-run trade analysis with current market data")
     async def rerun(self, interaction: discord.Interaction):
+        if not self._is_authorized(interaction.user.id):
+            await self._deny_interaction(interaction)
+            return
         await interaction.response.defer(ephemeral=False)
 
         channel = interaction.channel
@@ -245,6 +267,9 @@ class TradeRouter(commands.Cog):
     ])
     async def setup_command(self, interaction: discord.Interaction, token: str, direction: str):
         """Post a trade setup from playbook directly to #trades and run pre-trade-check."""
+        if not self._is_authorized(interaction.user.id):
+            await self._deny_interaction(interaction)
+            return
         await interaction.response.defer(ephemeral=False)
 
         token = token.upper()
@@ -433,6 +458,9 @@ class TradeRouter(commands.Cog):
         tp: Optional[float] = None,
     ):
         """Set David's manual levels, validate confluences, and run pre-trade check."""
+        if not self._is_authorized(interaction.user.id):
+            await self._deny_interaction(interaction)
+            return
         await interaction.response.defer(ephemeral=False)
 
         token_upper = token.upper()
