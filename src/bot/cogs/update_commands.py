@@ -159,6 +159,46 @@ class UpdateCommands(commands.Cog):
 
         return payload
 
+    @staticmethod
+    def _resolve_request_status(payload: Dict[str, Any]) -> str:
+        """Resolve request status from explicit fields or legacy run-only payloads."""
+        explicit = payload.get("request_status")
+        if isinstance(explicit, str) and explicit.strip():
+            return explicit.strip().lower()
+
+        status = payload.get("status")
+        if isinstance(status, str):
+            lowered = status.strip().lower()
+            if lowered in {"started", "already_running", "cooldown", "blocked"}:
+                return lowered
+
+        run = payload.get("run") if isinstance(payload.get("run"), dict) else {}
+        run_status = str(run.get("request_status") or run.get("status") or "").strip().lower()
+        if run_status in {"started", "already_running", "cooldown", "blocked"}:
+            return run_status
+        if run_status == "running":
+            return "already_running"
+
+        remaining_raw = payload.get("remaining_seconds")
+        if remaining_raw is None:
+            remaining_raw = run.get("remaining_cooldown_seconds")
+        try:
+            if int(remaining_raw or 0) > 0:
+                return "cooldown"
+        except (TypeError, ValueError):
+            pass
+
+        cooldown_until = _parse_iso(payload.get("cooldown_until") or run.get("cooldown_until"))
+        if cooldown_until and cooldown_until > datetime.now(timezone.utc):
+            return "cooldown"
+
+        reason = payload.get("reason")
+        if isinstance(reason, str) and reason.strip():
+            if "block" in reason.lower():
+                return "blocked"
+
+        return ""
+
     async def _api_post(self, path: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         url = f"{self.api_url}{path}"
         for attempt in range(1, self.api_post_attempts + 1):
@@ -530,7 +570,7 @@ class UpdateCommands(commands.Cog):
             await self._handle_start_failure(interaction)
             return
 
-        request_status = str(result.get("request_status", "")).lower()
+        request_status = self._resolve_request_status(result)
         run = result.get("run") if isinstance(result.get("run"), dict) else {}
 
         if request_status == "started":
