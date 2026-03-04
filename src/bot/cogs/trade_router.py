@@ -52,7 +52,7 @@ class TradeRouter(commands.Cog):
     def _is_authorized(self, user_id: int) -> bool:
         allowed = self._allowed_user_ids()
         if not allowed:
-            return True
+            return False
         return str(user_id) in allowed
 
     async def _deny_interaction(self, interaction: discord.Interaction) -> None:

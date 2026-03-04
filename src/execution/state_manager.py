@@ -3,6 +3,7 @@ import logging
 import os
 import hashlib
 import hmac
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -53,6 +54,18 @@ class ExecutionStateManager:
             
         self._intents_lock = Lock()
         self._events_lock = Lock()
+        self._async_intents_lock: Optional[asyncio.Lock] = None
+        self._async_events_lock: Optional[asyncio.Lock] = None
+
+    def _get_async_intents_lock(self) -> asyncio.Lock:
+        if self._async_intents_lock is None:
+            self._async_intents_lock = asyncio.Lock()
+        return self._async_intents_lock
+
+    def _get_async_events_lock(self) -> asyncio.Lock:
+        if self._async_events_lock is None:
+            self._async_events_lock = asyncio.Lock()
+        return self._async_events_lock
 
     def _load_intents(self) -> Dict[str, Dict[str, Any]]:
         with open(INTENTS_FILE, "r") as f:
@@ -62,6 +75,8 @@ class ExecutionStateManager:
     def _save_intents(self, intents: Dict[str, Dict[str, Any]]) -> None:
         with open(INTENTS_FILE, "w") as f:
             json.dump(intents, f, indent=4)
+
+    # --- Sync Interface ---
 
     def get_intent(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
         """Retrieve execution intent by idempotency key."""
@@ -76,67 +91,7 @@ class ExecutionStateManager:
     def create_intent(self, idempotency_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Create a new execution intent if it doesn't exist."""
         with self._intents_lock:
-            try:
-                intents = self._load_intents()
-                
-                if idempotency_key in intents:
-                    # Check for conflict
-                    existing = intents[idempotency_key]
-                    existing_symbol = existing.get("symbol")
-                    existing_side = existing.get("side")
-                    incoming_symbol = payload.get("symbol")
-                    incoming_side = payload.get("side")
-                    if (
-                        existing_symbol
-                        and existing_side
-                        and (existing_symbol != incoming_symbol or existing_side != incoming_side)
-                    ):
-                        self._log_event(
-                            idempotency_key,
-                            "IDEMPOTENCY_CONFLICT",
-                            {
-                                "existing_symbol": existing_symbol,
-                                "existing_side": existing_side,
-                                "incoming_symbol": incoming_symbol,
-                                "incoming_side": incoming_side,
-                            },
-                        )
-                        raise ValueError("VETO_IDEMPOTENCY_CONFLICT: payload mismatch for key")
-
-                    # Pre-check snapshot stubs can exist before full approval payload.
-                    changed = False
-                    for key, value in payload.items():
-                        if key not in existing or existing.get(key) is None:
-                            existing[key] = value
-                            changed = True
-                    if changed:
-                        existing["updated_at"] = datetime.now(timezone.utc).isoformat()
-                        intents[idempotency_key] = existing
-                        self._save_intents(intents)
-
-                    self._log_event(
-                        idempotency_key,
-                        "IDEMPOTENCY_REPLAY",
-                        {"idempotency_hit": True, "replay_state": existing.get("state")},
-                    )
-                    return existing
-                
-                # New intent
-                intent = {
-                    "idempotency_key": idempotency_key,
-                    "state": ExecutionState.DISCOVERED,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    **payload
-                }
-                intents[idempotency_key] = intent
-                
-                self._save_intents(intents)
-                    
-                self._log_event(idempotency_key, ExecutionState.DISCOVERED)
-                return intent
-            except Exception as e:
-                logger.error(f"Failed to create intent: {e}")
-                raise
+            return self._create_intent_logic(idempotency_key, payload)
 
     def transition_to(self, idempotency_key: str, next_state: ExecutionState, metadata: Dict[str, Any] = None) -> bool:
         """
@@ -144,81 +99,7 @@ class ExecutionStateManager:
         Enforces the State Transition Table.
         """
         with self._intents_lock:
-            try:
-                intents = self._load_intents()
-                
-                if idempotency_key not in intents:
-                    return False
-                    
-                intent = intents[idempotency_key]
-                current_state = ExecutionState(intent["state"])
-                
-                if not self._is_valid_transition(current_state, next_state):
-                    logger.warning(f"Invalid transition: {current_state} -> {next_state}")
-                    self._log_event(
-                        idempotency_key,
-                        "TRANSITION_REJECTED",
-                        {
-                            "from_state": current_state,
-                            "to_state": next_state,
-                            "transition_rejected": True,
-                        },
-                    )
-                    return False
-                
-                # Update intent
-                intent["state"] = next_state
-                intent["updated_at"] = datetime.now(timezone.utc).isoformat()
-                if metadata:
-                    intent.update(metadata)
-                    
-                intents[idempotency_key] = intent
-                self._save_intents(intents)
-                
-                self._log_event(idempotency_key, next_state, metadata)
-                return True
-            except Exception as e:
-                logger.error(f"Transition failed: {e}")
-                return False
-
-    def list_active_intents(self) -> List[Dict[str, Any]]:
-        """List all intents in an active execution state."""
-        with self._intents_lock:
-            try:
-                intents = self._load_intents()
-                
-                active_states = [
-                    ExecutionState.SUBMITTED,
-                    ExecutionState.PARTIALLY_FILLED,
-                ]
-                
-                return [i for i in intents.values() if i["state"] in active_states]
-            except Exception as e:
-                logger.error(f"Failed to list active intents: {e}")
-                return []
-
-    def update_intent_metadata(self, idempotency_key: str, metadata: Dict[str, Any]) -> bool:
-        """Update non-state metadata for an intent without forcing a state transition."""
-        if not metadata:
-            return True
-        with self._intents_lock:
-            try:
-                intents = self._load_intents()
-                if idempotency_key not in intents:
-                    return False
-
-                intent = intents[idempotency_key]
-                intent.update(metadata)
-                intent["updated_at"] = datetime.now(timezone.utc).isoformat()
-                intents[idempotency_key] = intent
-
-                self._save_intents(intents)
-
-                self._log_event(idempotency_key, ExecutionState(intent["state"]), {"metadata_update": metadata})
-                return True
-            except Exception as e:
-                logger.error(f"Metadata update failed: {e}")
-                return False
+            return self._transition_to_logic(idempotency_key, next_state, metadata)
 
     def store_pretrade_snapshot(
         self,
@@ -231,37 +112,184 @@ class ExecutionStateManager:
     ) -> None:
         """Upsert pre-trade snapshot by idempotency key."""
         with self._intents_lock:
-            try:
-                intents = self._load_intents()
-                existing = intents.get(idempotency_key) or {
-                    "idempotency_key": idempotency_key,
-                    "state": ExecutionState.DISCOVERED,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                if symbol and not existing.get("symbol"):
-                    existing["symbol"] = symbol
-                if side and not existing.get("side"):
-                    existing["side"] = side
-                if setup_id and not existing.get("setup_id"):
-                    existing["setup_id"] = setup_id
-                existing["pretrade_snapshot"] = snapshot
-                existing["updated_at"] = datetime.now(timezone.utc).isoformat()
-                intents[idempotency_key] = existing
-                self._save_intents(intents)
-            except Exception as e:
-                logger.error("Failed to store pre-trade snapshot: %s", e)
+            self._store_pretrade_snapshot_logic(idempotency_key, snapshot, symbol=symbol, side=side, setup_id=setup_id)
 
     def get_pretrade_snapshot(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
         """Return stored pre-trade snapshot for an idempotency key."""
         with self._intents_lock:
-            try:
-                intents = self._load_intents()
-                intent = intents.get(idempotency_key) or {}
-                snapshot = intent.get("pretrade_snapshot")
-                return snapshot if isinstance(snapshot, dict) else None
-            except Exception as e:
-                logger.error("Failed to read pre-trade snapshot: %s", e)
-                return None
+            return self._get_pretrade_snapshot_logic(idempotency_key)
+
+    # --- Async Interface (Avoids to_thread overhead) ---
+
+    async def get_intent_async(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+        async with self._get_async_intents_lock():
+            # I/O still happens in this thread, but lock is async-safe
+            return self.get_intent(idempotency_key)
+
+    async def create_intent_async(self, idempotency_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        async with self._get_async_intents_lock():
+            return self._create_intent_logic(idempotency_key, payload)
+
+    async def transition_to_async(self, idempotency_key: str, next_state: ExecutionState, metadata: Dict[str, Any] = None) -> bool:
+        async with self._get_async_intents_lock():
+            return self._transition_to_logic(idempotency_key, next_state, metadata)
+
+    async def store_pretrade_snapshot_async(
+        self,
+        idempotency_key: str,
+        snapshot: Dict[str, Any],
+        *,
+        symbol: Optional[str] = None,
+        side: Optional[str] = None,
+        setup_id: Optional[str] = None,
+    ) -> None:
+        async with self._get_async_intents_lock():
+            self._store_pretrade_snapshot_logic(idempotency_key, snapshot, symbol=symbol, side=side, setup_id=setup_id)
+
+    async def get_pretrade_snapshot_async(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+        async with self._get_async_intents_lock():
+            return self._get_pretrade_snapshot_logic(idempotency_key)
+
+    # --- Private Logic (No Locking) ---
+
+    def _create_intent_logic(self, idempotency_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            intents = self._load_intents()
+            
+            if idempotency_key in intents:
+                # Check for conflict
+                existing = intents[idempotency_key]
+                existing_symbol = existing.get("symbol")
+                existing_side = existing.get("side")
+                incoming_symbol = payload.get("symbol")
+                incoming_side = payload.get("side")
+                if (
+                    existing_symbol
+                    and existing_side
+                    and (existing_symbol != incoming_symbol or existing_side != incoming_side)
+                ):
+                    self._log_event(
+                        idempotency_key,
+                        "IDEMPOTENCY_CONFLICT",
+                        {
+                            "existing_symbol": existing_symbol,
+                            "existing_side": existing_side,
+                            "incoming_symbol": incoming_symbol,
+                            "incoming_side": incoming_side,
+                        },
+                    )
+                    raise ValueError("VETO_IDEMPOTENCY_CONFLICT: payload mismatch for key")
+
+                # Pre-check snapshot stubs can exist before full approval payload.
+                changed = False
+                for key, value in payload.items():
+                    if key not in existing or existing.get(key) is None:
+                        existing[key] = value
+                        changed = True
+                if changed:
+                    existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+                    intents[idempotency_key] = existing
+                    self._save_intents(intents)
+
+                self._log_event(
+                    idempotency_key,
+                    "IDEMPOTENCY_REPLAY",
+                    {"idempotency_hit": True, "replay_state": existing.get("state")},
+                )
+                return existing
+            
+            # New intent
+            intent = {
+                "idempotency_key": idempotency_key,
+                "state": ExecutionState.DISCOVERED,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                **payload
+            }
+            intents[idempotency_key] = intent
+            
+            self._save_intents(intents)
+                
+            self._log_event(idempotency_key, ExecutionState.DISCOVERED)
+            return intent
+        except Exception as e:
+            logger.error(f"Failed to create intent: {e}")
+            raise
+
+    def _transition_to_logic(self, idempotency_key: str, next_state: ExecutionState, metadata: Dict[str, Any] = None) -> bool:
+        try:
+            intents = self._load_intents()
+            
+            if idempotency_key not in intents:
+                return False
+                
+            intent = intents[idempotency_key]
+            current_state = ExecutionState(intent["state"])
+            
+            if not self._is_valid_transition(current_state, next_state):
+                logger.warning(f"Invalid transition: {current_state} -> {next_state}")
+                self._log_event(
+                    idempotency_key,
+                    "TRANSITION_REJECTED",
+                    {
+                        "from_state": current_state,
+                        "to_state": next_state,
+                        "transition_rejected": True,
+                    },
+                )
+                return False
+            
+            # Update intent
+            intent["state"] = next_state
+            intent["updated_at"] = datetime.now(timezone.utc).isoformat()
+            if metadata:
+                intent.update(metadata)
+                
+            intents[idempotency_key] = intent
+            self._save_intents(intents)
+            
+            self._log_event(idempotency_key, next_state, metadata)
+            return True
+        except Exception as e:
+            logger.error(f"Transition failed: {e}")
+            return False
+
+    def _store_pretrade_snapshot_logic(
+        self,
+        idempotency_key: str,
+        snapshot: Dict[str, Any],
+        symbol: Optional[str] = None,
+        side: Optional[str] = None,
+        setup_id: Optional[str] = None,
+    ) -> None:
+        try:
+            intents = self._load_intents()
+            existing = intents.get(idempotency_key) or {
+                "idempotency_key": idempotency_key,
+                "state": ExecutionState.DISCOVERED,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if symbol and not existing.get("symbol"):
+                existing["symbol"] = symbol
+            if side and not existing.get("side"):
+                existing["side"] = side
+            if setup_id and not existing.get("setup_id"):
+                existing["setup_id"] = setup_id
+            existing["pretrade_snapshot"] = snapshot
+            existing["updated_at"] = datetime.now(timezone.utc).isoformat()
+            intents[idempotency_key] = existing
+            self._save_intents(intents)
+        except Exception as e:
+            logger.error("Failed to store pre-trade snapshot: %s", e)
+
+    def _get_pretrade_snapshot_logic(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+        try:
+            intents = self._load_intents()
+            intent = intents.get(idempotency_key) or {}
+            snapshot = intent.get("pretrade_snapshot")
+            return snapshot if isinstance(snapshot, dict) else None
+        except Exception as e:
+            logger.error("Failed to read pre-trade snapshot: %s", e)
+            return None
 
     def _is_valid_transition(self, from_state: ExecutionState, to_state: ExecutionState) -> bool:
         """

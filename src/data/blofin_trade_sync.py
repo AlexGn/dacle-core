@@ -214,21 +214,34 @@ class BlofinTradeSync:
 
         try:
             since_ts = int(since.timestamp() * 1000) if since else None
+            all_trades = []
 
-            params = {}
-            if symbol:
-                params['symbol'] = symbol
+            while True:
+                params = {}
+                if symbol:
+                    params['symbol'] = symbol
 
-            # Fetch my trades (actual filled orders)
-            trades = self.exchange.fetch_my_trades(
-                symbol=symbol,
-                since=since_ts,
-                limit=500,  # Max per request
-                params=params
-            )
+                # Fetch my trades (actual filled orders)
+                trades = self.exchange.fetch_my_trades(
+                    symbol=symbol,
+                    since=since_ts,
+                    limit=500,  # Max per request
+                    params=params
+                )
 
-            logger.info(f"Fetched {len(trades)} trades from Blofin")
-            return trades
+                if not trades:
+                    break
+
+                all_trades.extend(trades)
+                logger.info(f"Fetched {len(trades)} trades (page), total {len(all_trades)}")
+
+                if len(trades) < 500:
+                    break
+
+                # Update since_ts to last trade timestamp + 1ms to fetch next page
+                since_ts = trades[-1]['timestamp'] + 1
+
+            return all_trades
 
         except Exception as e:
             logger.error(f"Failed to fetch Blofin trades: {e}")

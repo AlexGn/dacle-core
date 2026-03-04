@@ -69,9 +69,9 @@ class BlofinExecutionBridge:
         
         if dry_run:
             return {
-                "entry_order_id": f"dry_entry_{idempotency_key[:8]}",
-                "sl_order_id": f"dry_sl_{idempotency_key[:8]}",
-                "tp_order_id": f"dry_tp_{idempotency_key[:8]}",
+                "entry_order_id": f"DRY_RUN_ENTRY_{idempotency_key[:8]}",
+                "sl_order_id": f"DRY_RUN_SL_{idempotency_key[:8]}",
+                "tp_order_id": f"DRY_RUN_TP_{idempotency_key[:8]}",
                 "state": ExecutionState.SUBMITTED,
                 "status": "open",
                 "protection_status": "ARMED",
