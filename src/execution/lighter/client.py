@@ -1227,11 +1227,68 @@ class LighterRealClient:
                     
                     if resp.status in (401, 403):
                         await self._handle_auth_failure(resp.status, url)
+                    if resp.status == 403:
+                        fallback_nonce = await self._fallback_nonce_from_account_metadata(
+                            session=session,
+                            account_index=int(account_index),
+                        )
+                        if fallback_nonce is not None:
+                            logger.warning(
+                                "Nonce endpoint forbidden (403); using accountsByL1Address fallback nonce=%s",
+                                fallback_nonce,
+                            )
+                            return {
+                                "status": "success",
+                                "nonce": int(fallback_nonce),
+                                "source": "accountsByL1Address_fallback",
+                            }
                     err_text = await resp.text()
                     return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
         except Exception as e:
             logger.error(f"Nonce fetch error: {e}")
             return {"status": "error", "error": str(e)}
+
+    async def _fallback_nonce_from_account_metadata(
+        self,
+        session: aiohttp.ClientSession,
+        account_index: int,
+    ) -> Optional[int]:
+        """Best-effort nonce fallback from account metadata when nonce endpoint is blocked.
+
+        Some upstream environments return 403 on /account/{index}/nonce while
+        still allowing accountsByL1Address and authenticated trading routes.
+        """
+        if not self.signer or not getattr(self.signer, "address", None):
+            return None
+
+        url = f"{self.api_url}/accountsByL1Address"
+        status, payload, _ = await self._get_json(
+            session,
+            url,
+            params={"l1_address": self.signer.address},
+        )
+        if status != 200 or not isinstance(payload, dict):
+            return None
+
+        sub_accounts = payload.get("sub_accounts")
+        if not isinstance(sub_accounts, list):
+            return None
+
+        chosen = None
+        for account in sub_accounts:
+            if not isinstance(account, dict):
+                continue
+            if self._to_int(account.get("index")) == int(account_index):
+                chosen = account
+                break
+        if not isinstance(chosen, dict):
+            return None
+
+        for key in ("nonce", "next_nonce", "order_nonce", "total_order_count"):
+            value = self._to_int(chosen.get(key))
+            if value is not None and value >= 0:
+                return int(value)
+        return None
 
     async def preflight_live_readiness(self) -> Dict[str, Any]:
         """Validate auth token and infer whether account permissions allow trading."""
