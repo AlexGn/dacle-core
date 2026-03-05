@@ -10,6 +10,7 @@ import time
 import asyncio
 from decimal import Decimal, ROUND_DOWN, InvalidOperation
 from typing import Any, Dict, Optional, List
+from src.monitoring.heartbeat_discord import post_to_discord
 
 try:
     from py_clob_client.client import ClobClient
@@ -91,6 +92,92 @@ class PolymarketClientWrapper:
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
+
+    def _discord_entry_alerts_enabled(self) -> bool:
+        if self.mode != "LIVE":
+            return False
+        raw = str(os.getenv("POLY_DISCORD_ENTRY_ALERTS", "true")).strip().lower()
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        return bool(str(os.getenv("DISCORD_BOT_TOKEN", "")).strip())
+
+    def _format_entry_alert(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        qty: float,
+        price: float,
+        order_type: str,
+        order_id: str,
+        mode: str,
+        strategy: str,
+    ) -> str:
+        return (
+            f"[Polymarket Entry] mode={mode} strategy={strategy} side={side} qty={qty:.4f} "
+            f"price={price:.4f} type={order_type} token={token_id} order_id={order_id}"
+        )
+
+    async def _post_entry_alert(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        qty: float,
+        price: float,
+        order_type: str,
+        order_id: str,
+        mode: str,
+        strategy: str,
+    ) -> None:
+        message = self._format_entry_alert(
+            token_id=token_id,
+            side=side,
+            qty=qty,
+            price=price,
+            order_type=order_type,
+            order_id=order_id,
+            mode=mode,
+            strategy=strategy,
+        )
+        posted = await post_to_discord("polymarket", message)
+        if not posted:
+            logger.debug("Polymarket entry Discord alert was not posted")
+
+    @staticmethod
+    def _on_background_task_done(task: asyncio.Task) -> None:
+        try:
+            task.result()
+        except Exception as exc:
+            logger.debug(f"Background alert task failed: {exc}")
+
+    def _fire_and_forget_entry_alert(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        qty: float,
+        price: float,
+        order_type: str,
+        order_id: str,
+        mode: str,
+        strategy: str,
+    ) -> None:
+        if not self._discord_entry_alerts_enabled():
+            return
+        task = asyncio.create_task(
+            self._post_entry_alert(
+                token_id=token_id,
+                side=side,
+                qty=qty,
+                price=price,
+                order_type=order_type,
+                order_id=order_id,
+                mode=mode,
+                strategy=strategy,
+            )
+        )
+        task.add_done_callback(self._on_background_task_done)
 
     def get_p95_latency_ms(self) -> float:
         if not self._order_latencies:
@@ -206,7 +293,9 @@ class PolymarketClientWrapper:
         side: str,
         order_type: str = "GTD",
         expiration_sec: Optional[int] = None,
-        client_order_id: Optional[str] = None
+        client_order_id: Optional[str] = None,
+        strategy: Optional[str] = None,
+        entry_alert: bool = True,
     ) -> Dict[str, Any]:
         """
         Create and post an order to Polymarket.
@@ -245,7 +334,7 @@ class PolymarketClientWrapper:
         # 4. Shadow Mode Bypass
         if self._is_shadow_mode():
             logger.info(f"[SHADOW] Post Order: {side_val} {qty_norm} @ {norm_price} (token={token_id}, type={order_type})")
-            return {
+            result = {
                 "status": "success",
                 "shadow": True,
                 "order_id": f"shadow_{client_order_id}",
@@ -253,6 +342,18 @@ class PolymarketClientWrapper:
                 "filled_qty": 0.0,
                 "filled_price": 0.0
             }
+            if entry_alert:
+                self._fire_and_forget_entry_alert(
+                    token_id=token_id,
+                    side=side_val,
+                    qty=qty_norm,
+                    price=norm_price,
+                    order_type=order_type,
+                    order_id=str(result["order_id"]),
+                    mode="SHADOW",
+                    strategy=str(strategy or "unknown"),
+                )
+            return result
 
         # 4b. Paper Mode: place real order at $0.01 POST_ONLY+GTD, then cancel immediately
         if self.mode == "PAPER":
@@ -270,6 +371,17 @@ class PolymarketClientWrapper:
                     logger.info(f"[PAPER] Order placed: {paper_order_id}. Cancelling immediately...")
                     await asyncio.sleep(0.5)
                     await self.cancel_order(paper_order_id)
+                    if entry_alert:
+                        self._fire_and_forget_entry_alert(
+                            token_id=token_id,
+                            side=side_val,
+                            qty=qty_norm,
+                            price=norm_paper,
+                            order_type="GTD",
+                            order_id=str(paper_order_id),
+                            mode="PAPER",
+                            strategy=str(strategy or "unknown"),
+                        )
                     return {"status": "success", "paper": True, "order_id": paper_order_id, "client_order_id": client_order_id}
                 else:
                     return {"status": "error", "error": resp.get("errorMsg", "Paper order failed"), "error_code": "PAPER_REJECT"}
@@ -317,9 +429,21 @@ class PolymarketClientWrapper:
                     logger.warning(f"High relayer latency P95={p95_latency:.0f}ms, penalty={penalty_bps:.0f}bps")
 
             if resp and resp.get("success"):
+                order_id = resp.get("orderID")
+                if entry_alert:
+                    self._fire_and_forget_entry_alert(
+                        token_id=token_id,
+                        side=side_val,
+                        qty=qty_norm,
+                        price=norm_price,
+                        order_type=order_type,
+                        order_id=str(order_id),
+                        mode=self.mode,
+                        strategy=str(strategy or "unknown"),
+                    )
                 return {
                     "status": "success",
-                    "order_id": resp.get("orderID"),
+                    "order_id": order_id,
                     "client_order_id": client_order_id,
                     "raw": resp
                 }
