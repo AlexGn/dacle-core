@@ -95,10 +95,23 @@ class PolymarketCTFExecutor:
     CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
     USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     
+    # Stable public RPC fallbacks
+    RPC_FALLBACKS = [
+        "https://rpc.ankr.com/polygon",
+        "https://polygon.llamarpc.com",
+        "https://1rpc.io/polygon",
+        "https://polygon-rpc.com"
+    ]
+
     def __init__(self, config: dict):
         self.config = config
-        rpc_url = os.getenv("POLYGON_RPC_URL") or "https://polygon-rpc.com"
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+        primary_rpc = os.getenv("POLYGON_RPC_URL")
+        self.rpc_urls = [primary_rpc] if primary_rpc else []
+        self.rpc_urls.extend([url for url in self.RPC_FALLBACKS if url != primary_rpc])
+        
+        self.current_rpc_index = 0
+        self.w3 = Web3(Web3.HTTPProvider(self.rpc_urls[0]))
+        
         self.account = None
         self.address = None
         # Best-effort eager load for valid keys; invalid values are ignored until first use.
@@ -116,8 +129,37 @@ class PolymarketCTFExecutor:
         )
 
         self.mode = config.get("mode", "SHADOW").upper()
+        self._init_contracts()
+
+    def _init_contracts(self):
+        """Initialize contract objects with current w3 provider."""
         self.ctf_contract = self.w3.eth.contract(address=self.CTF_EXCHANGE, abi=CTF_EXCHANGE_ABI)
         self.usdc_contract = self.w3.eth.contract(address=self.USDC_E, abi=ERC20_ABI)
+
+    def _rotate_rpc(self):
+        """Rotate to the next available RPC provider on failure."""
+        self.current_rpc_index = (self.current_rpc_index + 1) % len(self.rpc_urls)
+        new_rpc = self.rpc_urls[self.current_rpc_index]
+        logger.warning(f"RPC failure detected. Rotating to fallback provider: {new_rpc}")
+        self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+        self._init_contracts()
+
+    async def _call_with_rpc_retry(self, func, *args, **kwargs):
+        """Execute a web3 call with automatic RPC rotation on failure."""
+        max_retries = len(self.rpc_urls)
+        for attempt in range(max_retries):
+            try:
+                if asyncio.iscoroutinefunction(func):
+                    return await func(*args, **kwargs)
+                else:
+                    return await asyncio.to_thread(func, *args, **kwargs)
+            except Exception as e:
+                if "401" in str(e) or "429" in str(e) or "Too Many Requests" in str(e) or "Unauthorized" in str(e):
+                    if attempt < max_retries - 1:
+                        self._rotate_rpc()
+                        continue
+                logger.error(f"CTF Executor RPC call failed after {attempt+1} attempts: {e}")
+                raise e
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
@@ -195,10 +237,11 @@ class PolymarketCTFExecutor:
         partition = [1, 2]
 
         try:
-            nonce = await asyncio.to_thread(self.w3.eth.get_transaction_count, self.address)
+            nonce = await self._call_with_rpc_retry(self.w3.eth.get_transaction_count, self.address)
+            gas_price = await self._call_with_rpc_retry(lambda: self.w3.eth.gas_price)
             
             # Prepare transaction
-            tx = await asyncio.to_thread(
+            tx = await self._call_with_rpc_retry(
                 self.ctf_contract.functions.splitPosition(
                     self.USDC_E,
                     parent_collection_id,
@@ -210,18 +253,18 @@ class PolymarketCTFExecutor:
                     'from': self.address,
                     'nonce': nonce,
                     'gas': 300000,
-                    'gasPrice': await asyncio.to_thread(self.w3.eth.gas_price)
+                    'gasPrice': gas_price
                 }
             )
 
             # Sign and send
             signed_tx = self.account.sign_transaction(tx)
-            tx_hash = await asyncio.to_thread(self.w3.eth.send_raw_transaction, signed_tx.rawTransaction)
+            tx_hash = await self._call_with_rpc_retry(self.w3.eth.send_raw_transaction, signed_tx.rawTransaction)
             
             logger.info(f"splitPosition sent: {tx_hash.hex()}")
             
             # Wait for receipt
-            receipt = await asyncio.to_thread(self.w3.eth.wait_for_transaction_receipt, tx_hash, timeout=60)
+            receipt = await self._call_with_rpc_retry(self.w3.eth.wait_for_transaction_receipt, tx_hash, timeout=60)
 
             if int(self._receipt_value(receipt, "status", 0) or 0) == 1:
                 return {"status": "success", "tx_hash": tx_hash.hex(), "receipt": receipt}
@@ -253,9 +296,10 @@ class PolymarketCTFExecutor:
         partition = [1, 2]
 
         try:
-            nonce = await asyncio.to_thread(self.w3.eth.get_transaction_count, self.address)
+            nonce = await self._call_with_rpc_retry(self.w3.eth.get_transaction_count, self.address)
+            gas_price = await self._call_with_rpc_retry(lambda: self.w3.eth.gas_price)
             
-            tx = await asyncio.to_thread(
+            tx = await self._call_with_rpc_retry(
                 self.ctf_contract.functions.mergePositions(
                     self.USDC_E,
                     parent_collection_id,
@@ -267,16 +311,16 @@ class PolymarketCTFExecutor:
                     'from': self.address,
                     'nonce': nonce,
                     'gas': 300000,
-                    'gasPrice': await asyncio.to_thread(self.w3.eth.gas_price)
+                    'gasPrice': gas_price
                 }
             )
 
             signed_tx = self.account.sign_transaction(tx)
-            tx_hash = await asyncio.to_thread(self.w3.eth.send_raw_transaction, signed_tx.rawTransaction)
+            tx_hash = await self._call_with_rpc_retry(self.w3.eth.send_raw_transaction, signed_tx.rawTransaction)
             
             logger.info(f"mergePositions sent: {tx_hash.hex()}")
             
-            receipt = await asyncio.to_thread(self.w3.eth.wait_for_transaction_receipt, tx_hash, timeout=60)
+            receipt = await self._call_with_rpc_retry(self.w3.eth.wait_for_transaction_receipt, tx_hash, timeout=60)
 
             tx_hash_hex = tx_hash.hex()
             if int(self._receipt_value(receipt, "status", 0) or 0) == 1:
@@ -296,7 +340,7 @@ class PolymarketCTFExecutor:
         parent_collection_id: str = "0x" + "0" * 64
     ) -> int:
         """Calculate the ERC1155 token ID for a specific conditional outcome."""
-        return await asyncio.to_thread(
+        return await self._call_with_rpc_retry(
             self.ctf_contract.functions.getPositionId(
                 self.USDC_E,
                 parent_collection_id,
@@ -317,7 +361,7 @@ class PolymarketCTFExecutor:
             
         try:
             pos_id = await self.get_position_id(condition_id, index_set, parent_collection_id)
-            raw_bal = await asyncio.to_thread(
+            raw_bal = await self._call_with_rpc_retry(
                 self.ctf_contract.functions.balanceOf(
                     self.address,
                     pos_id
