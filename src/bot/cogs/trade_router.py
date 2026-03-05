@@ -120,7 +120,43 @@ class TradeRouter(commands.Cog):
             return True
         return str(user_id) in allowed_for_account
 
+    @staticmethod
+    def _is_server_admin_or_owner(interaction: discord.Interaction) -> bool:
+        guild = getattr(interaction, "guild", None)
+        user = getattr(interaction, "user", None)
+        if guild is None or user is None:
+            return False
+        if getattr(guild, "owner_id", None) == getattr(user, "id", None):
+            return True
+        perms = getattr(user, "guild_permissions", None)
+        return bool(getattr(perms, "administrator", False))
+
+    def _is_authorized_interaction(
+        self,
+        interaction: discord.Interaction,
+        *,
+        account_id: Optional[str] = None,
+    ) -> bool:
+        if self._is_authorized(interaction.user.id, account_id=account_id):
+            return True
+        if self._is_server_admin_or_owner(interaction):
+            logger.warning(
+                "TradeRouter auth fallback granted for guild admin/owner user_id=%s guild_id=%s command_channel_id=%s",
+                getattr(getattr(interaction, "user", None), "id", None),
+                getattr(getattr(interaction, "guild", None), "id", None),
+                getattr(interaction, "channel_id", None),
+            )
+            return True
+        return False
+
     async def _deny_interaction(self, interaction: discord.Interaction) -> None:
+        logger.warning(
+            "TradeRouter unauthorized user_id=%s guild_id=%s channel_id=%s allowed_user_ids=%s",
+            getattr(getattr(interaction, "user", None), "id", None),
+            getattr(getattr(interaction, "guild", None), "id", None),
+            getattr(interaction, "channel_id", None),
+            ",".join(sorted(self._allowed_user_ids())) or "(unset)",
+        )
         try:
             await interaction.response.send_message("⛔ Not authorized.", ephemeral=True)
         except Exception:
@@ -304,7 +340,7 @@ class TradeRouter(commands.Cog):
     @app_commands.command(name="rerun", description="Re-run trade analysis with current market data")
     async def rerun(self, interaction: discord.Interaction):
         account_id = self._resolve_account_id()
-        if not self._is_authorized(interaction.user.id, account_id=account_id):
+        if not self._is_authorized_interaction(interaction, account_id=account_id):
             await self._deny_interaction(interaction)
             return
         deferred = await self._safe_defer(interaction, ephemeral=False, command_name="rerun")
@@ -426,7 +462,7 @@ class TradeRouter(commands.Cog):
     async def setup_command(self, interaction: discord.Interaction, token: str, direction: str):
         """Post a trade setup from playbook directly to #trades and run pre-trade-check."""
         account_id = self._resolve_account_id()
-        if not self._is_authorized(interaction.user.id, account_id=account_id):
+        if not self._is_authorized_interaction(interaction, account_id=account_id):
             await self._deny_interaction(interaction)
             return
         deferred = await self._safe_defer(interaction, ephemeral=False, command_name="setup")
@@ -634,7 +670,7 @@ class TradeRouter(commands.Cog):
     ):
         """Set David's manual levels, validate confluences, and run pre-trade check."""
         account_id = self._resolve_account_id()
-        if not self._is_authorized(interaction.user.id, account_id=account_id):
+        if not self._is_authorized_interaction(interaction, account_id=account_id):
             await self._deny_interaction(interaction)
             return
         deferred = await self._safe_defer(interaction, ephemeral=False, command_name="levels")

@@ -129,6 +129,12 @@ class UpdateCommands(commands.Cog):
     def _is_authorized(self, interaction: discord.Interaction) -> bool:
         if self._is_owner(interaction.user.id):
             return True
+        guild = getattr(interaction, "guild", None)
+        if guild is not None and getattr(guild, "owner_id", None) == interaction.user.id:
+            return True
+        perms = getattr(interaction.user, "guild_permissions", None)
+        if bool(getattr(perms, "administrator", False)):
+            return True
         return self._is_discovery_context(interaction)
 
     def _headers(self) -> Dict[str, str]:
