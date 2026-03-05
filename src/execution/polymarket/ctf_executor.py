@@ -95,19 +95,29 @@ class PolymarketCTFExecutor:
     CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
     USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
     
-    # Stable public RPC fallbacks
+    # Stable public RPC fallbacks (unauthenticated endpoints).
     RPC_FALLBACKS = [
-        "https://rpc.ankr.com/polygon",
         "https://polygon.llamarpc.com",
         "https://1rpc.io/polygon",
-        "https://polygon-rpc.com"
+        "https://polygon-bor-rpc.publicnode.com",
+        "https://polygon-mainnet.public.blastapi.io",
     ]
 
     def __init__(self, config: dict):
         self.config = config
         primary_rpc = os.getenv("POLYGON_RPC_URL")
+        fallback_env = os.getenv("POLYGON_RPC_FALLBACKS", "")
+        if fallback_env.strip():
+            fallback_urls = [u.strip() for u in fallback_env.split(",") if u.strip()]
+        else:
+            fallback_urls = list(self.RPC_FALLBACKS)
+
         self.rpc_urls = [primary_rpc] if primary_rpc else []
-        self.rpc_urls.extend([url for url in self.RPC_FALLBACKS if url != primary_rpc])
+        for url in fallback_urls:
+            if url and url not in self.rpc_urls:
+                self.rpc_urls.append(url)
+        if not self.rpc_urls:
+            self.rpc_urls = ["https://polygon.llamarpc.com"]
         
         self.current_rpc_index = 0
         self.w3 = Web3(Web3.HTTPProvider(self.rpc_urls[0]))
