@@ -188,3 +188,4 @@ polymarket_raw_frames.json
 # Only allow root CLAUDE.md (project changelog)
 **/CLAUDE.md
 !/CLAUDE.md
+.env.lock
