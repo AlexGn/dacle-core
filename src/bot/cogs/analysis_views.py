@@ -354,12 +354,17 @@ class TradeApprovalView(discord.ui.View):
         from api.routers.execution_v2 import approve_and_execute_v2
         from src.execution.v2_models import ApproveAndExecuteRequestV2, ExecutionState
 
+        account_id = str(os.getenv("EXECUTION_DEFAULT_ACCOUNT_ID", "primary") or "").strip() or "primary"
         # Deterministic key prevents duplicate orders from repeated button clicks/retries.
-        key_material = f"{interaction.message.id}:{interaction.user.id}:{token_upper}:{direction}:{entry}:{sl}:{tp}"
+        key_material = (
+            f"{account_id}:{interaction.message.id}:{interaction.user.id}:"
+            f"{token_upper}:{direction}:{entry}:{sl}:{tp}"
+        )
         idempotency_key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:32]
         
         request = ApproveAndExecuteRequestV2(
             setup_id=f"discord_{interaction.message.id}",
+            account_id=account_id,
             approval_id=str(interaction.user.id),
             idempotency_key=idempotency_key,
             symbol=token_upper,

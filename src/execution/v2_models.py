@@ -65,9 +65,32 @@ class ExecutionErrorCode(str, Enum):
 
 # --- Models ---
 
+class ExecutionLeg(BaseModel):
+    """Canonical execution leg contract (Stage 1 multi-account ready)."""
+    leg_id: str
+    symbol: str
+    side: str = Field(..., pattern="^(long|short|buy|sell)$")
+    qty: Optional[float] = None
+    price: Optional[float] = None
+    venue: Optional[str] = None
+    idempotency_key: str
+    account_id: str = Field(default="primary", min_length=1, max_length=64)
+
+class ExecutionIntent(BaseModel):
+    """Canonical execution intent contract (Stage 1 multi-account ready)."""
+    intent_id: str
+    setup_id: str
+    symbol: str
+    side: str = Field(..., pattern="^(long|short)$")
+    idempotency_key: str
+    account_id: str = Field(default="primary", min_length=1, max_length=64)
+    legs: List[ExecutionLeg] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
 class PreTradeCheckRequestV2(BaseModel):
     """Request for v2 pre-trade check."""
     setup_id: str
+    account_id: str = Field(default="primary", min_length=1, max_length=64)
     symbol: str
     side: str = Field(..., pattern="^(long|short)$")
     entry: float
@@ -108,6 +131,7 @@ class PreTradeCheckResponseV2(BaseModel):
 class ApproveAndExecuteRequestV2(BaseModel):
     """Request to approve and execute setup."""
     setup_id: str
+    account_id: str = Field(default="primary", min_length=1, max_length=64)
     approval_id: str  # discord_msg_or_button_id
     idempotency_key: str
     symbol: str

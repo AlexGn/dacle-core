@@ -391,12 +391,74 @@ class AnalysisCommands(commands.Cog):
             allowed.add(owner_id)
         return allowed
 
-    def _is_authorized(self, user_id: int) -> bool:
+    @staticmethod
+    def _account_acl() -> Dict[str, set[str]]:
+        raw = os.getenv("DISCORD_ACCOUNT_ACL", "").strip()
+        if not raw:
+            return {}
+        acl: Dict[str, set[str]] = {}
+        try:
+            loaded = json.loads(raw)
+            if isinstance(loaded, dict):
+                for account_id, users in loaded.items():
+                    aid = str(account_id).strip()
+                    if not aid:
+                        continue
+                    if isinstance(users, str):
+                        user_set = {u.strip() for u in users.split(",") if u.strip()}
+                    elif isinstance(users, (list, tuple, set)):
+                        user_set = {str(u).strip() for u in users if str(u).strip()}
+                    else:
+                        user_set = set()
+                    if user_set:
+                        acl[aid] = user_set
+                if acl:
+                    return acl
+        except Exception:
+            pass
+
+        # Fallback parser: "manual:111,222;autonomous:333"
+        for block in raw.split(";"):
+            chunk = block.strip()
+            if not chunk or ":" not in chunk:
+                continue
+            account_id, users_raw = chunk.split(":", 1)
+            aid = account_id.strip()
+            users = {u.strip() for u in users_raw.split(",") if u.strip()}
+            if aid and users:
+                acl[aid] = users
+        return acl
+
+    @staticmethod
+    def _resolve_account_id(account_id: Optional[str] = None) -> str:
+        candidate = str(account_id or "").strip()
+        if candidate:
+            return candidate
+        cog_default = str(os.getenv("DISCORD_ANALYSIS_ACCOUNT_ID", "") or "").strip()
+        if cog_default:
+            return cog_default
+        fallback = str(os.getenv("DISCORD_DEFAULT_ACCOUNT_ID", "primary") or "").strip()
+        return fallback or "primary"
+
+    def _is_authorized(self, user_id: int, *, account_id: Optional[str] = None) -> bool:
         allowed = self._allowed_user_ids()
         if not allowed:
-            # Backward compatibility: do not hard-lock commands if env is unconfigured.
+            globally_allowed = True
+        else:
+            globally_allowed = str(user_id) in allowed
+        if not globally_allowed:
+            return False
+
+        account_acl = self._account_acl()
+        if not account_acl:
+            # Backward compatibility: do not hard-lock commands if ACL is unconfigured.
             return True
-        return str(user_id) in allowed
+        resolved_account = self._resolve_account_id(account_id)
+        allowed_for_account = account_acl.get(resolved_account) or account_acl.get("*")
+        if not allowed_for_account:
+            # Backward compatibility: only enforce when account has an explicit ACL entry.
+            return True
+        return str(user_id) in allowed_for_account
 
     async def _deny_interaction(self, interaction: discord.Interaction) -> None:
         await safe_send(
@@ -414,7 +476,8 @@ class AnalysisCommands(commands.Cog):
         Natively execute a multi-agent Deep Audit by calling internal APIs 
         and synthesizing the result directly in Python.
         """
-        if not self._is_authorized(interaction.user.id):
+        account_id = self._resolve_account_id()
+        if not self._is_authorized(interaction.user.id, account_id=account_id):
             await self._deny_interaction(interaction)
             return
 
@@ -917,7 +980,8 @@ class AnalysisCommands(commands.Cog):
         Analyze a token and generate a playbook.
         Usage: @Dacle Bot analyze <SYMBOL>
         """
-        if not self._is_authorized(ctx.author.id):
+        account_id = self._resolve_account_id()
+        if not self._is_authorized(ctx.author.id, account_id=account_id):
             await ctx.reply("⛔ Not authorized.", mention_author=False)
             return
 
@@ -968,7 +1032,8 @@ class AnalysisCommands(commands.Cog):
         Slash command version of analyze.
         Usage: /analyze <SYMBOL>
         """
-        if not self._is_authorized(interaction.user.id):
+        account_id = self._resolve_account_id()
+        if not self._is_authorized(interaction.user.id, account_id=account_id):
             await self._deny_interaction(interaction)
             return
 
@@ -1074,7 +1139,8 @@ class AnalysisCommands(commands.Cog):
     @app_commands.describe(symbols="Comma-separated token symbols (e.g., ZRO, ALCH, DRIFT)")
     async def analyze_batch_slash(self, interaction: discord.Interaction, symbols: str):
         """Slash command to analyze multiple tokens at once."""
-        if not self._is_authorized(interaction.user.id):
+        account_id = self._resolve_account_id()
+        if not self._is_authorized(interaction.user.id, account_id=account_id):
             await self._deny_interaction(interaction)
             return
 

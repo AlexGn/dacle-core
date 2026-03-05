@@ -76,30 +76,79 @@ class ExecutionStateManager:
         with open(INTENTS_FILE, "w") as f:
             json.dump(intents, f, indent=4)
 
+    @staticmethod
+    def _normalize_account_id(account_id: Optional[str]) -> str:
+        candidate = str(account_id or "").strip()
+        if candidate:
+            return candidate
+        fallback = str(os.getenv("EXECUTION_DEFAULT_ACCOUNT_ID", "primary") or "").strip()
+        return fallback or "primary"
+
+    def scope_idempotency_key(self, idempotency_key: str, account_id: Optional[str]) -> str:
+        """
+        Build canonical scoped key: {account_id}:{idempotency_key}.
+        If already scoped, preserve as-is.
+        """
+        raw_key = str(idempotency_key or "").strip()
+        if ":" in raw_key:
+            return raw_key
+        scoped_account = self._normalize_account_id(account_id)
+        return f"{scoped_account}:{raw_key}"
+
+    @staticmethod
+    def account_id_from_scoped_key(idempotency_key: str) -> Optional[str]:
+        raw_key = str(idempotency_key or "").strip()
+        if ":" not in raw_key:
+            return None
+        account_id, _, suffix = raw_key.partition(":")
+        return account_id if account_id and suffix else None
+
+    def _resolve_effective_key(self, idempotency_key: str, account_id: Optional[str] = None) -> str:
+        if account_id:
+            return self.scope_idempotency_key(idempotency_key, account_id)
+        return str(idempotency_key or "").strip()
+
     # --- Sync Interface ---
 
-    def get_intent(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    def get_intent(self, idempotency_key: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Retrieve execution intent by idempotency key."""
         with self._intents_lock:
             try:
                 intents = self._load_intents()
-                return intents.get(idempotency_key)
+                return intents.get(self._resolve_effective_key(idempotency_key, account_id=account_id))
             except Exception as e:
                 logger.error(f"Failed to read intents: {e}")
                 return None
 
-    def create_intent(self, idempotency_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def create_intent(
+        self,
+        idempotency_key: str,
+        payload: Dict[str, Any],
+        account_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """Create a new execution intent if it doesn't exist."""
         with self._intents_lock:
-            return self._create_intent_logic(idempotency_key, payload)
+            effective_account_id = account_id or payload.get("account_id")
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=effective_account_id)
+            payload_copy = dict(payload)
+            if effective_account_id and not payload_copy.get("account_id"):
+                payload_copy["account_id"] = str(effective_account_id)
+            return self._create_intent_logic(scoped_key, payload_copy)
 
-    def transition_to(self, idempotency_key: str, next_state: ExecutionState, metadata: Dict[str, Any] = None) -> bool:
+    def transition_to(
+        self,
+        idempotency_key: str,
+        next_state: ExecutionState,
+        metadata: Dict[str, Any] = None,
+        account_id: Optional[str] = None,
+    ) -> bool:
         """
         Transition an intent to a new state if valid.
         Enforces the State Transition Table.
         """
         with self._intents_lock:
-            return self._transition_to_logic(idempotency_key, next_state, metadata)
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+            return self._transition_to_logic(scoped_key, next_state, metadata)
 
     def store_pretrade_snapshot(
         self,
@@ -109,30 +158,50 @@ class ExecutionStateManager:
         symbol: Optional[str] = None,
         side: Optional[str] = None,
         setup_id: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> None:
         """Upsert pre-trade snapshot by idempotency key."""
         with self._intents_lock:
-            self._store_pretrade_snapshot_logic(idempotency_key, snapshot, symbol=symbol, side=side, setup_id=setup_id)
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+            self._store_pretrade_snapshot_logic(scoped_key, snapshot, symbol=symbol, side=side, setup_id=setup_id)
 
-    def get_pretrade_snapshot(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    def get_pretrade_snapshot(self, idempotency_key: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Return stored pre-trade snapshot for an idempotency key."""
         with self._intents_lock:
-            return self._get_pretrade_snapshot_logic(idempotency_key)
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+            return self._get_pretrade_snapshot_logic(scoped_key)
 
     # --- Async Interface (Avoids to_thread overhead) ---
 
-    async def get_intent_async(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    async def get_intent_async(self, idempotency_key: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         async with self._get_async_intents_lock():
             # I/O still happens in this thread, but lock is async-safe
-            return self.get_intent(idempotency_key)
+            return self.get_intent(idempotency_key, account_id=account_id)
 
-    async def create_intent_async(self, idempotency_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def create_intent_async(
+        self,
+        idempotency_key: str,
+        payload: Dict[str, Any],
+        account_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         async with self._get_async_intents_lock():
-            return self._create_intent_logic(idempotency_key, payload)
+            effective_account_id = account_id or payload.get("account_id")
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=effective_account_id)
+            payload_copy = dict(payload)
+            if effective_account_id and not payload_copy.get("account_id"):
+                payload_copy["account_id"] = str(effective_account_id)
+            return self._create_intent_logic(scoped_key, payload_copy)
 
-    async def transition_to_async(self, idempotency_key: str, next_state: ExecutionState, metadata: Dict[str, Any] = None) -> bool:
+    async def transition_to_async(
+        self,
+        idempotency_key: str,
+        next_state: ExecutionState,
+        metadata: Dict[str, Any] = None,
+        account_id: Optional[str] = None,
+    ) -> bool:
         async with self._get_async_intents_lock():
-            return self._transition_to_logic(idempotency_key, next_state, metadata)
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+            return self._transition_to_logic(scoped_key, next_state, metadata)
 
     async def store_pretrade_snapshot_async(
         self,
@@ -142,19 +211,30 @@ class ExecutionStateManager:
         symbol: Optional[str] = None,
         side: Optional[str] = None,
         setup_id: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> None:
         async with self._get_async_intents_lock():
-            self._store_pretrade_snapshot_logic(idempotency_key, snapshot, symbol=symbol, side=side, setup_id=setup_id)
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+            self._store_pretrade_snapshot_logic(scoped_key, snapshot, symbol=symbol, side=side, setup_id=setup_id)
 
-    async def get_pretrade_snapshot_async(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    async def get_pretrade_snapshot_async(
+        self,
+        idempotency_key: str,
+        account_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         async with self._get_async_intents_lock():
-            return self._get_pretrade_snapshot_logic(idempotency_key)
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+            return self._get_pretrade_snapshot_logic(scoped_key)
 
     # --- Private Logic (No Locking) ---
 
     def _create_intent_logic(self, idempotency_key: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
             intents = self._load_intents()
+            payload = dict(payload)
+            parsed_account_id = self.account_id_from_scoped_key(idempotency_key)
+            if parsed_account_id and not payload.get("account_id"):
+                payload["account_id"] = parsed_account_id
             
             if idempotency_key in intents:
                 # Check for conflict
@@ -274,6 +354,9 @@ class ExecutionStateManager:
                 existing["side"] = side
             if setup_id and not existing.get("setup_id"):
                 existing["setup_id"] = setup_id
+            account_id = self.account_id_from_scoped_key(idempotency_key)
+            if account_id and not existing.get("account_id"):
+                existing["account_id"] = account_id
             existing["pretrade_snapshot"] = snapshot
             existing["updated_at"] = datetime.now(timezone.utc).isoformat()
             intents[idempotency_key] = existing
@@ -371,6 +454,7 @@ class ExecutionStateManager:
 
                 event = {
                     "idempotency_key": idempotency_key,
+                    "account_id": self.account_id_from_scoped_key(idempotency_key),
                     "state": state,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "metadata": metadata
