@@ -11,6 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -54,7 +55,12 @@ class PositionCommands(commands.Cog):
     @app_commands.command(name="positions", description="Show live Blofin positions with P&L")
     async def positions(self, interaction: discord.Interaction):
         """Display current open positions from Blofin."""
-        await interaction.response.defer(ephemeral=False)
+        await safe_defer(
+            interaction,
+            ephemeral=False,
+            command_name="positions",
+            logger=logger,
+        )
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -64,14 +70,22 @@ class PositionCommands(commands.Cog):
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as resp:
                     if resp.status != 200:
-                        await interaction.followup.send(
-                            f"Failed to fetch positions (HTTP {resp.status}). Is the API running?"
+                        await safe_send(
+                            interaction,
+                            command_name="positions",
+                            logger=logger,
+                            content=f"Failed to fetch positions (HTTP {resp.status}). Is the API running?",
                         )
                         return
                     data = await resp.json()
         except Exception as e:
             logger.error(f"/positions API call failed: {e}")
-            await interaction.followup.send(f"Failed to connect to DACLE API: {e}")
+            await safe_send(
+                interaction,
+                command_name="positions",
+                logger=logger,
+                content=f"Failed to connect to DACLE API: {e}",
+            )
             return
 
         positions = data.get("positions", [])
@@ -84,7 +98,12 @@ class PositionCommands(commands.Cog):
             )
             # Append Lighter DEX scalper section even when no Blofin positions
             await self._append_scalper_field(embed)
-            await interaction.followup.send(embed=embed)
+            await safe_send(
+                interaction,
+                command_name="positions",
+                logger=logger,
+                embed=embed,
+            )
             return
 
         # Build embed
@@ -138,7 +157,12 @@ class PositionCommands(commands.Cog):
         total_sign = "+" if total_pnl >= 0 else ""
         embed.set_footer(text=f"Total Unrealized P&L: {total_sign}${total_pnl:.2f}")
 
-        await interaction.followup.send(embed=embed)
+        await safe_send(
+            interaction,
+            command_name="positions",
+            logger=logger,
+            embed=embed,
+        )
 
     async def _append_scalper_field(self, embed: discord.Embed) -> None:
         """Fetch scalper status and append a Lighter DEX field to the embed."""

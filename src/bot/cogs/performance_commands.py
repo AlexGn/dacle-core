@@ -14,6 +14,7 @@ from discord.ext import commands
 from pathlib import Path
 from typing import Optional
 
+from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -50,14 +51,23 @@ class PerformanceCommands(commands.Cog):
     @app_commands.describe(period="Month to analyze (e.g. 2026-02). Default: last 3 months")
     async def performance_slash(self, interaction: discord.Interaction, period: Optional[str] = None):
         """Show behavioral performance profile."""
-        await interaction.response.defer()
+        await safe_defer(
+            interaction,
+            command_name="performance",
+            logger=logger,
+        )
 
         try:
             from src.risk.behavioral_analyzer import get_full_profile
 
             trades = _load_trades()
             if not trades:
-                await interaction.followup.send("No trade data available.")
+                await safe_send(
+                    interaction,
+                    command_name="performance",
+                    logger=logger,
+                    content="No trade data available.",
+                )
                 return
 
             profile = get_full_profile(trades, months=3)
@@ -131,11 +141,21 @@ class PerformanceCommands(commands.Cog):
 
             embed.set_footer(text=f"Based on {profile['trade_count']} trades over {profile['months_analyzed']} months")
 
-            await interaction.followup.send(embed=embed)
+            await safe_send(
+                interaction,
+                command_name="performance",
+                logger=logger,
+                embed=embed,
+            )
 
         except Exception as e:
             logger.error(f"Performance command failed: {e}", exc_info=True)
-            await interaction.followup.send(f"Failed to compute performance profile: {e}")
+            await safe_send(
+                interaction,
+                command_name="performance",
+                logger=logger,
+                content=f"Failed to compute performance profile: {e}",
+            )
 
     @app_commands.command(
         name="compounding",
@@ -144,7 +164,11 @@ class PerformanceCommands(commands.Cog):
     @app_commands.describe(action="on, off, or status")
     async def compounding_slash(self, interaction: discord.Interaction, action: str = "status"):
         """Toggle or check compounding mode."""
-        await interaction.response.defer()
+        await safe_defer(
+            interaction,
+            command_name="compounding",
+            logger=logger,
+        )
 
         try:
             from src.risk.compounding_mode import CompoundingMode
@@ -192,11 +216,21 @@ class PerformanceCommands(commands.Cog):
                     inline=True,
                 )
 
-            await interaction.followup.send(embed=embed)
+            await safe_send(
+                interaction,
+                command_name="compounding",
+                logger=logger,
+                embed=embed,
+            )
 
         except Exception as e:
             logger.error(f"Compounding command failed: {e}", exc_info=True)
-            await interaction.followup.send(f"Failed: {e}")
+            await safe_send(
+                interaction,
+                command_name="compounding",
+                logger=logger,
+                content=f"Failed: {e}",
+            )
 
     @app_commands.command(
         name="discipline",
@@ -204,14 +238,23 @@ class PerformanceCommands(commands.Cog):
     )
     async def discipline_slash(self, interaction: discord.Interaction):
         """Show quick discipline score."""
-        await interaction.response.defer()
+        await safe_defer(
+            interaction,
+            command_name="discipline",
+            logger=logger,
+        )
 
         try:
             from src.risk.behavioral_analyzer import get_full_profile
 
             trades = _load_trades()
             if not trades:
-                await interaction.followup.send("No trade data available.")
+                await safe_send(
+                    interaction,
+                    command_name="discipline",
+                    logger=logger,
+                    content="No trade data available.",
+                )
                 return
 
             profile = get_full_profile(trades, months=1)
@@ -242,23 +285,32 @@ class PerformanceCommands(commands.Cog):
             fb_pct = profile["feedback_coverage"]["overall_pct"]
             lines.append(f"Feedback Coverage: {fb_pct:.0f}%")
 
-            await interaction.followup.send("\n".join(lines))
+            await safe_send(
+                interaction,
+                command_name="discipline",
+                logger=logger,
+                content="\n".join(lines),
+            )
 
         except Exception as e:
             logger.error(f"Discipline command failed: {e}", exc_info=True)
-            await interaction.followup.send(f"Failed: {e}")
+            await safe_send(
+                interaction,
+                command_name="discipline",
+                logger=logger,
+                content=f"Failed: {e}",
+            )
 
     async def cog_app_command_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         """Handle errors in this cog's slash commands."""
         logger.error(f"Performance command error: {error}", exc_info=True)
-        msg = f"Command failed: {error}"
-        try:
-            if interaction.response.is_done():
-                await interaction.followup.send(msg)
-            else:
-                await interaction.response.send_message(msg, ephemeral=True)
-        except Exception:
-            pass
+        await safe_send(
+            interaction,
+            command_name="performance",
+            logger=logger,
+            content=f"Command failed: {error}",
+            ephemeral=True,
+        )
 
     @staticmethod
     def _score_color(score: int) -> discord.Color:

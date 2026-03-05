@@ -21,6 +21,7 @@ from discord.ext import commands
 from src.orchestration.trade_workflow import run_full_pipeline_with_thread_loop
 from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
+from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.bot.utils.safe_task import safe_create_task
 from src.utils.config import get_discord_config
 from api.routers.macro import get_btc_regime_widget
@@ -398,11 +399,13 @@ class AnalysisCommands(commands.Cog):
         return str(user_id) in allowed
 
     async def _deny_interaction(self, interaction: discord.Interaction) -> None:
-        msg = "⛔ Not authorized."
-        try:
-            await interaction.response.send_message(msg, ephemeral=True)
-        except Exception:
-            await interaction.followup.send(msg, ephemeral=True)
+        await safe_send(
+            interaction,
+            command_name="analysis-auth",
+            logger=logger,
+            content="⛔ Not authorized.",
+            ephemeral=True,
+        )
 
     @app_commands.command(name="audit", description="Trigger a multi-agent Deep Audit for a token")
     @app_commands.describe(symbol="Token symbol to audit (e.g. MONAD, AZTEC, ETH)")
@@ -419,17 +422,37 @@ class AnalysisCommands(commands.Cog):
         audit_channel_id = 1474325144913838232  # #audit-token
         
         # 1. Defer immediately to prevent interaction timeout (3s limit)
-        await interaction.response.defer(ephemeral=True)
+        await safe_defer(
+            interaction,
+            ephemeral=True,
+            command_name="audit",
+            logger=logger,
+        )
         
         audit_channel = self.bot.get_channel(audit_channel_id)
         if not audit_channel:
             try:
                 audit_channel = await self.bot.fetch_channel(audit_channel_id)
             except Exception:
-                await interaction.followup.send(f"❌ Could not find the audit channel.", ephemeral=True)
+                await safe_send(
+                    interaction,
+                    command_name="audit",
+                    logger=logger,
+                    content="❌ Could not find the audit channel.",
+                    ephemeral=True,
+                )
                 return
 
-        await interaction.followup.send(f"🔍 **Initiating Native Deep Audit for ${sym}...**\nSpecialists are being summoned to <#{audit_channel_id}>.", ephemeral=True)
+        await safe_send(
+            interaction,
+            command_name="audit",
+            logger=logger,
+            content=(
+                f"🔍 **Initiating Native Deep Audit for ${sym}...**\n"
+                f"Specialists are being summoned to <#{audit_channel_id}>."
+            ),
+            ephemeral=True,
+        )
 
         # Start the audit processing in the background
         safe_create_task(
@@ -957,14 +980,20 @@ class AnalysisCommands(commands.Cog):
             analysis_channel = invoke_channel if isinstance(invoke_channel, discord.TextChannel) else None
 
         if analysis_channel is None:
-            await interaction.response.send_message(
-                "❌ Could not resolve analysis channel. Try again in `#analysis-updates`.",
+            await safe_send(
+                interaction,
+                command_name="analyze",
+                logger=logger,
+                content="❌ Could not resolve analysis channel. Try again in `#analysis-updates`.",
                 ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
-            f"🔍 Analyzing **{symbol}**. I will post results in {analysis_channel.mention}.",
+        await safe_send(
+            interaction,
+            command_name="analyze",
+            logger=logger,
+            content=f"🔍 Analyzing **{symbol}**. I will post results in {analysis_channel.mention}.",
             ephemeral=True,
         )
 
@@ -1051,8 +1080,11 @@ class AnalysisCommands(commands.Cog):
 
         parsed = parse_batch_symbols(symbols)
         if not parsed:
-            await interaction.response.send_message(
-                "No valid symbols provided. Use comma or space separated symbols (e.g., `ZRO, ALCH, DRIFT`).",
+            await safe_send(
+                interaction,
+                command_name="analyze-batch",
+                logger=logger,
+                content="No valid symbols provided. Use comma or space separated symbols (e.g., `ZRO, ALCH, DRIFT`).",
                 ephemeral=True,
             )
             return
@@ -1063,15 +1095,21 @@ class AnalysisCommands(commands.Cog):
             analysis_channel = invoke_channel if isinstance(invoke_channel, discord.TextChannel) else None
 
         if analysis_channel is None:
-            await interaction.response.send_message(
-                "Could not resolve analysis channel. Try again in `#analysis-updates`.",
+            await safe_send(
+                interaction,
+                command_name="analyze-batch",
+                logger=logger,
+                content="Could not resolve analysis channel. Try again in `#analysis-updates`.",
                 ephemeral=True,
             )
             return
 
         symbol_list = ", ".join(parsed)
-        await interaction.response.send_message(
-            f"Analyzing **{len(parsed)}** tokens: {symbol_list}. Results will appear in {analysis_channel.mention}.",
+        await safe_send(
+            interaction,
+            command_name="analyze-batch",
+            logger=logger,
+            content=f"Analyzing **{len(parsed)}** tokens: {symbol_list}. Results will appear in {analysis_channel.mention}.",
             ephemeral=True,
         )
 
@@ -1091,13 +1129,13 @@ class AnalysisCommands(commands.Cog):
             1 for r in results
             if isinstance(r, tuple) and r[1] is True
         )
-        try:
-            await interaction.followup.send(
-                f"Batch complete: **{success_count}/{len(parsed)}** analyses finished.",
-                ephemeral=True,
-            )
-        except Exception:
-            logger.debug("Failed to send batch completion followup", exc_info=True)
+        await safe_send(
+            interaction,
+            command_name="analyze-batch",
+            logger=logger,
+            content=f"Batch complete: **{success_count}/{len(parsed)}** analyses finished.",
+            ephemeral=True,
+        )
 
     async def _analyze_one(
         self,

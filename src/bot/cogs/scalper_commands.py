@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -33,7 +34,11 @@ class ScalperCommands(commands.Cog):
     @app_commands.command(name="scalper", description="Show Lighter DEX scalper status and PnL")
     async def scalper_slash(self, interaction: discord.Interaction):
         """Display scalper status, PnL, last fill, and watchdog health."""
-        await interaction.response.defer()
+        await safe_defer(
+            interaction,
+            command_name="scalper",
+            logger=logger,
+        )
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(
@@ -43,17 +48,30 @@ class ScalperCommands(commands.Cog):
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as resp:
                     if resp.status != 200:
-                        await interaction.followup.send(
-                            f"Failed to fetch scalper status (HTTP {resp.status})."
+                        await safe_send(
+                            interaction,
+                            command_name="scalper",
+                            logger=logger,
+                            content=f"Failed to fetch scalper status (HTTP {resp.status}).",
                         )
                         return
                     data = await resp.json()
 
             embed = self._build_embed(data)
-            await interaction.followup.send(embed=embed)
+            await safe_send(
+                interaction,
+                command_name="scalper",
+                logger=logger,
+                embed=embed,
+            )
         except Exception as e:
             logger.error(f"/scalper command error: {e}")
-            await interaction.followup.send(f"Error fetching scalper status: {e}")
+            await safe_send(
+                interaction,
+                command_name="scalper",
+                logger=logger,
+                content=f"Error fetching scalper status: {e}",
+            )
 
     def _build_embed(self, data: dict) -> discord.Embed:
         """Build Discord embed from scalper status data. Pure function for testability."""

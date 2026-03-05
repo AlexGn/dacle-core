@@ -13,6 +13,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.utils.logger import get_logger
+from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.bot.formatters.ta_card import build_ta_card_embed
 from src.bot.cogs.ta_card_view import TACardView
 
@@ -59,7 +60,12 @@ class TACommands(commands.Cog):
         symbol = symbol.upper().lstrip("$")
         dir_value = direction.value if direction else None
 
-        await interaction.response.defer(ephemeral=False)
+        await safe_defer(
+            interaction,
+            ephemeral=False,
+            command_name="ta",
+            logger=logger,
+        )
 
         api_base = _get_api_base_url()
         params = {}
@@ -83,20 +89,31 @@ class TACommands(commands.Cog):
                             )
                         except Exception:
                             error_msg = f"API error {resp.status}"
-                        await interaction.followup.send(
-                            f"Failed to get TA for **{symbol}**: {error_msg}"
+                        await safe_send(
+                            interaction,
+                            command_name="ta",
+                            logger=logger,
+                            content=f"Failed to get TA for **{symbol}**: {error_msg}",
                         )
                         return
                     data = await resp.json()
         except aiohttp.ClientError as e:
             logger.error(f"TA card API call failed: {e}")
-            await interaction.followup.send(
-                f"Failed to reach DACLE API: {e}"
+            await safe_send(
+                interaction,
+                command_name="ta",
+                logger=logger,
+                content=f"Failed to reach DACLE API: {e}",
             )
             return
         except Exception as e:
             logger.error(f"TA card unexpected error: {e}", exc_info=True)
-            await interaction.followup.send(f"Unexpected error: {e}")
+            await safe_send(
+                interaction,
+                command_name="ta",
+                logger=logger,
+                content=f"Unexpected error: {e}",
+            )
             return
 
         # Build embed from card data
@@ -121,19 +138,24 @@ class TACommands(commands.Cog):
             direction=data.get("direction", "SHORT"),
             data=data,
         )
-        await interaction.followup.send(embed=embed, view=view)
+        await safe_send(
+            interaction,
+            command_name="ta",
+            logger=logger,
+            embed=embed,
+            view=view,
+        )
 
     async def cog_app_command_error(self, interaction, error):
         """Handle slash command errors with user-visible messages."""
         logger.error(f"[TACommands] {error}", exc_info=error)
-        try:
-            msg = f"An error occurred: {error}"
-            if interaction.response.is_done():
-                await interaction.followup.send(msg, ephemeral=True)
-            else:
-                await interaction.response.send_message(msg, ephemeral=True)
-        except Exception:
-            pass
+        await safe_send(
+            interaction,
+            command_name="ta",
+            logger=logger,
+            content=f"An error occurred: {error}",
+            ephemeral=True,
+        )
 
 
 async def setup(bot: commands.Bot):

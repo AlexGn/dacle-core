@@ -31,6 +31,7 @@ from src.bot.utils.memory_guard import (
     get_memory_alert_mb,
     should_skip_sync,
 )
+from src.bot.utils.interaction_response import safe_send
 
 # Load configuration explicitly at startup if not already loaded
 try:
@@ -188,19 +189,19 @@ class DACLEBot(commands.Bot):
         # Register global app_command error handler for visibility
         @self.tree.error
         async def on_app_command_error(interaction: discord.Interaction, error: Exception):
+            command_name = interaction.command.name if interaction.command else "unknown"
             logger.error(
-                f"APP_COMMAND_ERROR command={interaction.command.name if interaction.command else 'unknown'} "
+                f"APP_COMMAND_ERROR command={command_name} "
                 f"user={interaction.user} error={error}",
                 exc_info=error,
             )
-            try:
-                msg = f"An error occurred: {error}"
-                if interaction.response.is_done():
-                    await interaction.followup.send(msg, ephemeral=True)
-                else:
-                    await interaction.response.send_message(msg, ephemeral=True)
-            except Exception:
-                pass
+            await safe_send(
+                interaction,
+                command_name=command_name,
+                logger=logger,
+                content=f"An error occurred: {error}",
+                ephemeral=True,
+            )
 
         logger.info("Setup complete")
 

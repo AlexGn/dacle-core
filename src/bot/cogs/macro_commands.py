@@ -6,6 +6,7 @@ from discord.ext import commands
 
 from api.routers.macro import get_market_direction
 from src.bot.formatters.market_direction import build_market_direction_embed
+from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -23,14 +24,24 @@ class MacroCommands(commands.Cog):
     )
     async def market(self, interaction: discord.Interaction):
         """Fetch and display current market direction."""
-        await interaction.response.defer(ephemeral=False)
+        await safe_defer(
+            interaction,
+            ephemeral=False,
+            command_name="market",
+            logger=logger,
+        )
 
         try:
             data = await get_market_direction()
             if data.get("status") != "ok":
                 error = data.get("error", "Unknown error")
-                await interaction.followup.send(
+                await safe_send(
+                    interaction,
+                    command_name="market",
+                    logger=logger,
+                    content=(
                     f"❌ Failed to fetch market direction: {error}",
+                    ),
                     ephemeral=True,
                 )
                 return
@@ -38,13 +49,21 @@ class MacroCommands(commands.Cog):
             embed_payload = build_market_direction_embed(data, include_next_update=True)
             embed = discord.Embed.from_dict(embed_payload)
 
-            await interaction.followup.send(embed=embed)
+            await safe_send(
+                interaction,
+                command_name="market",
+                logger=logger,
+                embed=embed,
+            )
             logger.info(f"✅ {interaction.user.name} requested /market")
 
         except Exception as e:
             logger.error(f"❌ Error in /market command: {e}", exc_info=True)
-            await interaction.followup.send(
-                f"❌ Error getting market direction: {e}",
+            await safe_send(
+                interaction,
+                command_name="market",
+                logger=logger,
+                content=f"❌ Error getting market direction: {e}",
                 ephemeral=True,
             )
 

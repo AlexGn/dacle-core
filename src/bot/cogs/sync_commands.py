@@ -10,6 +10,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.ops.discord_channel_contract import get_discord_channel_contract
 from src.utils.logger import get_logger
 
@@ -53,13 +54,22 @@ class SyncCommands(commands.Cog):
         )
 
         if not (is_owner or is_audit_channel or is_discovery_channel):
-            await interaction.response.send_message(
-                "❌ You are not authorized to run /sync outside of #audit-token or #discovery.",
+            await safe_send(
+                interaction,
+                command_name="sync",
+                logger=logger,
+                content="❌ You are not authorized to run /sync outside of #audit-token or #discovery.",
                 ephemeral=True,
             )
             return
 
-        await interaction.response.defer(ephemeral=True, thinking=True)
+        deferred = await safe_defer(
+            interaction,
+            ephemeral=True,
+            thinking=True,
+            command_name="sync",
+            logger=logger,
+        )
         try:
             guild = interaction.guild
             
@@ -75,16 +85,45 @@ class SyncCommands(commands.Cog):
                 # 3. Re-register everything to the server
                 self.bot.tree.copy_global_to(guild=guild)
                 synced = await asyncio.wait_for(self.bot.tree.sync(guild=guild), timeout=60)
-                
-                await interaction.edit_original_response(
-                    content=f"🚀 **TOTAL PURGE COMPLETE!** {len(synced)} fresh commands registered.\n\n**NEXT STEP**: Restart your Discord App (Ctrl+R) and `/audit` should be visible."
+
+                content = (
+                    f"🚀 **TOTAL PURGE COMPLETE!** {len(synced)} fresh commands registered.\n\n"
+                    "**NEXT STEP**: Restart your Discord App (Ctrl+R) and `/audit` should be visible."
                 )
+                if deferred:
+                    await interaction.edit_original_response(content=content)
+                else:
+                    await safe_send(
+                        interaction,
+                        command_name="sync",
+                        logger=logger,
+                        content=content,
+                        ephemeral=False,
+                    )
             else:
-                await interaction.edit_original_response(content="❌ Could not find server for sync.")
+                if deferred:
+                    await interaction.edit_original_response(content="❌ Could not find server for sync.")
+                else:
+                    await safe_send(
+                        interaction,
+                        command_name="sync",
+                        logger=logger,
+                        content="❌ Could not find server for sync.",
+                        ephemeral=False,
+                    )
                 
         except Exception as e:
             logger.error(f"Global Purge failed: {e}", exc_info=True)
-            await interaction.edit_original_response(content=f"❌ Sync failed: {e}")
+            if deferred:
+                await interaction.edit_original_response(content=f"❌ Sync failed: {e}")
+            else:
+                await safe_send(
+                    interaction,
+                    command_name="sync",
+                    logger=logger,
+                    content=f"❌ Sync failed: {e}",
+                    ephemeral=False,
+                )
 
 
     async def cog_app_command_error(self, interaction, error):

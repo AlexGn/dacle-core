@@ -14,6 +14,8 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
+from src.bot.utils.interaction_response import safe_defer, safe_send
+
 logger = get_logger(__name__)
 
 
@@ -108,7 +110,12 @@ class ScanCog(commands.Cog):
     @app_commands.command(name="scan", description="Quick scan: positions + top setups + alerts")
     async def scan_command(self, interaction: discord.Interaction):
         """Quick scan showing positions, top setups, and alerts."""
-        await interaction.response.defer(thinking=True)
+        await safe_defer(
+            interaction,
+            thinking=True,
+            command_name="scan",
+            logger=logger,
+        )
 
         try:
             import sys
@@ -137,12 +144,21 @@ class ScanCog(commands.Cog):
             alerts = fetch_staleness_alerts()
 
             embed_dict = format_scan_output(positions, tokens, alerts)
-            await interaction.followup.send(embed=discord.Embed.from_dict(embed_dict))
+            await safe_send(
+                interaction,
+                command_name="scan",
+                logger=logger,
+                embed=discord.Embed.from_dict(embed_dict),
+            )
 
         except Exception as e:
             logger.error(f"Error in /scan: {e}")
-            await interaction.followup.send(
-                "Error running scan. Check logs for details.", ephemeral=True
+            await safe_send(
+                interaction,
+                command_name="scan",
+                logger=logger,
+                content="Error running scan. Check logs for details.",
+                ephemeral=True,
             )
 
     async def cog_app_command_error(self, interaction, error):
