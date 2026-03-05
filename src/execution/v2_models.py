@@ -61,6 +61,7 @@ class ExecutionErrorCode(str, Enum):
     ERR_EXCHANGE_REJECTED = "ERR_EXCHANGE_REJECTED"
     ERR_ORDER_SUBMIT_FAILED = "ERR_ORDER_SUBMIT_FAILED"
     ERR_CANCEL_FAILED = "ERR_CANCEL_FAILED"
+    ERR_CONTEXT_GUARD_FAILED = "ERR_CONTEXT_GUARD_FAILED"
     ERR_INTERNAL_RETRY_EXHAUSTED = "ERR_INTERNAL_RETRY_EXHAUSTED"
 
 # --- Models ---
@@ -172,6 +173,9 @@ class ApproveAndExecuteResponseV2(BaseModel):
     order_ids: List[str] = []
     veto_reasons: List[VetoReasonCode] = []
     warnings: List[WarningCode] = []
+    error_code: Optional[str] = None
+    error_reason: Optional[str] = None
+    error_domain: Optional[str] = None
     revalidation_snapshot: RevalidationSnapshotV2
 
 class ExecutionStatusResponseV2(BaseModel):

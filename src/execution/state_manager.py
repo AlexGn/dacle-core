@@ -1,15 +1,19 @@
 import json
 import logging
 import os
+import base64
+import time
 import hashlib
 import hmac
 import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from threading import Lock
+from uuid import uuid4
 
 from src.execution.v2_models import ExecutionState, VetoReasonCode
+from src.execution.context_token_store import ContextTokenStore
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +23,11 @@ INTENTS_FILE = DATA_DIR / "execution_intents.json"
 EVENTS_FILE = DATA_DIR / "execution_events.json"
 EVENTS_CHAIN_FILE = DATA_DIR / "execution_events.chain.jsonl"
 EVENTS_CHAIN_HEAD_FILE = DATA_DIR / "execution_events.chain.head.json"
+DEFAULT_CONTEXT_TOKEN_TTL_SEC = 60
+DEFAULT_CONTEXT_CLOCK_SKEW_SEC = 5
+DEV_ONLY_CONTEXT_SECRET = "DEV_ONLY_EXECUTION_CONTEXT_SECRET"
+DEFAULT_CONTEXT_NONCE_PREFIX = "exec_ctx_nonce:"
+DEFAULT_CONTEXT_NONCE_TIMEOUT_MS = 50
 
 class ExecutionStateManager:
     """
@@ -54,8 +63,12 @@ class ExecutionStateManager:
             
         self._intents_lock = Lock()
         self._events_lock = Lock()
+        self._nonce_lock = Lock()
         self._async_intents_lock: Optional[asyncio.Lock] = None
         self._async_events_lock: Optional[asyncio.Lock] = None
+        self._consumed_context_nonces: Dict[str, int] = {}
+        self._context_store: Optional[ContextTokenStore] = None
+        self._context_store_config: Optional[Tuple[str, str, int]] = None
 
     def _get_async_intents_lock(self) -> asyncio.Lock:
         if self._async_intents_lock is None:
@@ -107,6 +120,235 @@ class ExecutionStateManager:
         if account_id:
             return self.scope_idempotency_key(idempotency_key, account_id)
         return str(idempotency_key or "").strip()
+
+    @staticmethod
+    def _b64url_encode(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
+
+    @staticmethod
+    def _b64url_decode(raw: str) -> bytes:
+        padded = raw + "=" * ((4 - len(raw) % 4) % 4)
+        return base64.urlsafe_b64decode(padded.encode("utf-8"))
+
+    @staticmethod
+    def _state_value(state: ExecutionState) -> str:
+        return state.value if isinstance(state, ExecutionState) else str(state)
+
+    @staticmethod
+    def _env_bool(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _is_live_mode(self) -> bool:
+        return self._env_bool("BLOFIN_LIVE_ENABLED", default=False)
+
+    @staticmethod
+    def _resolve_context_secret() -> str:
+        primary = str(os.getenv("EXECUTION_CONTEXT_HMAC_KEY", "") or "").strip()
+        if primary:
+            return primary
+        
+        # In live mode, we do NOT fall back to the audit key for execution context tokens.
+        live_enabled = str(os.getenv("BLOFIN_LIVE_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
+        if live_enabled:
+            return DEV_ONLY_CONTEXT_SECRET # This will trigger the UNCONFIGURED failure in issue/validate
+            
+        return str(os.getenv("EXECUTION_AUDIT_HMAC_KEY", "") or "").strip() or DEV_ONLY_CONTEXT_SECRET
+
+    @staticmethod
+    def _resolve_context_ttl(ttl_sec: Optional[int]) -> int:
+        if ttl_sec is not None:
+            ttl = int(ttl_sec)
+        else:
+            ttl = int(os.getenv("EXECUTION_CONTEXT_TOKEN_TTL_SEC", str(DEFAULT_CONTEXT_TOKEN_TTL_SEC)))
+        return max(1, min(ttl, 300))
+
+    @staticmethod
+    def _resolve_context_clock_skew() -> int:
+        skew = int(os.getenv("EXECUTION_CONTEXT_CLOCK_SKEW_SEC", str(DEFAULT_CONTEXT_CLOCK_SKEW_SEC)))
+        return max(0, min(skew, 30))
+
+    def _require_distributed_nonce_store(self) -> bool:
+        raw = os.getenv("EXECUTION_CONTEXT_REQUIRE_DISTRIBUTED_NONCE")
+        if raw is None:
+            return self._is_live_mode()
+        return self._env_bool("EXECUTION_CONTEXT_REQUIRE_DISTRIBUTED_NONCE", default=False)
+
+    def _context_nonce_store_timeout_ms(self) -> int:
+        raw = os.getenv("EXECUTION_CONTEXT_NONCE_TIMEOUT_MS")
+        try:
+            timeout_ms = int(raw) if raw is not None else DEFAULT_CONTEXT_NONCE_TIMEOUT_MS
+        except (TypeError, ValueError):
+            timeout_ms = DEFAULT_CONTEXT_NONCE_TIMEOUT_MS
+        return max(10, min(timeout_ms, 100))
+
+    def _get_context_store(self) -> Optional[ContextTokenStore]:
+        redis_url = str(os.getenv("EXECUTION_CONTEXT_NONCE_REDIS_URL", "") or "").strip()
+        if not redis_url:
+            return None
+        prefix = str(os.getenv("EXECUTION_CONTEXT_NONCE_PREFIX", DEFAULT_CONTEXT_NONCE_PREFIX) or DEFAULT_CONTEXT_NONCE_PREFIX)
+        timeout_ms = self._context_nonce_store_timeout_ms()
+        config = (redis_url, prefix, timeout_ms)
+        if self._context_store is None or self._context_store_config != config:
+            self._context_store = ContextTokenStore(
+                redis_url=redis_url,
+                prefix=prefix,
+                timeout_ms=timeout_ms,
+            )
+            self._context_store_config = config
+        return self._context_store
+
+    def ensure_context_runtime_ready(self, strict: Optional[bool] = None) -> Tuple[bool, str]:
+        strict_mode = self._is_live_mode() if strict is None else bool(strict)
+        secret = self._resolve_context_secret()
+        if strict_mode and secret == DEV_ONLY_CONTEXT_SECRET:
+            return False, "TOKEN_SECRET_UNCONFIGURED"
+
+        distributed_required = strict_mode or self._require_distributed_nonce_store()
+        if not distributed_required:
+            return True, "OK"
+
+        store = self._get_context_store()
+        if store is None:
+            return False, "TOKEN_NONCE_STORE_UNAVAILABLE"
+
+        ok, reason = store.ensure_ready()
+        if ok:
+            return True, "OK"
+        if reason == "TIMEOUT":
+            return False, "TOKEN_NONCE_STORE_TIMEOUT"
+        return False, "TOKEN_NONCE_STORE_UNAVAILABLE"
+
+    def issue_bridge_context_token(
+        self,
+        idempotency_key: str,
+        required_state: ExecutionState = ExecutionState.PROTECTION_SUBMITTING,
+        *,
+        account_id: Optional[str] = None,
+        ttl_sec: Optional[int] = None,
+    ) -> str:
+        scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+        intent = self.get_intent(scoped_key)
+        if not intent:
+            raise ValueError("CONTEXT_INTENT_NOT_FOUND")
+
+        expected_state = self._state_value(required_state)
+        current_state = str(intent.get("state", "") or "")
+        if current_state != expected_state:
+            raise ValueError(f"CONTEXT_STATE_MISMATCH:{current_state}->{expected_state}")
+
+        secret = self._resolve_context_secret()
+        if self._is_live_mode() and secret == DEV_ONLY_CONTEXT_SECRET:
+            raise ValueError("CONTEXT_SECRET_UNCONFIGURED")
+
+        now = int(time.time())
+        ttl = self._resolve_context_ttl(ttl_sec)
+        payload = {
+            "idempotency_key": scoped_key,
+            "required_state": expected_state,
+            "iat": now,
+            "exp": now + ttl,
+            "nonce": uuid4().hex,
+        }
+        encoded = self._b64url_encode(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+        signature = hmac.new(secret.encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256).hexdigest()
+        return f"{encoded}.{signature}"
+
+    def _consume_context_nonce(self, nonce: str, expiry_ts: int, now_ts: int, skew_sec: int) -> Tuple[bool, str]:
+        ttl_sec = max(1, int(expiry_ts - now_ts + skew_sec))
+        distributed_required = self._require_distributed_nonce_store()
+        store = self._get_context_store()
+        if store is not None:
+            ok, reason = store.consume_once(nonce, ttl_sec=ttl_sec)
+            if ok:
+                return True, "OK"
+            if reason == "REPLAYED":
+                return False, "TOKEN_REPLAYED"
+            if reason == "TIMEOUT":
+                return False, "TOKEN_NONCE_STORE_TIMEOUT"
+            return False, "TOKEN_NONCE_STORE_UNAVAILABLE"
+        if distributed_required:
+            return False, "TOKEN_NONCE_STORE_UNAVAILABLE"
+
+        with self._nonce_lock:
+            for key, expiry in list(self._consumed_context_nonces.items()):
+                if int(expiry) < now_ts - skew_sec:
+                    self._consumed_context_nonces.pop(key, None)
+            if nonce in self._consumed_context_nonces:
+                return False, "TOKEN_REPLAYED"
+            self._consumed_context_nonces[nonce] = expiry_ts
+        return True, "OK"
+
+    def validate_bridge_context_token(
+        self,
+        token: str,
+        idempotency_key: str,
+        required_state: ExecutionState = ExecutionState.PROTECTION_SUBMITTING,
+        *,
+        account_id: Optional[str] = None,
+        consume_nonce: bool = True,
+    ) -> Tuple[bool, str]:
+        raw_token = str(token or "").strip()
+        if not raw_token:
+            return False, "MISSING_TOKEN"
+
+        encoded, sep, signature = raw_token.partition(".")
+        if not sep or not encoded or not signature:
+            return False, "TOKEN_FORMAT_INVALID"
+
+        secret = self._resolve_context_secret()
+        if self._is_live_mode() and secret == DEV_ONLY_CONTEXT_SECRET:
+            return False, "TOKEN_SECRET_UNCONFIGURED"
+
+        expected_sig = hmac.new(secret.encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(signature, expected_sig):
+            return False, "TOKEN_SIGNATURE_INVALID"
+
+        try:
+            payload = json.loads(self._b64url_decode(encoded).decode("utf-8"))
+        except Exception:
+            return False, "TOKEN_DECODE_FAILED"
+
+        expected_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+        if str(payload.get("idempotency_key", "")) != expected_key:
+            return False, "TOKEN_KEY_MISMATCH"
+
+        expected_state = self._state_value(required_state)
+        if str(payload.get("required_state", "")) != expected_state:
+            return False, "TOKEN_STATE_CLAIM_MISMATCH"
+
+        try:
+            issued_at = int(payload.get("iat"))
+            expires_at = int(payload.get("exp"))
+        except Exception:
+            return False, "TOKEN_TIME_INVALID"
+
+        now = int(time.time())
+        skew = self._resolve_context_clock_skew()
+        if now < issued_at - skew:
+            return False, "TOKEN_NOT_YET_VALID"
+        if now > expires_at + skew:
+            return False, "TOKEN_EXPIRED"
+
+        intent = self.get_intent(expected_key)
+        if not intent:
+            return False, "INTENT_NOT_FOUND"
+        if str(intent.get("state", "")) != expected_state:
+            return False, "INTENT_STATE_MISMATCH"
+
+        nonce = str(payload.get("nonce", "") or "")
+        if not nonce:
+            return False, "TOKEN_NONCE_MISSING"
+
+        if consume_nonce:
+            ok, reason = self._consume_context_nonce(nonce, expires_at, now, skew)
+            if not ok:
+                return False, reason
+        return True, "OK"
 
     # --- Sync Interface ---
 

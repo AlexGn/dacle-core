@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import ccxt
 from src.execution.v2_models import ExecutionErrorCode, ExecutionState
+from src.execution.state_manager import ExecutionStateManager
 from src.utils.latency_logger import LatencyAuditLogger
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,26 @@ class BlofinExecutionBridge:
         except Exception as e:
             logger.error(f"Failed to initialize Blofin Bridge: {e}")
 
+    def _validate_execution_context(
+        self,
+        idempotency_key: str,
+        execution_context_token: Optional[str],
+        expected_context_state: ExecutionState,
+    ) -> Optional[Dict[str, Any]]:
+        ok, reason = ExecutionStateManager().validate_bridge_context_token(
+            execution_context_token or "",
+            idempotency_key=idempotency_key,
+            required_state=expected_context_state,
+        )
+        if ok:
+            return None
+        logger.error("Bridge execution context rejected for %s: %s", idempotency_key, reason)
+        return {
+            "error": ExecutionErrorCode.ERR_CONTEXT_GUARD_FAILED,
+            "reason": f"CONTEXT_{reason}",
+            "entry_order_id": None,
+        }
+
     def submit_bracket_order(
         self,
         symbol: str,
@@ -62,7 +83,9 @@ class BlofinExecutionBridge:
         dry_run: bool = True,
         latency_meta: Optional[Dict[str, Any]] = None,
         time_in_force: str = "GTC",
-        execution_policy: str = "LIMIT_ONLY"
+        execution_policy: str = "LIMIT_ONLY",
+        execution_context_token: Optional[str] = None,
+        expected_context_state: ExecutionState = ExecutionState.PROTECTION_SUBMITTING,
     ) -> Dict[str, Any]:
         """
         Submit a bracket order (Entry + SL + TP) to Blofin (Phase 2).
@@ -74,6 +97,22 @@ class BlofinExecutionBridge:
         
         logger.info(f"Submitting BRACKET for {symbol}: Entry {price}, SL {sl_price}, TP {tp_price} [dry_run={dry_run}, policy={execution_policy}, tif={time_in_force}]")
         
+        if not os.getenv("BLOFIN_LIVE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+            if not dry_run:
+                return {
+                    "error": ExecutionErrorCode.ERR_ORDER_SUBMIT_FAILED,
+                    "reason": "LIVE_EXECUTION_DISABLED_IN_BRIDGE",
+                    "entry_order_id": None,
+                }
+
+        context_err = self._validate_execution_context(
+            idempotency_key=idempotency_key,
+            execution_context_token=execution_context_token,
+            expected_context_state=expected_context_state,
+        )
+        if context_err:
+            return context_err
+
         if dry_run:
             t4_ack = time.monotonic_ns()
             res = {
@@ -88,13 +127,6 @@ class BlofinExecutionBridge:
             if latency_meta:
                 self._log_latency_event(idempotency_key, symbol, side, price, res["info"], t3_submit, t4_ack, latency_meta)
             return res
-
-        if not os.getenv("BLOFIN_LIVE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
-            return {
-                "error": ExecutionErrorCode.ERR_ORDER_SUBMIT_FAILED,
-                "reason": "LIVE_EXECUTION_DISABLED_IN_BRIDGE",
-                "entry_order_id": None,
-            }
 
         if not self.exchange:
             return {"error": ExecutionErrorCode.ERR_INTERNAL_RETRY_EXHAUSTED, "reason": "Exchange not initialized"}
