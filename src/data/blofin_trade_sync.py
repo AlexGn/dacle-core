@@ -359,6 +359,7 @@ class BlofinTradeSync:
             - liquidation_price: Liquidation price
             - leverage: Position leverage
             - margin_used: Initial margin used
+            - stop_loss: Stop loss price (from lifecycle/playbook)
         """
         if not self.exchange:
             logger.warning("Blofin not initialized - cannot fetch positions")
@@ -376,9 +377,33 @@ class BlofinTradeSync:
                     continue
 
                 # Extract position data with safe defaults
+                side = 'LONG' if p.get('side') == 'long' else 'SHORT'
+                token = p.get('symbol', '').replace('/USDT:USDT', '').replace('/USDT', '')
+                
+                # Look up stop loss from lifecycle/playbook
+                stop_loss = None
+                try:
+                    # Try lifecycle store first
+                    lifecycle_id = find_lifecycle_for_position(token, side)
+                    if lifecycle_id:
+                        from src.utils.lifecycle_store import get_entry
+                        lc_entry = get_entry(lifecycle_id)
+                        if lc_entry:
+                            snapshot = lc_entry.get("execution_snapshot")
+                            if snapshot:
+                                stop_loss = snapshot.get("execution_levels", {}).get("stop_loss")
+                    
+                    # Fallback to current playbook execution state
+                    if not stop_loss:
+                        levels = self._get_setup_levels(token, side)
+                        if levels:
+                            stop_loss = levels.get("stop_loss")
+                except Exception as e:
+                    logger.debug(f"Failed to look up stop_loss for {token}: {e}")
+
                 position_data = {
                     'symbol': p.get('symbol', ''),
-                    'side': 'LONG' if p.get('side') == 'long' else 'SHORT',
+                    'side': side,
                     'size_usd': abs(float(p.get('notional') or 0)),
                     'entry_price': float(p.get('entryPrice') or 0),
                     'current_price': float(p.get('markPrice') or 0),
@@ -387,8 +412,9 @@ class BlofinTradeSync:
                     'liquidation_price': float(p.get('liquidationPrice') or 0),
                     'leverage': int(p.get('leverage') or 1),
                     'margin_used': float(p.get('initialMargin') or 0),
+                    'stop_loss': stop_loss,
                     # Extract token symbol for easier matching
-                    'token': p.get('symbol', '').replace('/USDT:USDT', '').replace('/USDT', ''),
+                    'token': token,
                 }
                 open_positions.append(position_data)
 

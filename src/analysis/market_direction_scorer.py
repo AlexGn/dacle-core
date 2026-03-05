@@ -137,6 +137,7 @@ class DirectionUpdate:
     previous_bias: Optional[str] = None
     timestamp: str = ""
     btc_price: float = 0.0
+    btc_range_7d: float = 0.0             # 7-day range percentage
     signal_quality: dict = field(default_factory=dict)
     data_quality: dict = field(default_factory=dict)
     economic_calendar: Optional[dict] = None
@@ -182,6 +183,7 @@ class DirectionUpdate:
             "previous_bias": self.previous_bias,
             "timestamp": self.timestamp,
             "btc_price": self.btc_price,
+            "btc_range_7d": round(self.btc_range_7d, 2),
             "signal_quality": self.signal_quality,
             "data_quality": self.data_quality,
             "narrative": generate_narrative_summary(self),
@@ -196,6 +198,7 @@ class DirectionUpdate:
                     )
                 ),
                 signals_total=len(self.signals),
+                btc_range_7d=self.btc_range_7d,
             ),
         }
         return d
@@ -220,18 +223,19 @@ def _score_btc_trend_mtf(
     price: float,
     ema20_4h: float,
     ema50_4h: float,
+    ema20_12h: float,
     ema20_1d: float,
 ) -> SignalResult:
-    """Multi-TF BTC Trend — scores alignment across 3 EMAs.
+    """Multi-TF BTC Trend — scores alignment across 4 EMAs.
 
     All EMAs aligned bullish (price above all): +1.0
     All EMAs aligned bearish (price below all): -1.0
-    Partial alignment: ±0.5 based on majority
+    Partial alignment: weighted based on majority
     No data: 0.0
     """
     w = load_weights()["btc_trend"]
 
-    if not price or not any([ema20_4h, ema50_4h, ema20_1d]):
+    if not price or not any([ema20_4h, ema50_4h, ema20_12h, ema20_1d]):
         return SignalResult("BTC Trend", w, 0.0, price, "N/A (insufficient data)", "⚪")
 
     # Count bullish/bearish alignment
@@ -245,6 +249,10 @@ def _score_btc_trend_mtf(
         above = price > ema50_4h
         checks.append(1 if above else -1)
         labels.append(f"EMA50(4H) {'✓' if above else '✗'}")
+    if ema20_12h:
+        above = price > ema20_12h
+        checks.append(1 if above else -1)
+        labels.append(f"EMA20(12H) {'✓' if above else '✗'}")
     if ema20_1d:
         above = price > ema20_1d
         checks.append(1 if above else -1)
@@ -930,7 +938,9 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     # ---- Fetch BTC data from Binance ----
     btc_price = btc_ema20 = btc_rsi = btc_trend = btc_change_24h = None
     btc_ema50_4h = None
+    btc_ema20_12h = None
     btc_ema20_1d = None
+    btc_range_7d = 0.0
     funding_rate_pct = None
     funding_rates_history: list = []
     oi_change_pct = None
@@ -996,6 +1006,23 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
                         ema50 = (p - ema50) * mult50 + ema50
                     btc_ema50_4h = ema50
 
+            # 12H klines for EMA20(12H) — David's macro confirmation
+            try:
+                twelve_resp = await client.get(
+                    "https://api.binance.com/api/v3/klines",
+                    params={"symbol": "BTCUSDT", "interval": "12h", "limit": 30}
+                )
+                if twelve_resp.status_code == 200:
+                    twelve_closes = [float(k[4]) for k in twelve_resp.json()]
+                    if len(twelve_closes) >= 20:
+                        mult_12 = 2 / 21
+                        ema_12 = sum(twelve_closes[:20]) / 20
+                        for p in twelve_closes[20:]:
+                            ema_12 = (p - ema_12) * mult_12 + ema_12
+                        btc_ema20_12h = ema_12
+            except Exception as e:
+                logger.debug(f"12H klines fetch failed: {e}")
+
             # Funding rate history (8 periods = 24h for enhanced scoring)
             try:
                 fr_resp = await client.get(
@@ -1049,13 +1076,22 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
                     params={"symbol": "BTCUSDT", "interval": "1d", "limit": 30}
                 )
                 if daily_resp.status_code == 200:
-                    daily_closes = [float(k[4]) for k in daily_resp.json()]
+                    daily_klines = daily_resp.json()
+                    daily_closes = [float(k[4]) for k in daily_klines]
                     if len(daily_closes) >= 20:
                         mult_d = 2 / 21
                         ema_d = sum(daily_closes[:20]) / 20
                         for p in daily_closes[20:]:
                             ema_d = (p - ema_d) * mult_d + ema_d
                         btc_ema20_1d = ema_d
+
+                    # Calculate 7-day range (high-low) %
+                    if len(daily_klines) >= 7:
+                        recent_7d = daily_klines[-7:]
+                        high_7d = max(float(k[2]) for k in recent_7d)
+                        low_7d = min(float(k[3]) for k in recent_7d)
+                        if btc_price:
+                            btc_range_7d = ((high_7d - low_7d) / low_7d) * 100
             except Exception as e:
                 logger.debug(f"Daily klines fetch failed: {e}")
 
@@ -1234,9 +1270,9 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
 
     # ---- Score all 11 core signals ----
     # Use multi-TF BTC trend when EMAs available, fallback to single-EMA
-    if btc_ema50_4h or btc_ema20_1d:
+    if btc_ema50_4h or btc_ema20_12h or btc_ema20_1d:
         btc_trend_signal = _score_btc_trend_mtf(
-            btc_price or 0, btc_ema20 or 0, btc_ema50_4h or 0, btc_ema20_1d or 0
+            btc_price or 0, btc_ema20 or 0, btc_ema50_4h or 0, btc_ema20_12h or 0, btc_ema20_1d or 0
         )
     else:
         btc_trend_signal = _score_btc_trend(btc_trend or "", btc_price or 0, btc_ema20 or 0)
@@ -1300,6 +1336,15 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     agreeing_weight = sum(s.weight for s in signals if s.score != 0 and (s.score > 0) == (composite > 0))
     confidence_pct = int((agreeing_weight / max(total_weight, 0.01)) * 100) if composite != 0 else 0
 
+    # Macro Alignment Check: David's February logic
+    # Check if 12h and 1D EMA alignment matches the bias
+    macro_aligned = False
+    if btc_price and btc_ema20_12h and btc_ema20_1d:
+        if bias == DirectionBias.BULLISH:
+            macro_aligned = (btc_price > btc_ema20_12h and btc_price > btc_ema20_1d)
+        elif bias == DirectionBias.BEARISH:
+            macro_aligned = (btc_price < btc_ema20_12h and btc_price < btc_ema20_1d)
+
     # ---- Key Level Proximity ----
     btc_levels = _load_btc_structure_levels()
     sherlock_levels = _load_sherlock_macro_levels()
@@ -1343,6 +1388,8 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
             "long_sizing": "0.75x (mixed signals)",
             "recommendation": "Both directions viable, smaller size",
         }
+
+    position_impl["macro_aligned"] = macro_aligned
 
     # ---- Data quality metadata (non-blocking, transparency only) ----
     core_signal_names = {
@@ -1391,6 +1438,7 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
         position_implications=position_impl,
         context_signals=context_signals,
         btc_price=btc_price or 0.0,
+        btc_range_7d=btc_range_7d,
         signal_quality=signal_quality,
         data_quality=data_quality,
     )
@@ -1851,6 +1899,7 @@ def classify_regime(
     score: float,
     signals_agreeing: int,
     signals_total: int,
+    btc_range_7d: float = 0.0,
 ) -> str:
     """Classify market regime from bias, score strength, and signal agreement.
 
@@ -1861,8 +1910,11 @@ def classify_regime(
       DISTRIBUTION  — Mildly bearish with low agreement (stealth selling)
       ROTATION      — Neutral with mixed signals
       CAPITULATION  — Extreme bearish with near-unanimous agreement
-      SQUEEZE       — Strong move with extreme positioning (future: tie to L/S ratio)
+      SIDEWAYS      — Range < 5% over 7 days (hunt risk high)
     """
+    if btc_range_7d > 0 and btc_range_7d < 5.0:
+        return "SIDEWAYS"
+
     abs_score = abs(score)
     agreement_pct = signals_agreeing / max(signals_total, 1)
 

@@ -64,20 +64,38 @@ class PositionCommands(commands.Cog):
 
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(
+                # Parallel fetch: Positions + Macro Direction
+                pos_task = session.get(
                     f"{self.api_url}/api/blofin/positions",
                     headers=self._build_api_headers(),
                     timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    if resp.status != 200:
-                        await safe_send(
-                            interaction,
-                            command_name="positions",
-                            logger=logger,
-                            content=f"Failed to fetch positions (HTTP {resp.status}). Is the API running?",
-                        )
-                        return
-                    data = await resp.json()
+                )
+                macro_task = session.get(
+                    f"{self.api_url}/api/macro/market-direction",
+                    headers=self._build_api_headers(),
+                    timeout=aiohttp.ClientTimeout(total=10),
+                )
+                
+                responses = await asyncio.gather(pos_task, macro_task, return_exceptions=True)
+                
+                # Process positions
+                if isinstance(responses[0], Exception) or responses[0].status != 200:
+                    await safe_send(
+                        interaction,
+                        command_name="positions",
+                        logger=logger,
+                        content=f"Failed to fetch positions. Is the API running?",
+                    )
+                    return
+                data = await responses[0].json()
+                positions = data.get("positions", [])
+
+                # Process macro (optional, won't block)
+                regime = "ROTATION"
+                if not isinstance(responses[1], Exception) and responses[1].status == 200:
+                    macro_data = await responses[1].json()
+                    regime = macro_data.get("regime", "ROTATION")
+                    
         except Exception as e:
             logger.error(f"/positions API call failed: {e}")
             await safe_send(
@@ -87,8 +105,6 @@ class PositionCommands(commands.Cog):
                 content=f"Failed to connect to DACLE API: {e}",
             )
             return
-
-        positions = data.get("positions", [])
 
         if not positions:
             embed = discord.Embed(
@@ -121,6 +137,7 @@ class PositionCommands(commands.Cog):
             pnl_usd = p.get("unrealized_pnl", 0)
             size_usd = p.get("size_usd", 0)
             leverage = p.get("leverage", "?")
+            stop_loss = p.get("stop_loss")
 
             # Health
             if pnl_pct <= -10:
@@ -139,12 +156,19 @@ class PositionCommands(commands.Cog):
                 health = "Monitoring"
                 emoji = "\U0001f7e1"
 
+            # L039 Hunt Risk Warning
+            l039_warning = ""
+            if regime == "SIDEWAYS" and stop_loss and current:
+                dist_pct = abs(current - stop_loss) / current * 100
+                if dist_pct < 2.0:
+                    l039_warning = f"\n\u26a0\ufe0f **HUNT RISK (L039)**: SL is tight ({dist_pct:.1f}%) in SIDEWAYS market"
+
             pnl_sign = "+" if pnl_usd >= 0 else ""
             field_value = (
                 f"{emoji} **{side}** | {leverage}x\n"
                 f"Entry: `${entry}` | Now: `${current}`\n"
                 f"P&L: `{pnl_sign}${pnl_usd:.2f}` (`{pnl_pct:+.1f}%`) | Size: `${size_usd:.0f}`\n"
-                f"Status: **{health}**"
+                f"Status: **{health}**{l039_warning}"
             )
 
             embed.add_field(name=f"${token}", value=field_value, inline=False)
