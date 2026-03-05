@@ -29,6 +29,8 @@ class FeatureFlag:
     DISCOVERY_ENSEMBLE_FUNNEL = "discovery_ensemble_funnel"
     DISCOVERY_RANK_DRIFT_TELEMETRY = "discovery_rank_drift_telemetry"
     CAPITAL_UNIFIED_PRIORITY = "capital_unified_priority"
+    POLYMARKET_WS_HARDENING_ENABLED = "polymarket_ws_hardening_enabled"
+    DEPLOY_RELIABILITY_V2_ENABLED = "deploy_reliability_v2_enabled"
 
 
 
