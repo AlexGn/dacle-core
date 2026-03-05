@@ -67,6 +67,7 @@ class UpdateCommands(commands.Cog):
         self.poll_timeout_seconds = self._parse_int(
             os.getenv("MANUAL_REFRESH_MAX_RUNTIME_SECONDS"), default=2400
         ) + 120
+        self._watcher_keys: set[str] = set()
 
     @staticmethod
     def _parse_int(value: Optional[str], default: int = 0) -> int:
@@ -537,6 +538,32 @@ class UpdateCommands(commands.Cog):
             f"Check `/discovery` again for current status."
         )
 
+    def _schedule_run_watcher(
+        self,
+        run_id: Optional[str],
+        channel: Optional[discord.abc.Messageable],
+    ) -> None:
+        if not run_id or channel is None:
+            return
+        channel_id = str(getattr(channel, "id", "unknown"))
+        key = f"{run_id}:{channel_id}"
+        if key in self._watcher_keys:
+            return
+        self._watcher_keys.add(key)
+
+        async def _watch() -> None:
+            try:
+                await self._watch_run_completion(run_id, channel)
+            finally:
+                self._watcher_keys.discard(key)
+
+        safe_create_task(
+            _watch(),
+            logger=logger,
+            error_channel=channel,
+            name=f"discovery-watch-{run_id}",
+        )
+
     @app_commands.command(
         name="discovery",
         description="Run full manual refresh and post fresh market snapshot",
@@ -575,18 +602,12 @@ class UpdateCommands(commands.Cog):
 
         if request_status == "started":
             await self._send_followup(interaction, self._started_message(run))
-            channel = interaction.channel
-            if channel is not None:
-                safe_create_task(
-                    self._watch_run_completion(str(run.get("run_id", "")), channel),
-                    logger=logger,
-                    error_channel=channel,
-                    name=f"discovery-watch-{run.get('run_id', 'unknown')}",
-                )
+            self._schedule_run_watcher(str(run.get("run_id", "")), interaction.channel)
             return
 
         if request_status == "already_running":
             await self._send_followup(interaction, self._already_running_message(run))
+            self._schedule_run_watcher(str(run.get("run_id", "")), interaction.channel)
             return
 
         if request_status == "cooldown":
