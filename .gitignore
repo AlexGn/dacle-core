@@ -182,6 +182,7 @@ reports/
 # Runtime audit & metrics (all files in these dirs are VPS-generated, not source)
 data/audit/
 data/metrics/
+data/execution/execution_guard_metrics.json
 polymarket_raw_frames.json
 
 # Prevent claude-mem from creating CLAUDE.md stubs everywhere (Session 382)
