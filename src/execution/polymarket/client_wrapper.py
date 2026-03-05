@@ -8,8 +8,10 @@ import logging
 import os
 import time
 import asyncio
+import json
+from pathlib import Path
 from decimal import Decimal, ROUND_DOWN, InvalidOperation
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Set, Tuple
 from src.monitoring.heartbeat_discord import post_to_discord
 
 try:
@@ -89,6 +91,14 @@ class PolymarketClientWrapper:
         # Latency monitoring (rolling last 10)
         self._order_latencies: List[float] = []
         self._latency_lock = asyncio.Lock()
+        order_guard_cfg = config.get("order_guard", {})
+        self._order_guard_cfg = order_guard_cfg if isinstance(order_guard_cfg, dict) else {}
+        self._order_submission_audit_path = str(
+            config.get(
+                "order_submission_audit_path",
+                "data/audit/polymarket_order_submissions.jsonl",
+            )
+        )
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
@@ -100,6 +110,183 @@ class PolymarketClientWrapper:
         if raw in {"0", "false", "no", "off"}:
             return False
         return bool(str(os.getenv("DISCORD_BOT_TOKEN", "")).strip())
+
+    @staticmethod
+    def _is_truthy_env(raw: Optional[str]) -> bool:
+        if raw is None:
+            return False
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _order_guard_enabled(self) -> bool:
+        env_override = os.getenv("POLY_ORDER_GUARD_ENABLED")
+        if env_override is not None:
+            return self._is_truthy_env(env_override)
+        return bool(self._order_guard_cfg.get("enabled", False))
+
+    def _resolve_allowed_strategies(self) -> Set[str]:
+        configured = self._order_guard_cfg.get("allowed_strategies")
+        if isinstance(configured, list) and configured:
+            return {str(s).strip().lower() for s in configured if str(s).strip()}
+        return {"maker", "fee_bearing_maker", "sniper", "combinatorial"}
+
+    def _resolve_allowed_token_ids(self) -> Set[str]:
+        env_tokens = os.getenv("POLY_ORDER_GUARD_ALLOWED_TOKENS", "").strip()
+        if env_tokens:
+            return {t.strip() for t in env_tokens.split(",") if t.strip()}
+        configured = self._order_guard_cfg.get("allowed_token_ids")
+        if isinstance(configured, list):
+            return {str(t).strip() for t in configured if str(t).strip()}
+        return set()
+
+    def _resolve_strategy_qty_band(self, strategy: str) -> Tuple[float, float]:
+        bands = self._order_guard_cfg.get("strategy_qty_bands", {})
+        if isinstance(bands, dict):
+            strategy_band = bands.get(strategy)
+            if isinstance(strategy_band, dict):
+                min_qty = float(strategy_band.get("min_qty", 0.0) or 0.0)
+                max_qty = float(strategy_band.get("max_qty", 0.0) or 0.0)
+                if max_qty > 0:
+                    return min_qty, max_qty
+
+        if strategy == "maker":
+            base = float(self.config.get("maker", {}).get("default_qty", 5.0) or 5.0)
+            return 0.0, float(self._order_guard_cfg.get("maker_max_qty", base * 2.0) or (base * 2.0))
+        if strategy == "fee_bearing_maker":
+            base = float(self.config.get("fee_bearing_maker", {}).get("default_qty", 5.0) or 5.0)
+            return 0.0, float(self._order_guard_cfg.get("fee_bearing_maker_max_qty", base * 2.0) or (base * 2.0))
+        if strategy == "sniper":
+            return 0.0, float(self._order_guard_cfg.get("sniper_max_qty", 200.0) or 200.0)
+        if strategy == "combinatorial":
+            return 0.0, float(self._order_guard_cfg.get("combinatorial_max_qty", 200.0) or 200.0)
+        return 0.0, float(self._order_guard_cfg.get("default_max_qty", 200.0) or 200.0)
+
+    def _validate_live_order_guard(
+        self,
+        *,
+        token_id: str,
+        strategy: Optional[str],
+        qty: float,
+        price: float,
+    ) -> Optional[Dict[str, Any]]:
+        if self.mode != "LIVE" or not self._order_guard_enabled():
+            return None
+
+        strategy_norm = str(strategy or "").strip().lower()
+        if not strategy_norm:
+            logger.critical("ORDER_GUARD_REJECT: missing strategy token=%s qty=%.6f price=%.6f", token_id, qty, price)
+            return {
+                "status": "error",
+                "error_code": "ORDER_GUARD_REJECT",
+                "error": "order guard reject: strategy is required in LIVE mode",
+            }
+
+        allowed_strategies = self._resolve_allowed_strategies()
+        if strategy_norm not in allowed_strategies:
+            logger.critical(
+                "ORDER_GUARD_REJECT: strategy=%s not in allowlist token=%s qty=%.6f price=%.6f",
+                strategy_norm,
+                token_id,
+                qty,
+                price,
+            )
+            return {
+                "status": "error",
+                "error_code": "ORDER_GUARD_REJECT",
+                "error": f"order guard reject: strategy '{strategy_norm}' not allowed",
+            }
+
+        allowed_token_ids = self._resolve_allowed_token_ids()
+        if allowed_token_ids and token_id not in allowed_token_ids:
+            logger.critical(
+                "ORDER_GUARD_REJECT: token=%s not in allowlist strategy=%s qty=%.6f price=%.6f",
+                token_id,
+                strategy_norm,
+                qty,
+                price,
+            )
+            return {
+                "status": "error",
+                "error_code": "ORDER_GUARD_REJECT",
+                "error": f"order guard reject: token '{token_id}' not allowed",
+            }
+
+        min_qty, max_qty = self._resolve_strategy_qty_band(strategy_norm)
+        if qty < min_qty:
+            logger.critical(
+                "ORDER_GUARD_REJECT: qty %.6f < min %.6f strategy=%s token=%s",
+                qty,
+                min_qty,
+                strategy_norm,
+                token_id,
+            )
+            return {
+                "status": "error",
+                "error_code": "ORDER_GUARD_REJECT",
+                "error": f"order guard reject: qty {qty} below min {min_qty} for {strategy_norm}",
+            }
+        if max_qty > 0 and qty > max_qty:
+            logger.critical(
+                "ORDER_GUARD_REJECT: qty %.6f > max %.6f strategy=%s token=%s",
+                qty,
+                max_qty,
+                strategy_norm,
+                token_id,
+            )
+            return {
+                "status": "error",
+                "error_code": "ORDER_GUARD_REJECT",
+                "error": f"order guard reject: qty {qty} exceeds max {max_qty} for {strategy_norm}",
+            }
+
+        max_notional = float(self._order_guard_cfg.get("max_order_notional_usd", 0.0) or 0.0)
+        notional = float(price) * float(qty)
+        if max_notional > 0 and notional > max_notional:
+            logger.critical(
+                "ORDER_GUARD_REJECT: notional %.6f > max_notional %.6f strategy=%s token=%s",
+                notional,
+                max_notional,
+                strategy_norm,
+                token_id,
+            )
+            return {
+                "status": "error",
+                "error_code": "ORDER_GUARD_REJECT",
+                "error": f"order guard reject: notional {notional} exceeds {max_notional}",
+            }
+
+        return None
+
+    def _append_order_submission_audit(
+        self,
+        *,
+        token_id: str,
+        side: str,
+        qty: float,
+        price: float,
+        order_type: str,
+        strategy: str,
+        order_id: str,
+        client_order_id: str,
+    ) -> None:
+        try:
+            path = Path(self._order_submission_audit_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            entry = {
+                "ts": time.time(),
+                "mode": self.mode,
+                "token_id": token_id,
+                "side": side,
+                "qty": qty,
+                "price": price,
+                "order_type": order_type,
+                "strategy": strategy,
+                "order_id": order_id,
+                "client_order_id": client_order_id,
+            }
+            with path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, sort_keys=True) + "\n")
+        except Exception as exc:
+            logger.warning("Failed to append order submission audit: %s", exc)
 
     def _format_entry_alert(
         self,
@@ -331,6 +518,15 @@ class PolymarketClientWrapper:
         if not client_order_id:
             client_order_id = f"dacle_{int(time.time() * 1000)}"
 
+        guard_error = self._validate_live_order_guard(
+            token_id=token_id,
+            strategy=strategy,
+            qty=qty_norm,
+            price=norm_price,
+        )
+        if guard_error:
+            return guard_error
+
         # 4. Shadow Mode Bypass
         if self._is_shadow_mode():
             logger.info(f"[SHADOW] Post Order: {side_val} {qty_norm} @ {norm_price} (token={token_id}, type={order_type})")
@@ -430,6 +626,17 @@ class PolymarketClientWrapper:
 
             if resp and resp.get("success"):
                 order_id = resp.get("orderID")
+                strategy_for_audit = str(strategy or "unknown")
+                self._append_order_submission_audit(
+                    token_id=token_id,
+                    side=side_val,
+                    qty=qty_norm,
+                    price=norm_price,
+                    order_type=order_type,
+                    strategy=strategy_for_audit,
+                    order_id=str(order_id),
+                    client_order_id=client_order_id,
+                )
                 if entry_alert:
                     self._fire_and_forget_entry_alert(
                         token_id=token_id,
@@ -439,7 +646,7 @@ class PolymarketClientWrapper:
                         order_type=order_type,
                         order_id=str(order_id),
                         mode=self.mode,
-                        strategy=str(strategy or "unknown"),
+                        strategy=strategy_for_audit,
                     )
                 return {
                     "status": "success",
