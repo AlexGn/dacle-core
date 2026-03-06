@@ -42,7 +42,10 @@ class LighterRealClient:
         self.signer = signer
         self.risk_ledger = risk_ledger
         self.market_id = config.get("market_id", 1)
-        self.account_type = config.get("account_type", "STANDARD")
+        configured_account_tier = config.get("account_tier", config.get("account_type", "STANDARD"))
+        self.account_tier = self._normalize_account_tier(configured_account_tier)
+        # Backward-compatible alias for older callers that still read account_type.
+        self.account_type = self.account_tier
         self.mode = str(config.get("mode", "SHADOW")).upper()
         configured_account_index = config.get("account_index")
         if configured_account_index is None and self.mode == "LIVE":
@@ -604,8 +607,8 @@ class LighterRealClient:
             if configured is not None:
                 return configured
 
-        # Prefer active STANDARD accounts when available.
-        active_standard: List[int] = []
+        preferred_account_type = self._preferred_account_type_id()
+        active_preferred: List[int] = []
         active_any: List[int] = []
         any_index: List[int] = []
         for account in sub_accounts:
@@ -617,8 +620,8 @@ class LighterRealClient:
             any_index.append(idx)
             is_active = self._to_int(account.get("status"), default=0) == 1
             account_type = self._to_int(account.get("account_type"), default=-1)
-            if is_active and account_type == 0:
-                active_standard.append(idx)
+            if is_active and account_type == preferred_account_type:
+                active_preferred.append(idx)
             if is_active:
                 active_any.append(idx)
 
@@ -634,8 +637,8 @@ class LighterRealClient:
             )
             return None
 
-        if active_standard:
-            return sorted(active_standard)[0]
+        if active_preferred:
+            return sorted(active_preferred)[0]
         if active_any:
             return sorted(active_any)[0]
         if any_index:
@@ -1154,6 +1157,19 @@ class LighterRealClient:
             if normalized in {"0", "false", "no", "off"}:
                 return False
         return None
+
+    def _normalize_account_tier(self, value: Any) -> str:
+        normalized = str(value or "STANDARD").strip().upper()
+        if normalized in {"0", "STANDARD"}:
+            return "STANDARD"
+        if normalized in {"1", "PREMIUM"}:
+            return "PREMIUM"
+        logger.warning("Unknown account_tier=%r, defaulting to STANDARD", value)
+        return "STANDARD"
+
+    def _preferred_account_type_id(self) -> int:
+        # Lighter account_type mapping: 0=STANDARD, 1=PREMIUM.
+        return 1 if self.account_tier == "PREMIUM" else 0
 
     async def get_balance(self) -> dict:
         """Fetch account balance via REST.
