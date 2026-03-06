@@ -139,6 +139,8 @@ class PolymarketCTFExecutor:
         )
 
         self.mode = config.get("mode", "SHADOW").upper()
+        self._nonce_lock = asyncio.Lock()
+        self._pending_nonce: Optional[int] = None
         self._init_contracts()
 
     def _init_contracts(self):
@@ -192,6 +194,21 @@ class PolymarketCTFExecutor:
             self.account = None
             self.address = None
             return False
+
+    async def _get_next_nonce(self) -> int:
+        """Allocate a monotonic nonce cursor for this signer to avoid local collisions."""
+        if not self._ensure_account() or not self.address:
+            raise RuntimeError("Signer not configured")
+
+        async with self._nonce_lock:
+            chain_nonce = int(
+                await self._call_with_rpc_retry(self.w3.eth.get_transaction_count, self.address)
+            )
+            if self._pending_nonce is None or chain_nonce > self._pending_nonce:
+                self._pending_nonce = chain_nonce
+            nonce = self._pending_nonce
+            self._pending_nonce += 1
+            return int(nonce)
 
     @staticmethod
     def _receipt_value(receipt: Any, key: str, default: Any = None) -> Any:
@@ -247,7 +264,7 @@ class PolymarketCTFExecutor:
         partition = [1, 2]
 
         try:
-            nonce = await self._call_with_rpc_retry(self.w3.eth.get_transaction_count, self.address)
+            nonce = await self._get_next_nonce()
             gas_price = await self._call_with_rpc_retry(lambda: self.w3.eth.gas_price)
             
             # Prepare transaction
@@ -306,7 +323,7 @@ class PolymarketCTFExecutor:
         partition = [1, 2]
 
         try:
-            nonce = await self._call_with_rpc_retry(self.w3.eth.get_transaction_count, self.address)
+            nonce = await self._get_next_nonce()
             gas_price = await self._call_with_rpc_retry(lambda: self.w3.eth.gas_price)
             
             tx = await self._call_with_rpc_retry(
@@ -381,3 +398,31 @@ class PolymarketCTFExecutor:
         except Exception as e:
             logger.error(f"Failed to fetch conditional balance: {e}")
             return 0.0
+
+    async def get_conditional_balance_checked(
+        self,
+        condition_id: str,
+        index_set: int,
+        parent_collection_id: str = "0x" + "0" * 64,
+    ) -> Dict[str, Any]:
+        """Typed conditional-balance fetch to avoid silent error masking."""
+        if not self.address:
+            return {
+                "status": "UNKNOWN",
+                "balance": 0.0,
+                "error": "wallet address unavailable",
+            }
+
+        try:
+            pos_id = await self.get_position_id(condition_id, index_set, parent_collection_id)
+            raw_bal = await self._call_with_rpc_retry(
+                self.ctf_contract.functions.balanceOf(self.address, pos_id).call
+            )
+            return {
+                "status": "OK",
+                "balance": float(raw_bal) / 1_000_000,
+                "error": None,
+            }
+        except Exception as e:
+            logger.error(f"Failed to fetch conditional balance (checked): {e}")
+            return {"status": "UNKNOWN", "balance": 0.0, "error": str(e)}
