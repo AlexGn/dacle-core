@@ -65,7 +65,11 @@ class LighterRealClient:
             else self.mode == "LIVE"
         )
         enforce_tier_match = self._to_bool(config.get("enforce_account_tier_match"))
-        self.enforce_account_tier_match = bool(enforce_tier_match) if enforce_tier_match is not None else False
+        self.enforce_account_tier_match = (
+            bool(enforce_tier_match)
+            if enforce_tier_match is not None
+            else self.mode == "LIVE"
+        )
         self._shadow_order_counter = 0
         self.degraded_snapshot_spread_bps = float(config.get("degraded_snapshot_spread_bps", 2.0))
         
