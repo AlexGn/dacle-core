@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Errors that warrant failover to a secondary API URL.
 _FAILOVER_ERRORS = (asyncio.TimeoutError, aiohttp.ClientConnectionError, aiohttp.ServerDisconnectedError)
+_FAILOVER_HTTP_STATUS_CODES = {502, 503, 504, 520, 522, 524}
 
 # Valid order types and their Lighter API timeInForce mapping.
 _ORDER_TYPE_TO_TIF = {
@@ -373,6 +374,17 @@ class LighterRealClient:
                         result["filled_qty"] = data.get("filled_qty") or data.get("filledQty")
                         result["filled_price"] = data.get("filled_price") or data.get("filledPrice")
                         return result
+
+                    if self._is_retryable_failover_status(status):
+                        msg = self._extract_error_message(response_payload) or err_text or f"HTTP {status}"
+                        last_error = RuntimeError(f"HTTP {status}: {msg}")
+                        logger.warning(
+                            "Failover: %s returned retryable HTTP %s (%s), trying next URL",
+                            url,
+                            status,
+                            msg,
+                        )
+                        continue
                     
                     # Structured error classification
                     error_code = "API_ERROR"
@@ -387,7 +399,7 @@ class LighterRealClient:
                             error_code = "NONCE_ERROR"
                     return {
                         "status": "error",
-                        "error": f"HTTP {status}: {err_text}",
+                        "error": f"HTTP {status}: {self._extract_error_message(response_payload) or err_text}",
                         "error_code": error_code,
                         "http_status": status,
                     }
@@ -438,6 +450,16 @@ class LighterRealClient:
                     limit=limit,
                     api_url=api_url,
                 )
+                if result.get("status") == "error" and self._is_retryable_fill_result(result):
+                    err = str(result.get("error") or "retryable fills error")
+                    logger.warning(
+                        "Failover: fetch_fills on %s returned retryable error (%s), trying next URL",
+                        api_url,
+                        err,
+                    )
+                    last_error = RuntimeError(err)
+                    self._resolved_account_index = saved_account_index
+                    continue
                 return result
             except _FAILOVER_ERRORS as e:
                 logger.warning(f"Failover: fetch_fills on {api_url} failed ({type(e).__name__}: {e}), trying next URL")
@@ -647,7 +669,12 @@ class LighterRealClient:
         status, payload, err_text = await self._get_json(session, url, params=params)
         if status != 200:
             msg = self._extract_error_message(payload) or err_text
-            res = {"status": "error", "error": f"HTTP {status}: {msg}"}
+            res = {
+                "status": "error",
+                "error": f"HTTP {status}: {msg}",
+                "http_status": status,
+                "retryable_failover": self._is_retryable_failover_status(status),
+            }
             if status == 429 and isinstance(payload, dict) and "retry_after_sec" in payload:
                 res["retry_after_sec"] = payload["retry_after_sec"]
             return res
@@ -675,7 +702,12 @@ class LighterRealClient:
         status, payload, err_text = await self._get_json(session, url, params=params)
         if status != 200:
             msg = self._extract_error_message(payload) or err_text
-            res = {"status": "error", "error": f"HTTP {status}: {msg}"}
+            res = {
+                "status": "error",
+                "error": f"HTTP {status}: {msg}",
+                "http_status": status,
+                "retryable_failover": self._is_retryable_failover_status(status),
+            }
             if status == 429 and isinstance(payload, dict) and "retry_after_sec" in payload:
                 res["retry_after_sec"] = payload["retry_after_sec"]
             return res
@@ -703,6 +735,21 @@ class LighterRealClient:
             return max(0.0, val)
         except (ValueError, TypeError):
             return 0.0
+
+    def _is_retryable_failover_status(self, status: Any) -> bool:
+        parsed = self._to_int(status, default=0) or 0
+        return parsed in _FAILOVER_HTTP_STATUS_CODES
+
+    def _is_retryable_fill_result(self, result: Dict[str, Any]) -> bool:
+        if not isinstance(result, dict):
+            return False
+        if bool(result.get("retryable_failover")):
+            return True
+        status = self._to_int(result.get("http_status"), default=0) or 0
+        if self._is_retryable_failover_status(status):
+            return True
+        err = str(result.get("error") or "").upper()
+        return any(f"HTTP {code}" in err for code in _FAILOVER_HTTP_STATUS_CODES)
 
     async def _get_json(
         self,
