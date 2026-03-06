@@ -56,12 +56,16 @@ class LighterRealClient:
         self.auth_refresh_interval_sec = int(config.get("auth_refresh_interval_sec", 1200))
         self.auth_token = (config.get("auth_token") or os.getenv("SCALPER_AUTH_TOKEN") or "").strip()
         self._resolved_account_index: Optional[int] = self._to_int(self.account_index)
+        self._resolved_account_type: Optional[int] = None
+        self._account_tier_mismatch: bool = False
         explicit_account_required = self._to_bool(config.get("require_explicit_account_index"))
         self.require_explicit_account_index = (
             bool(explicit_account_required)
             if explicit_account_required is not None
             else self.mode == "LIVE"
         )
+        enforce_tier_match = self._to_bool(config.get("enforce_account_tier_match"))
+        self.enforce_account_tier_match = bool(enforce_tier_match) if enforce_tier_match is not None else False
         self._shadow_order_counter = 0
         self.degraded_snapshot_spread_bps = float(config.get("degraded_snapshot_spread_bps", 2.0))
         
@@ -148,11 +152,15 @@ class LighterRealClient:
         explicit = self._to_int(self.account_index)
         if explicit is not None:
             self._resolved_account_index = explicit
+            self._resolved_account_type = None
+            self._account_tier_mismatch = False
             return explicit, None
 
         env_idx = self._to_int(os.getenv("SCALPER_ACCOUNT_INDEX"))
         if env_idx is not None:
             self._resolved_account_index = env_idx
+            self._resolved_account_type = None
+            self._account_tier_mismatch = False
             return env_idx, None
 
         if not self.signer:
@@ -179,6 +187,8 @@ class LighterRealClient:
         account_index, idx_err = await self._resolve_runtime_account_index()
         if idx_err or account_index is None:
             return {"status": "error", "retryable": True, "error": f"account_index_unavailable: {idx_err}"}
+        if self.enforce_account_tier_match and self._account_tier_mismatch:
+            return self._account_tier_mismatch_error(context="auth_refresh")
 
         api_key_index = self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=0)
         token_ttl_sec = self._to_int(os.getenv("SCALPER_AUTH_TOKEN_TTL_SEC"), default=None)
@@ -300,6 +310,8 @@ class LighterRealClient:
 
         if not self.signer:
             return {"status": "error", "error": "No signer provided for LIVE mode."}
+        if self.enforce_account_tier_match and self._account_tier_mismatch:
+            return self._account_tier_mismatch_error(context="create_order")
 
         # 1. Pre-send check against real-time risk ledger
         if self.risk_ledger:
@@ -564,6 +576,10 @@ class LighterRealClient:
             cached = await self.cache.get_account_info(self.signer.address)
             if cached and "index" in cached:
                 self._resolved_account_index = int(cached["index"])
+                self._set_account_tier_resolution(
+                    account_index=self._resolved_account_index,
+                    account_type=self._to_int(cached.get("account_type")),
+                )
                 logger.debug(f"Resolved account index {self._resolved_account_index} from cache.")
                 return self._resolved_account_index, None
 
@@ -594,10 +610,17 @@ class LighterRealClient:
             return None, "Unable to resolve account index from sub_accounts."
 
         self._resolved_account_index = chosen
+        self._set_account_tier_resolution(
+            account_index=chosen,
+            account_type=self._lookup_account_type(sub_accounts, chosen),
+        )
         
         # Phase 2: Persist to cache
         if self.cache:
-            await self.cache.set_account_info(self.signer.address, {"index": chosen})
+            cache_payload: Dict[str, Any] = {"index": chosen}
+            if self._resolved_account_type is not None:
+                cache_payload["account_type"] = self._resolved_account_type
+            await self.cache.set_account_info(self.signer.address, cache_payload)
             
         return chosen, None
 
@@ -1170,6 +1193,39 @@ class LighterRealClient:
     def _preferred_account_type_id(self) -> int:
         # Lighter account_type mapping: 0=STANDARD, 1=PREMIUM.
         return 1 if self.account_tier == "PREMIUM" else 0
+
+    def _lookup_account_type(self, sub_accounts: List[Dict[str, Any]], account_index: int) -> Optional[int]:
+        for account in sub_accounts:
+            if not isinstance(account, dict):
+                continue
+            if self._to_int(account.get("index")) == int(account_index):
+                return self._to_int(account.get("account_type"))
+        return None
+
+    def _set_account_tier_resolution(self, account_index: int, account_type: Optional[int]) -> None:
+        self._resolved_account_type = self._to_int(account_type)
+        if self._resolved_account_type is None:
+            self._account_tier_mismatch = False
+            return
+        preferred = self._preferred_account_type_id()
+        self._account_tier_mismatch = self._resolved_account_type != preferred
+        if self._account_tier_mismatch:
+            logger.warning(
+                "ACCOUNT_TIER_MISMATCH configured=%s resolved_type=%s account_index=%s",
+                self.account_tier,
+                self._resolved_account_type,
+                account_index,
+            )
+
+    def _account_tier_mismatch_error(self, context: str) -> Dict[str, Any]:
+        return {
+            "status": "error",
+            "error_code": "ACCOUNT_TIER_MISMATCH",
+            "error": (
+                f"account_tier_mismatch: configured={self.account_tier} "
+                f"resolved_type={self._resolved_account_type} context={context}"
+            ),
+        }
 
     async def get_balance(self) -> dict:
         """Fetch account balance via REST.
