@@ -31,10 +31,26 @@ class VirtualLighter:
         self.latency_penalty_ms = 300
         self.free_tx_interval = 15.0
         self.last_free_tx_ts = 0.0
+        self.auth_token = "virtual-auth-token"
+        self.force_create_order_http_status: Optional[int] = None
+        self.force_fetch_fills_http_status: Optional[int] = None
         
         self.orders: Dict[str, VirtualOrder] = {}
         self.positions: Dict[str, float] = {}
+        self.fills: List[Dict[str, Any]] = []
         self.nonce_counter = 0
+
+    @staticmethod
+    def _error_payload(status: int, message: str) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "status": "error",
+            "error": f"HTTP {status}: {message}",
+            "error_code": "API_ERROR",
+            "http_status": int(status),
+        }
+        if int(status) in {502, 503, 504, 520, 522, 524}:
+            payload["retryable_failover"] = True
+        return payload
         
     async def create_order(
         self,
@@ -50,6 +66,12 @@ class VirtualLighter:
         """
         Simulates the Lighter Standard Tier order creation.
         """
+        if not str(self.auth_token or "").strip():
+            return self._error_payload(401, "Unauthorized")
+
+        if self.force_create_order_http_status:
+            return self._error_payload(int(self.force_create_order_http_status), "Simulated create_order failure")
+
         # 1. Nonce Check
         if nonce < self.nonce_counter:
             return {"error": {"code": 400, "message": "Invalid Nonce"}}
@@ -88,9 +110,23 @@ class VirtualLighter:
 
         # IOC semantics in the simulator are immediate taker acks; include explicit fill fields
         # so daemon fill-truth logic does not need to infer fills from missing data.
-        if str(order_type or "IOC").upper() == "IOC":
+        normalized_order_type = str(order_type or "IOC").upper()
+        if normalized_order_type == "IOC":
             response["filled_qty"] = float(qty)
             response["filled_price"] = float(price)
+            self.fills.append(
+                {
+                    "trade_id": f"v_fill_{int(time.time() * 1000)}",
+                    "order_id": order_id,
+                    "symbol": symbol,
+                    "side": str(side or "").upper(),
+                    "price": float(price),
+                    "qty": float(qty),
+                    "timestamp": int(time.time() * 1000),
+                    "role": "taker",
+                    "order_type": normalized_order_type,
+                }
+            )
 
         return response
 
@@ -107,3 +143,24 @@ class VirtualLighter:
         """Stub for interface parity with LighterRealClient."""
         self.orders.pop(str(order_id), None)
         return {"status": "success", "order_id": str(order_id), "nonce": nonce}
+
+    async def fetch_fills(
+        self,
+        limit: int = 50,
+        since_ts: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> dict:
+        """Simulator fill-history endpoint for GhostSweeper / fill polling parity."""
+        _ = cursor  # Cursor is accepted for parity but ignored in simulator.
+        if not str(self.auth_token or "").strip():
+            return self._error_payload(401, "Unauthorized")
+        if self.force_fetch_fills_http_status:
+            return self._error_payload(int(self.force_fetch_fills_http_status), "Simulated fetch_fills failure")
+
+        fills = list(self.fills)
+        if since_ts is not None:
+            since = int(since_ts)
+            fills = [fill for fill in fills if int(fill.get("timestamp", 0)) >= since]
+        if limit > 0:
+            fills = fills[-int(limit) :]
+        return {"status": "success", "fills": fills, "source": "virtual"}
