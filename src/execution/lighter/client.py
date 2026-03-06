@@ -413,20 +413,20 @@ class LighterRealClient:
         if not self.signer:
             return {"status": "error", "error": "No signer available for fills endpoint."}
 
-        original_api_url = self.api_url
         last_error: Optional[Exception] = None
 
         for api_url in self.api_urls:
-            self.api_url = api_url
             # Reset resolved account index so it re-resolves against the new URL.
             saved_account_index = self._resolved_account_index
             if len(self.api_urls) > 1:
                 self._resolved_account_index = self._to_int(self.account_index)
             try:
                 result = await self._fetch_fills_inner(
-                    since_ts=since_ts, cursor=cursor, limit=limit,
+                    since_ts=since_ts,
+                    cursor=cursor,
+                    limit=limit,
+                    api_url=api_url,
                 )
-                self.api_url = original_api_url
                 return result
             except _FAILOVER_ERRORS as e:
                 logger.warning(f"Failover: fetch_fills on {api_url} failed ({type(e).__name__}: {e}), trying next URL")
@@ -434,12 +434,10 @@ class LighterRealClient:
                 self._resolved_account_index = saved_account_index
                 continue
             except Exception as e:
-                self.api_url = original_api_url
                 self._resolved_account_index = saved_account_index
                 logger.error(f"Fills Fetch Error: {e}")
                 return {"status": "error", "error": str(e)}
 
-        self.api_url = original_api_url
         error_msg = str(last_error) if last_error else "All API URLs exhausted"
         logger.error(f"Fills Fetch Error (all URLs failed): {error_msg}")
         return {"status": "error", "error": error_msg}
@@ -449,10 +447,12 @@ class LighterRealClient:
         since_ts: Optional[int] = None,
         cursor: Optional[str] = None,
         limit: int = 100,
+        api_url: Optional[str] = None,
     ) -> dict:
         """Inner fetch_fills logic; may raise _FAILOVER_ERRORS for URL failover."""
+        base_api_url = str(api_url or self.api_url).rstrip("/")
         async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-            account_index, idx_err = await self._resolve_account_index(session)
+            account_index, idx_err = await self._resolve_account_index(session, api_url=base_api_url)
             if idx_err:
                 return {"status": "error", "error": idx_err}
 
@@ -461,6 +461,7 @@ class LighterRealClient:
                 account_index=account_index,
                 cursor=cursor,
                 limit=limit,
+                api_url=base_api_url,
             )
 
             if trades_result["status"] == "success":
@@ -484,7 +485,11 @@ class LighterRealClient:
                 return {"status": "error", "error": trades_error}
 
             # Fallback path when auth token missing/invalid or endpoint shape drifts.
-            fallback_result = await self._fetch_recent_trades(session=session, limit=limit)
+            fallback_result = await self._fetch_recent_trades(
+                session=session,
+                limit=limit,
+                api_url=base_api_url,
+            )
             if fallback_result["status"] != "success":
                 return {
                     "status": "error",
@@ -508,7 +513,11 @@ class LighterRealClient:
                 "warning": trades_result.get("error"),
             }
 
-    async def _resolve_account_index(self, session: aiohttp.ClientSession) -> Tuple[Optional[int], Optional[str]]:
+    async def _resolve_account_index(
+        self,
+        session: aiohttp.ClientSession,
+        api_url: Optional[str] = None,
+    ) -> Tuple[Optional[int], Optional[str]]:
         if self._resolved_account_index is not None:
             return self._resolved_account_index, None
         if not self.signer or not self.signer.address:
@@ -522,7 +531,8 @@ class LighterRealClient:
                 logger.debug(f"Resolved account index {self._resolved_account_index} from cache.")
                 return self._resolved_account_index, None
 
-        url = f"{self.api_url}/accountsByL1Address"
+        base_api_url = str(api_url or self.api_url).rstrip("/")
+        url = f"{base_api_url}/accountsByL1Address"
         status, payload, err_text = await self._get_json(
             session,
             url,
@@ -595,8 +605,10 @@ class LighterRealClient:
         account_index: int,
         cursor: Optional[str],
         limit: int,
+        api_url: Optional[str] = None,
     ) -> Dict[str, Any]:
-        url = f"{self.api_url}/trades"
+        base_api_url = str(api_url or self.api_url).rstrip("/")
+        url = f"{base_api_url}/trades"
         params: Dict[str, Any] = {
             "sort_by": "timestamp",
             "sort_dir": "desc",
@@ -628,8 +640,14 @@ class LighterRealClient:
             "next_cursor": payload.get("next_cursor") or payload.get("nextCursor") or payload.get("cursor"),
         }
 
-    async def _fetch_recent_trades(self, session: aiohttp.ClientSession, limit: int) -> Dict[str, Any]:
-        url = f"{self.api_url}/recentTrades"
+    async def _fetch_recent_trades(
+        self,
+        session: aiohttp.ClientSession,
+        limit: int,
+        api_url: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        base_api_url = str(api_url or self.api_url).rstrip("/")
+        url = f"{base_api_url}/recentTrades"
         params = {"market_id": self.market_id, "limit": max(1, min(int(limit), 100))}
         status, payload, err_text = await self._get_json(session, url, params=params)
         if status != 200:
@@ -686,7 +704,7 @@ class LighterRealClient:
             if payload is None:
                 text = await resp.text()
                 if status == 429 and retry_after_sec > 0:
-                    text = f"{text} (Retry-After: {retry_after_sec:.1f}s)".strip()
+                    text = f"{text} (Retry-After: {retry_after_sec:g}s)".strip()
                 return status, None, text
             
             if status == 429:
@@ -694,7 +712,7 @@ class LighterRealClient:
                     payload = dict(payload)
                     message = self._extract_error_message(payload)
                     if retry_after_sec > 0:
-                        payload["message"] = f"{message} (Retry-After: {retry_after_sec:.1f}s)".strip()
+                        payload["message"] = f"{message} (Retry-After: {retry_after_sec:g}s)".strip()
                     payload["retry_after_sec"] = retry_after_sec
             return status, payload, ""
 
