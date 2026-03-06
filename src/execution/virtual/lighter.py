@@ -38,6 +38,7 @@ class VirtualLighter:
         self.orders: Dict[str, VirtualOrder] = {}
         self.positions: Dict[str, float] = {}
         self.fills: List[Dict[str, Any]] = []
+        self._fill_seq = 0
         self.nonce_counter = 0
 
     @staticmethod
@@ -51,6 +52,34 @@ class VirtualLighter:
         if int(status) in {502, 503, 504, 520, 522, 524}:
             payload["retryable_failover"] = True
         return payload
+
+    def _append_fill(
+        self,
+        *,
+        order_id: str,
+        symbol: str,
+        side: str,
+        price: float,
+        qty: float,
+        role: str,
+        order_type: str,
+        timestamp_ms: Optional[int] = None,
+    ) -> None:
+        self._fill_seq += 1
+        ts_ms = int(timestamp_ms if timestamp_ms is not None else int(time.time() * 1000))
+        self.fills.append(
+            {
+                "trade_id": f"v_fill_{self._fill_seq}",
+                "order_id": str(order_id),
+                "symbol": str(symbol),
+                "side": str(side or "").upper(),
+                "price": float(price),
+                "qty": float(qty),
+                "timestamp": ts_ms,
+                "role": str(role or "taker"),
+                "order_type": str(order_type or "IOC").upper(),
+            }
+        )
         
     async def create_order(
         self,
@@ -114,18 +143,14 @@ class VirtualLighter:
         if normalized_order_type == "IOC":
             response["filled_qty"] = float(qty)
             response["filled_price"] = float(price)
-            self.fills.append(
-                {
-                    "trade_id": f"v_fill_{int(time.time() * 1000)}",
-                    "order_id": order_id,
-                    "symbol": symbol,
-                    "side": str(side or "").upper(),
-                    "price": float(price),
-                    "qty": float(qty),
-                    "timestamp": int(time.time() * 1000),
-                    "role": "taker",
-                    "order_type": normalized_order_type,
-                }
+            self._append_fill(
+                order_id=order_id,
+                symbol=symbol,
+                side=side,
+                price=price,
+                qty=qty,
+                role="taker",
+                order_type=normalized_order_type,
             )
 
         return response
@@ -161,6 +186,49 @@ class VirtualLighter:
         if since_ts is not None:
             since = int(since_ts)
             fills = [fill for fill in fills if int(fill.get("timestamp", 0)) >= since]
+
+        start = 0
+        if cursor not in (None, ""):
+            try:
+                start = max(0, int(cursor))
+            except Exception:
+                start = 0
+
         if limit > 0:
-            fills = fills[-int(limit) :]
-        return {"status": "success", "fills": fills, "source": "virtual"}
+            page = fills[start : start + int(limit)]
+        else:
+            page = fills[start:]
+        next_cursor = None
+        next_offset = start + len(page)
+        if next_offset < len(fills):
+            next_cursor = str(next_offset)
+        return {
+            "status": "success",
+            "fills": page,
+            "source": "virtual",
+            "next_cursor": next_cursor,
+        }
+
+    def inject_fill(
+        self,
+        *,
+        order_id: str,
+        symbol: str,
+        side: str,
+        price: float,
+        qty: float,
+        role: str = "maker",
+        order_type: str = "POST_ONLY",
+        timestamp_ms: Optional[int] = None,
+    ) -> None:
+        """Inject a synthetic fill for replay/chaos tests."""
+        self._append_fill(
+            order_id=order_id,
+            symbol=symbol,
+            side=side,
+            price=price,
+            qty=qty,
+            role=role,
+            order_type=order_type,
+            timestamp_ms=timestamp_ms,
+        )
