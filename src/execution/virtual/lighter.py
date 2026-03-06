@@ -176,7 +176,6 @@ class VirtualLighter:
         cursor: Optional[str] = None,
     ) -> dict:
         """Simulator fill-history endpoint for GhostSweeper / fill polling parity."""
-        _ = cursor  # Cursor is accepted for parity but ignored in simulator.
         if not str(self.auth_token or "").strip():
             return self._error_payload(401, "Unauthorized")
         if self.force_fetch_fills_http_status:
