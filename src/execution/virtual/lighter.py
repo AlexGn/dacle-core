@@ -79,12 +79,20 @@ class VirtualLighter:
         
         logger.info(f"VirtualOrder Placed: {side} {qty} {symbol} @ {price} (Delayed {self.latency_penalty_ms}ms)")
         
-        return {
+        response = {
             "status": "success",
             "order_id": order_id,
             "nonce": nonce,
-            "timestamp": time.time()
+            "timestamp": time.time(),
         }
+
+        # IOC semantics in the simulator are immediate taker acks; include explicit fill fields
+        # so daemon fill-truth logic does not need to infer fills from missing data.
+        if str(order_type or "IOC").upper() == "IOC":
+            response["filled_qty"] = float(qty)
+            response["filled_price"] = float(price)
+
+        return response
 
     async def get_balance(self) -> dict:
         return {"USDC": 10000.0, "BTC": 0.0}
