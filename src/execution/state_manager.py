@@ -413,6 +413,39 @@ class ExecutionStateManager:
             scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
             return self._get_pretrade_snapshot_logic(scoped_key)
 
+    def list_active_intents(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Return intents considered active for monitor workflows.
+        Active intents are non-terminal, exchange-facing states.
+        """
+        active_states = {
+            ExecutionState.PROTECTION_ARMED,
+            ExecutionState.SUBMITTED,
+            ExecutionState.PARTIALLY_FILLED,
+        }
+        return self._list_intents_by_states(active_states, account_id=account_id)
+
+    def list_reconcilable_intents(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Return intents that should be reconciled against exchange truth.
+        """
+        reconcilable_states = {
+            ExecutionState.SUBMITTED,
+            ExecutionState.PARTIALLY_FILLED,
+        }
+        return self._list_intents_by_states(reconcilable_states, account_id=account_id)
+
+    def update_intent_metadata(
+        self,
+        idempotency_key: str,
+        metadata: Dict[str, Any],
+        account_id: Optional[str] = None,
+    ) -> bool:
+        """Merge metadata into an existing intent without state transition."""
+        with self._intents_lock:
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+            return self._update_intent_metadata_logic(scoped_key, metadata)
+
     # --- Async Interface (Avoids to_thread overhead) ---
 
     async def get_intent_async(self, idempotency_key: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -467,6 +500,24 @@ class ExecutionStateManager:
         async with self._get_async_intents_lock():
             scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
             return self._get_pretrade_snapshot_logic(scoped_key)
+
+    async def list_active_intents_async(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        async with self._get_async_intents_lock():
+            return self.list_active_intents(account_id=account_id)
+
+    async def list_reconcilable_intents_async(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        async with self._get_async_intents_lock():
+            return self.list_reconcilable_intents(account_id=account_id)
+
+    async def update_intent_metadata_async(
+        self,
+        idempotency_key: str,
+        metadata: Dict[str, Any],
+        account_id: Optional[str] = None,
+    ) -> bool:
+        async with self._get_async_intents_lock():
+            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
+            return self._update_intent_metadata_logic(scoped_key, metadata)
 
     # --- Private Logic (No Locking) ---
 
@@ -615,6 +666,70 @@ class ExecutionStateManager:
         except Exception as e:
             logger.error("Failed to read pre-trade snapshot: %s", e)
             return None
+
+    @staticmethod
+    def _normalize_state(raw_state: Any) -> Optional[ExecutionState]:
+        if isinstance(raw_state, ExecutionState):
+            return raw_state
+        text = str(raw_state or "").strip()
+        if not text:
+            return None
+        try:
+            return ExecutionState(text)
+        except ValueError:
+            return None
+
+    def _list_intents_by_states(
+        self,
+        allowed_states: set[ExecutionState],
+        *,
+        account_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        try:
+            intents = self._load_intents()
+            resolved_account = self._normalize_account_id(account_id) if account_id else None
+            rows: List[Dict[str, Any]] = []
+            for scoped_key, intent in intents.items():
+                if not isinstance(intent, dict):
+                    continue
+                if resolved_account:
+                    intent_account = intent.get("account_id") or self.account_id_from_scoped_key(scoped_key)
+                    if str(intent_account or "").strip() != resolved_account:
+                        continue
+                state = self._normalize_state(intent.get("state"))
+                if state is None or state not in allowed_states:
+                    continue
+                row = dict(intent)
+                if "idempotency_key" not in row:
+                    row["idempotency_key"] = scoped_key
+                rows.append(row)
+            rows.sort(key=lambda item: str(item.get("created_at", "")))
+            return rows
+        except Exception as e:
+            logger.error("Failed to list intents by state: %s", e)
+            return []
+
+    def _update_intent_metadata_logic(self, idempotency_key: str, metadata: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(metadata, dict):
+            return False
+        try:
+            intents = self._load_intents()
+            intent = intents.get(idempotency_key)
+            if not isinstance(intent, dict):
+                return False
+            intent.update(metadata)
+            intent["updated_at"] = datetime.now(timezone.utc).isoformat()
+            intents[idempotency_key] = intent
+            self._save_intents(intents)
+            self._log_event(
+                idempotency_key,
+                "METADATA_UPDATED",
+                {"updated_fields": sorted(metadata.keys())},
+            )
+            return True
+        except Exception as e:
+            logger.error("Failed to update intent metadata: %s", e)
+            return False
 
     def _is_valid_transition(self, from_state: ExecutionState, to_state: ExecutionState) -> bool:
         """
