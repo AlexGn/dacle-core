@@ -31,6 +31,13 @@ class FeatureFlag:
     CAPITAL_UNIFIED_PRIORITY = "capital_unified_priority"
     POLYMARKET_WS_HARDENING_ENABLED = "polymarket_ws_hardening_enabled"
     DEPLOY_RELIABILITY_V2_ENABLED = "deploy_reliability_v2_enabled"
+    POLY_RECONCILER_SHADOW_ENABLED = "poly_reconciler_shadow_enabled"
+    POLY_ZOMBIE_TRACKER_ENABLED = "poly_zombie_tracker_enabled"
+    POLY_MARKET_QUEUE_ENABLED = "poly_market_queue_enabled"
+    POLY_ROUTER_SHADOW_ENABLED = "poly_router_shadow_enabled"
+    POLY_ROUTER_LIVE_ENABLED = "poly_router_live_enabled"
+    POLY_PREEMPTION_V2_ENABLED = "poly_preemption_v2_enabled"
+    POLY_TERMINAL_DURABILITY_V2_ENABLED = "poly_terminal_durability_v2_enabled"
 
 
 
