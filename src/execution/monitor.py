@@ -1,13 +1,22 @@
 import logging
 import asyncio
+import os
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
 from src.execution.state_manager import ExecutionStateManager
 from src.execution.v2_models import ExecutionState, WarningCode
 from src.execution.blofin_bridge import BlofinExecutionBridge
+from src.execution.reconciliation import ExecutionReconciliationWorker
 
 logger = logging.getLogger(__name__)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 class ActiveConvictionMonitor:
     """
@@ -21,10 +30,22 @@ class ActiveConvictionMonitor:
     def __init__(self):
         self.state_mgr = ExecutionStateManager()
         self.bridge = BlofinExecutionBridge()
+        self.reconciler = ExecutionReconciliationWorker(
+            state_mgr=self.state_mgr,
+            bridge=self.bridge,
+        )
         self._last_run = None
 
     async def monitor_step(self):
         """Perform a single monitoring pass over all active trades."""
+        if _env_bool("SWING_RECONCILIATION_ENABLED", default=False):
+            try:
+                reconcile_summary = await self.reconciler.reconcile_once()
+                if reconcile_summary.get("intents_ambiguous", 0) > 0:
+                    logger.warning("Reconciliation ambiguous intents detected: %s", reconcile_summary)
+            except Exception as e:
+                logger.error("Reconciliation step failed: %s", e)
+
         active_intents = await asyncio.to_thread(self.state_mgr.list_active_intents)
         if not active_intents:
             logger.debug("No active intents to monitor")
