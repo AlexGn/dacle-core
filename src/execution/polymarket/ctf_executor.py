@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from web3 import Web3
 from eth_account import Account
 from decimal import Decimal
+from src.execution.polymarket.nonce_registry import NonceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -139,8 +140,6 @@ class PolymarketCTFExecutor:
         )
 
         self.mode = config.get("mode", "SHADOW").upper()
-        self._nonce_lock = asyncio.Lock()
-        self._pending_nonce: Optional[int] = None
         self._init_contracts()
 
     def _init_contracts(self):
@@ -196,19 +195,18 @@ class PolymarketCTFExecutor:
             return False
 
     async def _get_next_nonce(self) -> int:
-        """Allocate a monotonic nonce cursor for this signer to avoid local collisions."""
+        """Allocate a monotonic nonce cursor for this signer via process-wide registry."""
         if not self._ensure_account() or not self.address:
             raise RuntimeError("Signer not configured")
 
-        async with self._nonce_lock:
-            chain_nonce = int(
+        key = f"polygon:{self.address.lower()}"
+
+        async def _fetch_chain_nonce() -> int:
+            return int(
                 await self._call_with_rpc_retry(self.w3.eth.get_transaction_count, self.address)
             )
-            if self._pending_nonce is None or chain_nonce > self._pending_nonce:
-                self._pending_nonce = chain_nonce
-            nonce = self._pending_nonce
-            self._pending_nonce += 1
-            return int(nonce)
+
+        return await NonceRegistry.next_nonce(key, _fetch_chain_nonce)
 
     @staticmethod
     def _receipt_value(receipt: Any, key: str, default: Any = None) -> Any:
