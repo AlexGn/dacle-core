@@ -43,10 +43,21 @@ class LighterRealClient:
         self.market_id = config.get("market_id", 1)
         self.account_type = config.get("account_type", "STANDARD")
         self.mode = str(config.get("mode", "SHADOW")).upper()
-        self.account_index = config.get("account_index")
+        configured_account_index = config.get("account_index")
+        if configured_account_index is None and self.mode == "LIVE":
+            env_account_index = str(os.getenv("SCALPER_ACCOUNT_INDEX") or "").strip()
+            if env_account_index:
+                configured_account_index = env_account_index
+        self.account_index = configured_account_index
         self.auth_refresh_interval_sec = int(config.get("auth_refresh_interval_sec", 1200))
         self.auth_token = (config.get("auth_token") or os.getenv("SCALPER_AUTH_TOKEN") or "").strip()
         self._resolved_account_index: Optional[int] = self._to_int(self.account_index)
+        explicit_account_required = self._to_bool(config.get("require_explicit_account_index"))
+        self.require_explicit_account_index = (
+            bool(explicit_account_required)
+            if explicit_account_required is not None
+            else self.mode == "LIVE"
+        )
         self._shadow_order_counter = 0
         self.degraded_snapshot_spread_bps = float(config.get("degraded_snapshot_spread_bps", 2.0))
         
@@ -588,6 +599,18 @@ class LighterRealClient:
                 active_standard.append(idx)
             if is_active:
                 active_any.append(idx)
+
+        if self.require_explicit_account_index and self.mode == "LIVE":
+            # Silo guard: never auto-pick from multiple candidates in LIVE mode.
+            candidates = sorted(set(any_index))
+            if len(candidates) == 1:
+                return candidates[0]
+            logger.error(
+                "LIVE account selection ambiguous: explicit account_index is required "
+                "(candidates=%s)",
+                candidates,
+            )
+            return None
 
         if active_standard:
             return sorted(active_standard)[0]
