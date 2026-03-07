@@ -135,9 +135,6 @@ supabase/.temp/
 # Local Netlify folder
 .netlify
 
-# Router runtime lockfile generated on VPS by npm install
-deploy/openclaw/market-direction-router/package-lock.json
-
 # claude-mem plugin data (local development memory)
 .claude-mem/
 .hypothesis/
