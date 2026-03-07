@@ -90,6 +90,7 @@ class LighterRealClient:
         self._auth_expired_at: float = 0.0
         self._auth_expired_callback = None
         self._reactive_auth_lock = asyncio.Lock()
+        self._last_preflight_readiness: Dict[str, Any] = {}
 
         # 5.8: Execution timeouts — strict 500ms default on ALL REST calls.
         timeout_sec = float(config.get("timeout_sec", 0.5))
@@ -1456,18 +1457,43 @@ class LighterRealClient:
 
     async def preflight_live_readiness(self) -> Dict[str, Any]:
         """Validate auth token and infer whether account permissions allow trading."""
+        def _finalize(payload: Dict[str, Any]) -> Dict[str, Any]:
+            self._last_preflight_readiness = dict(payload)
+            return payload
+
         if self._is_shadow_mode():
-            return {"status": "success", "auth_ok": True, "can_trade": True, "detail": "shadow_mode"}
+            return _finalize({"status": "success", "auth_ok": True, "can_trade": True, "detail": "shadow_mode"})
         if not self.signer:
-            return {"status": "error", "auth_ok": False, "can_trade": False, "detail": "missing signer"}
+            return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": "missing signer"})
         if not str(self.auth_token or "").strip():
-            return {"status": "error", "auth_ok": False, "can_trade": False, "detail": "missing auth token"}
+            return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": "missing auth token"})
 
         try:
             async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
                 account_index, idx_err = await self._resolve_account_index(session)
                 if idx_err:
-                    return {"status": "error", "auth_ok": False, "can_trade": False, "detail": idx_err}
+                    return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": idx_err})
+
+                if self.enforce_account_tier_match and self._account_tier_mismatch:
+                    detail = (
+                        "ACCOUNT_TIER_MISMATCH "
+                        f"configured={self.account_tier} "
+                        f"resolved_type={self._resolved_account_type} "
+                        f"account_index={int(account_index)}"
+                    )
+                    logger.error("LIVE preflight tier mismatch: %s", detail)
+                    return _finalize(
+                        {
+                            "status": "error",
+                            "auth_ok": True,
+                            "can_trade": False,
+                            "detail": detail,
+                            "error_code": "ACCOUNT_TIER_MISMATCH",
+                            "account_index": int(account_index),
+                            "configured_account_tier": self.account_tier,
+                            "resolved_account_type": self._resolved_account_type,
+                        }
+                    )
 
                 trades = await self._fetch_account_trades(
                     session=session,
@@ -1476,12 +1502,14 @@ class LighterRealClient:
                     limit=1,
                 )
                 if trades.get("status") != "success":
-                    return {
-                        "status": "error",
-                        "auth_ok": False,
-                        "can_trade": False,
-                        "detail": trades.get("error", "trades auth check failed"),
-                    }
+                    return _finalize(
+                        {
+                            "status": "error",
+                            "auth_ok": False,
+                            "can_trade": False,
+                            "detail": trades.get("error", "trades auth check failed"),
+                        }
+                    )
 
                 permission = await self._infer_account_trade_permission(
                     session=session,
@@ -1489,15 +1517,17 @@ class LighterRealClient:
                 )
                 can_trade = bool(permission.get("can_trade", True))
                 detail = str(permission.get("detail", "ok"))
-                return {
-                    "status": "success" if can_trade else "error",
-                    "auth_ok": True,
-                    "can_trade": can_trade,
-                    "detail": detail,
-                    "account_index": int(account_index),
-                }
+                return _finalize(
+                    {
+                        "status": "success" if can_trade else "error",
+                        "auth_ok": True,
+                        "can_trade": can_trade,
+                        "detail": detail,
+                        "account_index": int(account_index),
+                    }
+                )
         except Exception as e:
-            return {"status": "error", "auth_ok": False, "can_trade": False, "detail": str(e)}
+            return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": str(e)})
 
     async def _infer_account_trade_permission(
         self,
