@@ -52,6 +52,12 @@ ORDER_TYPE_MAP = {
     "FAK": OrderType.FAK
 }
 VALID_ORDER_TYPES = list(ORDER_TYPE_MAP.keys())
+LEGACY_ORDER_TYPE_ALIASES = {
+    # Legacy callers still pass venue-agnostic terms from pre-wrapper contracts.
+    "IOC": "FAK",
+    "POST_ONLY": "GTD",
+    "LIMIT": "GTC",
+}
 
 class PolymarketClientWrapper:
     def __init__(self, config: dict, client: ClobClient):
@@ -491,9 +497,12 @@ class PolymarketClientWrapper:
         if side_val not in ("BUY", "SELL"):
             return {"status": "error", "error": f"Invalid side: {side}"}
 
-        order_type = order_type.upper()
+        requested_order_type = order_type.upper()
+        order_type = LEGACY_ORDER_TYPE_ALIASES.get(requested_order_type, requested_order_type)
         if order_type not in VALID_ORDER_TYPES:
-            return {"status": "error", "error": f"Invalid order_type: {order_type}"}
+            return {"status": "error", "error": f"Invalid order_type: {requested_order_type}"}
+        if requested_order_type != order_type:
+            logger.info("Order type alias normalized: %s -> %s", requested_order_type, order_type)
 
         # 1. Resolve Metadata
         meta = await self.get_market_metadata(token_id)
