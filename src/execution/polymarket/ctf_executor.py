@@ -142,12 +142,17 @@ class PolymarketCTFExecutor:
 
         self.mode = config.get("mode", "SHADOW").upper()
         exec_cfg = config.get("execution", {}) if isinstance(config.get("execution"), dict) else {}
-        self._nonce_registry_enabled = bool(
-            is_enabled(
-                FeatureFlag.POLY_NONCE_REGISTRY_ENABLED,
-                default=bool(exec_cfg.get("nonce_registry_enabled", True)),
+        raw_nonce_registry_enabled = exec_cfg.get("nonce_registry_enabled")
+        if raw_nonce_registry_enabled is not None:
+            # Explicit execution config wins to keep deterministic local overrides.
+            self._nonce_registry_enabled = bool(raw_nonce_registry_enabled)
+        else:
+            self._nonce_registry_enabled = bool(
+                is_enabled(
+                    FeatureFlag.POLY_NONCE_REGISTRY_ENABLED,
+                    default=True,
+                )
             )
-        )
         self._init_contracts()
 
     def _init_contracts(self):

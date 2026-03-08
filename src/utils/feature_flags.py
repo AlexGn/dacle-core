@@ -36,6 +36,7 @@ class FeatureFlag:
     POLY_MARKET_QUEUE_ENABLED = "poly_market_queue_enabled"
     POLY_ROUTER_SHADOW_ENABLED = "poly_router_shadow_enabled"
     POLY_ROUTER_LIVE_ENABLED = "poly_router_live_enabled"
+    POLY_RISK_CONTEXT_ENABLED = "poly_risk_context_enabled"
     POLY_NONCE_REGISTRY_ENABLED = "poly_nonce_registry_enabled"
     POLY_CHECKPOINT_V2_WRITE_ENABLED = "poly_checkpoint_v2_write_enabled"
     POLY_PREEMPTION_V2_ENABLED = "poly_preemption_v2_enabled"
