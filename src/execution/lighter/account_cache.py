@@ -69,5 +69,34 @@ class LighterAccountCache:
             
     async def clear_all(self):
         """Emergency clear of all Lighter caches."""
-        # Implementation depends on Redis version (e.g., EVAL or SCAN)
-        pass
+        pattern = f"{self.prefix}*"
+        deleted = 0
+        try:
+            scan_iter = getattr(self.redis, "scan_iter", None)
+            if callable(scan_iter):
+                keys = []
+                async for key in scan_iter(match=pattern):
+                    keys.append(key)
+                if keys:
+                    deleted = int(await self.redis.delete(*keys) or 0)
+                logger.warning(f"Emergency cache clear executed via scan_iter: deleted={deleted}")
+                return deleted
+
+            scan = getattr(self.redis, "scan", None)
+            if not callable(scan):
+                logger.warning("Account cache clear_all skipped: redis client has no scan/scan_iter")
+                return 0
+
+            cursor = 0
+            while True:
+                cursor, keys = await scan(cursor=cursor, match=pattern, count=100)
+                if keys:
+                    deleted += int(await self.redis.delete(*keys) or 0)
+                if cursor in (0, "0", b"0"):
+                    break
+
+            logger.warning(f"Emergency cache clear executed via scan: deleted={deleted}")
+            return deleted
+        except Exception as e:
+            logger.error(f"Failed to clear all account cache entries: {e}")
+            return 0

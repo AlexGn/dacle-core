@@ -22,7 +22,6 @@ coincurve==21.0.0
 cryptography==46.0.5
 curl_cffi==0.13.0
 cytoolz==1.1.0
--e git+ssh://git@github.com/AlexGn/dacle.git@7e0a4b77f970a176c9365884cae3b64f051bc096#egg=dacle
 deprecation==2.1.0
 discord.py==2.6.4
 distro==1.9.0

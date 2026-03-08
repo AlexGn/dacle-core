@@ -109,7 +109,8 @@ class ScalperCommands(commands.Cog):
         token_ttl = data.get("token_ttl_sec")
         ttl_str = f"{int(token_ttl)}s" if token_ttl is not None and token_ttl >= 0 else "N/A"
         
-        status_value = f"Running: {is_running}\nCircuit: {circuit}\nToken TTL: {ttl_str}"
+        running_value = "HALTED" if kill_active else str(is_running)
+        status_value = f"Running: {running_value}\nCircuit: {circuit}\nToken TTL: {ttl_str}"
         if kill_active:
             status_value += f"\n**Kill Switch**: ACTIVE\nReason: {kill_reason or 'No reason'}"
         elif stale:
@@ -144,7 +145,7 @@ class ScalperCommands(commands.Cog):
 
         # Permission
         perm = data.get("permission")
-        if isinstance(perm, dict):
+        if isinstance(perm, dict) and perm:
             allow = []
             if perm.get("allow_long"):
                 allow.append("LONG")
@@ -155,14 +156,8 @@ class ScalperCommands(commands.Cog):
             reason = perm.get("reason", "N/A")
             
             embed.add_field(
-                name="Macro Permission",
+                name="Permission",
                 value=f"Allowed: {allow_str}\nMax: ${max_notional:.0f}/trade\nReason: {reason}",
-                inline=False,
-            )
-        else:
-            embed.add_field(
-                name="Macro Permission",
-                value="Waiting for Brain sync...",
                 inline=False,
             )
 
