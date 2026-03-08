@@ -165,10 +165,9 @@ class PolymarketCTFExecutor:
                 else:
                     return await asyncio.to_thread(func, *args, **kwargs)
             except Exception as e:
-                if "401" in str(e) or "429" in str(e) or "Too Many Requests" in str(e) or "Unauthorized" in str(e):
-                    if attempt < max_retries - 1:
-                        self._rotate_rpc()
-                        continue
+                if attempt < max_retries - 1:
+                    self._rotate_rpc()
+                    continue
                 logger.error(f"CTF Executor RPC call failed after {attempt+1} attempts: {e}")
                 raise e
 
