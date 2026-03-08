@@ -83,6 +83,12 @@ class PolymarketClientWrapper:
         # Execution settings
         exec_cfg = config.get("execution", {})
         self.default_expiration_sec = exec_cfg.get("order_timeout_sec", 60)
+        self.gtd_min_expiration_lead_sec = max(
+            61, int(exec_cfg.get("gtd_min_expiration_lead_sec", 120) or 120)
+        )
+        self.gtd_expiration_safety_sec = max(
+            0, int(exec_cfg.get("gtd_expiration_safety_sec", 2) or 2)
+        )
         self.max_retries = exec_cfg.get("max_retries", 3)
         self.qty_precision = max(0, int(exec_cfg.get("qty_precision", 4)))
         self.strict_signing_precision = bool(exec_cfg.get("strict_signing_precision", True))
@@ -293,6 +299,18 @@ class PolymarketClientWrapper:
                 f.write(json.dumps(entry, sort_keys=True) + "\n")
         except Exception as exc:
             logger.warning("Failed to append order submission audit: %s", exc)
+
+    def _resolve_gtd_expiration_epoch(self, expiration_sec: Optional[int] = None) -> int:
+        requested_window = (
+            self.default_expiration_sec if expiration_sec is None else expiration_sec
+        )
+        try:
+            requested_window_int = int(requested_window)
+        except (TypeError, ValueError):
+            requested_window_int = int(self.default_expiration_sec)
+        requested_window_int = max(1, requested_window_int)
+        effective_window = max(requested_window_int, self.gtd_min_expiration_lead_sec)
+        return int(time.time()) + effective_window + self.gtd_expiration_safety_sec
 
     def _format_entry_alert(
         self,
@@ -565,7 +583,7 @@ class PolymarketClientWrapper:
             paper_price = 0.01
             norm_paper = self.normalize_price(paper_price, meta["tick_size"], side_val)
             logger.info(f"[PAPER] POST_ONLY order: {side_val} {qty_norm} @ {norm_paper} (token={token_id})")
-            exp = int(time.time() + 30)  # 30s GTD
+            exp = self._resolve_gtd_expiration_epoch(30)
             paper_args = OrderArgs(price=norm_paper, size=qty_norm, side=side_val, token_id=token_id, expiration=exp)
             try:
                 signed = await asyncio.to_thread(self.client.create_order, paper_args)
@@ -595,7 +613,7 @@ class PolymarketClientWrapper:
 
         # 5. Expiration
         if order_type == "GTD":
-            exp = int(time.time() + (expiration_sec or self.default_expiration_sec))
+            exp = self._resolve_gtd_expiration_epoch(expiration_sec)
         else:
             # GTC, FOK, FAK must have expiration 0
             exp = 0
