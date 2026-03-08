@@ -15,6 +15,7 @@ from web3 import Web3
 from eth_account import Account
 from decimal import Decimal
 from src.execution.polymarket.nonce_registry import NonceRegistry
+from src.utils.feature_flags import FeatureFlag, is_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +141,13 @@ class PolymarketCTFExecutor:
         )
 
         self.mode = config.get("mode", "SHADOW").upper()
+        exec_cfg = config.get("execution", {}) if isinstance(config.get("execution"), dict) else {}
+        self._nonce_registry_enabled = bool(
+            is_enabled(
+                FeatureFlag.POLY_NONCE_REGISTRY_ENABLED,
+                default=bool(exec_cfg.get("nonce_registry_enabled", True)),
+            )
+        )
         self._init_contracts()
 
     def _init_contracts(self):
@@ -198,13 +206,15 @@ class PolymarketCTFExecutor:
         if not self._ensure_account() or not self.address:
             raise RuntimeError("Signer not configured")
 
-        key = f"polygon:{self.address.lower()}"
-
         async def _fetch_chain_nonce() -> int:
             return int(
                 await self._call_with_rpc_retry(self.w3.eth.get_transaction_count, self.address)
             )
 
+        if not self._nonce_registry_enabled:
+            return await _fetch_chain_nonce()
+
+        key = f"polygon:{self.address.lower()}"
         return await NonceRegistry.next_nonce(key, _fetch_chain_nonce)
 
     @staticmethod
