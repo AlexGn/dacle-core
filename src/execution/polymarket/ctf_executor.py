@@ -102,7 +102,6 @@ class PolymarketCTFExecutor:
         "https://polygon.llamarpc.com",
         "https://1rpc.io/polygon",
         "https://polygon-bor-rpc.publicnode.com",
-        "https://polygon-mainnet.public.blastapi.io",
     ]
 
     def __init__(self, config: dict):
@@ -190,9 +189,11 @@ class PolymarketCTFExecutor:
 
         retryable_markers = (
             "401",
+            "403",
             "429",
             "too many requests",
             "unauthorized",
+            "forbidden",
             "nameresolutionerror",
             "temporary failure in name resolution",
             "failed to resolve",
