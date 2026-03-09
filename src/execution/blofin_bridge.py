@@ -1,7 +1,8 @@
 import os
 import logging
 import time
-from typing import Dict, Any, Optional, List
+import re
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone
 
 import ccxt
@@ -19,37 +20,128 @@ class BlofinExecutionBridge:
 
     def __init__(self):
         self.exchange = None
+        self._account_exchanges: Dict[str, Any] = {}
+        self._default_account_id = self._normalize_account_id(None)
         self.latency_logger = LatencyAuditLogger()
         self._init_exchange()
 
-    def _init_exchange(self) -> None:
-        """Initialize ccxt Blofin exchange with credentials."""
-        try:
-            api_key = os.getenv("BLOFIN_API_KEY")
-            api_secret = os.getenv("BLOFIN_API_SECRET")
-            passphrase = os.getenv("BLOFIN_PASSPHRASE")
+    @staticmethod
+    def _env_bool(name: str, default: bool = False) -> bool:
+        raw = os.getenv(name)
+        if raw is None:
+            return default
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
-            if not api_key or not api_secret or not passphrase:
+    @staticmethod
+    def _normalize_account_id(account_id: Optional[str]) -> str:
+        candidate = str(account_id or "").strip()
+        if candidate:
+            return candidate
+        fallback = str(os.getenv("EXECUTION_DEFAULT_ACCOUNT_ID", "primary") or "").strip()
+        return fallback or "primary"
+
+    @staticmethod
+    def _account_env_suffix(account_id: str) -> str:
+        raw = str(account_id or "").strip()
+        if not raw:
+            return "PRIMARY"
+        cleaned = re.sub(r"[^A-Za-z0-9]+", "_", raw).strip("_")
+        return (cleaned or "PRIMARY").upper()
+
+    @staticmethod
+    def _force_ipv4() -> None:
+        # Session 389b: Force IPv4 for whitelist consistency
+        import socket
+        import urllib3.util.connection as urllib3_conn
+
+        urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
+
+    def _resolve_account_credentials(self, account_id: Optional[str]) -> Optional[Tuple[str, str, str]]:
+        resolved_account = self._normalize_account_id(account_id)
+        suffix = self._account_env_suffix(resolved_account)
+
+        scoped_key = os.getenv(f"BLOFIN_API_KEY_{suffix}")
+        scoped_secret = os.getenv(f"BLOFIN_API_SECRET_{suffix}")
+        scoped_passphrase = os.getenv(f"BLOFIN_PASSPHRASE_{suffix}")
+        scoped_values = (scoped_key, scoped_secret, scoped_passphrase)
+        if any(scoped_values):
+            if all(scoped_values):
+                return str(scoped_key), str(scoped_secret), str(scoped_passphrase)
+            logger.error("Incomplete Blofin scoped credentials for account_id=%s", resolved_account)
+            return None
+
+        base_key = os.getenv("BLOFIN_API_KEY")
+        base_secret = os.getenv("BLOFIN_API_SECRET")
+        base_passphrase = os.getenv("BLOFIN_PASSPHRASE")
+        if resolved_account == self._default_account_id:
+            if all((base_key, base_secret, base_passphrase)):
+                return str(base_key), str(base_secret), str(base_passphrase)
+            return None
+
+        if self._env_bool("SWING_BLOFIN_ALLOW_DEFAULT_CREDENTIAL_FALLBACK", default=False):
+            live_mode = self._env_bool("BLOFIN_LIVE_ENABLED", default=False)
+            allow_live_fallback = self._env_bool(
+                "SWING_BLOFIN_ALLOW_DEFAULT_CREDENTIAL_FALLBACK_LIVE",
+                default=False,
+            )
+            if live_mode and not allow_live_fallback:
+                logger.error(
+                    "Blocked default Blofin credentials fallback for account_id=%s in live mode",
+                    resolved_account,
+                )
+                return None
+            if all((base_key, base_secret, base_passphrase)):
+                logger.warning("Using default Blofin credentials fallback for account_id=%s", resolved_account)
+                return str(base_key), str(base_secret), str(base_passphrase)
+
+        return None
+
+    @staticmethod
+    def _build_exchange(api_key: str, api_secret: str, passphrase: str):
+        return ccxt.blofin({
+            'apiKey': api_key,
+            'secret': api_secret,
+            'password': passphrase,
+            'enableRateLimit': True,
+            'options': {
+                'defaultType': 'swap',
+            }
+        })
+
+    def _exchange_for_account(self, account_id: Optional[str]) -> Optional[Any]:
+        resolved_account = self._normalize_account_id(account_id)
+
+        existing = self._account_exchanges.get(resolved_account)
+        if existing is not None:
+            return existing
+
+        if resolved_account == self._default_account_id and self.exchange is not None:
+            self._account_exchanges[resolved_account] = self.exchange
+            return self.exchange
+
+        creds = self._resolve_account_credentials(resolved_account)
+        if not creds:
+            if resolved_account == self._default_account_id:
                 logger.warning("Blofin credentials missing - bridge operating in limited mode")
-                return
+            else:
+                logger.warning("Blofin credentials missing for account_id=%s", resolved_account)
+            return None
 
-            self.exchange = ccxt.blofin({
-                'apiKey': api_key,
-                'secret': api_secret,
-                'password': passphrase,
-                'enableRateLimit': True,
-                'options': {
-                    'defaultType': 'swap',
-                }
-            })
-            
-            # Session 389b: Force IPv4 for whitelist consistency
-            import socket
-            import urllib3.util.connection as urllib3_conn
-            urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
-            
+        try:
+            exchange = self._build_exchange(*creds)
+            self._force_ipv4()
         except Exception as e:
-            logger.error(f"Failed to initialize Blofin Bridge: {e}")
+            logger.error("Failed to initialize Blofin Bridge for account_id=%s: %s", resolved_account, e)
+            return None
+
+        self._account_exchanges[resolved_account] = exchange
+        if resolved_account == self._default_account_id:
+            self.exchange = exchange
+        return exchange
+
+    def _init_exchange(self) -> None:
+        """Initialize default account exchange with credentials."""
+        self.exchange = self._exchange_for_account(self._default_account_id)
 
     def _validate_execution_context(
         self,
@@ -86,6 +178,7 @@ class BlofinExecutionBridge:
         execution_policy: str = "LIMIT_ONLY",
         execution_context_token: Optional[str] = None,
         expected_context_state: ExecutionState = ExecutionState.PROTECTION_SUBMITTING,
+        account_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Submit a bracket order (Entry + SL + TP) to Blofin (Phase 2).
@@ -93,6 +186,13 @@ class BlofinExecutionBridge:
         t3_submit = time.monotonic_ns()
         blofin_symbol = f"{symbol.replace('-', '/')}:USDT"
         side_norm = side.lower().strip()
+        if side_norm not in {"long", "buy", "short", "sell"}:
+            logger.error("Rejecting bracket submit for %s: invalid side=%s", symbol, side)
+            return {
+                "error": ExecutionErrorCode.ERR_ORDER_SUBMIT_FAILED,
+                "reason": "INVALID_SIDE",
+                "entry_order_id": None,
+            }
         ccxt_side = "buy" if side_norm in {"long", "buy"} else "sell"
         
         logger.info(f"Submitting BRACKET for {symbol}: Entry {price}, SL {sl_price}, TP {tp_price} [dry_run={dry_run}, policy={execution_policy}, tif={time_in_force}]")
@@ -128,8 +228,12 @@ class BlofinExecutionBridge:
                 self._log_latency_event(idempotency_key, symbol, side, price, res["info"], t3_submit, t4_ack, latency_meta)
             return res
 
-        if not self.exchange:
-            return {"error": ExecutionErrorCode.ERR_INTERNAL_RETRY_EXHAUSTED, "reason": "Exchange not initialized"}
+        exchange = self._exchange_for_account(account_id)
+        if not exchange:
+            return {
+                "error": ExecutionErrorCode.ERR_INTERNAL_RETRY_EXHAUSTED,
+                "reason": "ACCOUNT_EXCHANGE_NOT_CONFIGURED",
+            }
 
         try:
             # Map Execution Policy to CCXT params
@@ -154,7 +258,7 @@ class BlofinExecutionBridge:
                 params['postOnly'] = True
 
             # Submit order
-            order = self.exchange.create_order(
+            order = exchange.create_order(
                 symbol=blofin_symbol,
                 type='limit',
                 side=ccxt_side,
@@ -230,31 +334,94 @@ class BlofinExecutionBridge:
             }
         )
 
-    def cancel_order(self, symbol: str, order_id: str, dry_run: bool = True) -> bool:
+    def cancel_order(
+        self,
+        symbol: str,
+        order_id: str,
+        dry_run: bool = True,
+        account_id: Optional[str] = None,
+    ) -> bool:
         """Cancel an existing order."""
         if dry_run:
             logger.info(f"DRY RUN: Canceled order {order_id}")
             return True
 
-        if not self.exchange:
+        exchange = self._exchange_for_account(account_id)
+        if not exchange:
             return False
 
         try:
             blofin_symbol = f"{symbol.replace('-', '/')}:USDT"
-            self.exchange.cancel_order(order_id, blofin_symbol)
+            exchange.cancel_order(order_id, blofin_symbol)
             return True
         except Exception as e:
             logger.error(f"Failed to cancel order {order_id}: {e}")
             return False
 
-    def get_order_status(self, symbol: str, order_id: str) -> Dict[str, Any]:
+    def emergency_flatten(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        idempotency_key: str,
+        dry_run: bool = True,
+        account_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Best-effort emergency flatten after protection arming failure.
+        Places reduce-only market order in the opposite direction.
+        """
+        if qty <= 0:
+            logger.error("Emergency flatten rejected for %s: invalid qty=%s", symbol, qty)
+            return False
+
+        side_norm = str(side or "").strip().lower()
+        if side_norm not in {"long", "buy", "short", "sell"}:
+            logger.error("Emergency flatten rejected for %s: invalid side=%s", symbol, side)
+            return False
+        close_side = "sell" if side_norm in {"long", "buy"} else "buy"
+
+        if dry_run:
+            logger.warning(
+                "DRY RUN: Emergency flatten %s side=%s qty=%s idempotency_key=%s",
+                symbol,
+                close_side,
+                qty,
+                idempotency_key,
+            )
+            return True
+
+        exchange = self._exchange_for_account(account_id)
+        if not exchange:
+            return False
+
+        try:
+            blofin_symbol = f"{symbol.replace('-', '/')}:USDT"
+            exchange.create_order(
+                symbol=blofin_symbol,
+                type="market",
+                side=close_side,
+                amount=qty,
+                params={
+                    "reduceOnly": True,
+                    "clientOrderId": f"{idempotency_key}:flatten",
+                },
+            )
+            logger.warning("Emergency flatten submitted for %s qty=%s", symbol, qty)
+            return True
+        except Exception as e:
+            logger.error("Emergency flatten failed for %s: %s", symbol, e)
+            return False
+
+    def get_order_status(self, symbol: str, order_id: str, account_id: Optional[str] = None) -> Dict[str, Any]:
         """Fetch current order status and fills."""
-        if not self.exchange:
+        exchange = self._exchange_for_account(account_id)
+        if not exchange:
             return {}
 
         try:
             blofin_symbol = f"{symbol.replace('-', '/')}:USDT"
-            order = self.exchange.fetch_order(order_id, blofin_symbol)
+            order = exchange.fetch_order(order_id, blofin_symbol)
             
             # Map ccxt status to ExecutionState
             status = order.get('status')

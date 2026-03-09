@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from src.execution.blofin_bridge import BlofinExecutionBridge
+from src.execution.lifecycle_shadow import append_lifecycle_shadow_event
 from src.execution.state_manager import ExecutionStateManager
 from src.execution.v2_models import ExecutionState
 
@@ -86,7 +87,17 @@ class ExecutionReconciliationWorker:
                     summary["intents_ambiguous"] += 1
                     continue
 
-                status = await asyncio.to_thread(self.bridge.get_order_status, symbol, order_id)
+                intent_account_id = (
+                    str(intent.get("account_id") or "").strip()
+                    or ExecutionStateManager.account_id_from_scoped_key(idempotency_key)
+                    or "primary"
+                )
+                status = await asyncio.to_thread(
+                    self.bridge.get_order_status,
+                    symbol,
+                    order_id,
+                    intent_account_id,
+                )
                 if not isinstance(status, dict) or not status:
                     summary["intents_ambiguous"] += 1
                     continue
@@ -105,8 +116,27 @@ class ExecutionReconciliationWorker:
                     idempotency_key,
                     remote_state,
                     self._build_transition_metadata(status, order_id),
+                    account_id=intent_account_id,
                 )
                 if transition_ok:
+                    shadow_approved_raw = intent.get("execution_shadow_legacy_approved")
+                    shadow_approved = shadow_approved_raw if isinstance(shadow_approved_raw, bool) else None
+                    try:
+                        append_lifecycle_shadow_event(
+                            idempotency_key=idempotency_key,
+                            account_id=intent_account_id,
+                            symbol=symbol,
+                            state=remote_state,
+                            source="reconciliation",
+                            shadow_approved=shadow_approved,
+                            details={"reconciliation_order_id": order_id},
+                        )
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to append reconciliation lifecycle shadow event for %s: %s",
+                            idempotency_key,
+                            e,
+                        )
                     summary["intents_transitioned"] += 1
                 else:
                     summary["intents_ambiguous"] += 1
@@ -114,4 +144,3 @@ class ExecutionReconciliationWorker:
                 logger.error("Reconciliation failed for intent=%s: %s", intent.get("idempotency_key"), e)
                 summary["errors"] += 1
         return summary
-

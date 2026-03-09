@@ -1,7 +1,9 @@
 import logging
 import asyncio
 import os
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Dict, List, Any, Optional
 
 from src.execution.state_manager import ExecutionStateManager
@@ -10,6 +12,7 @@ from src.execution.blofin_bridge import BlofinExecutionBridge
 from src.execution.reconciliation import ExecutionReconciliationWorker
 
 logger = logging.getLogger(__name__)
+MONITOR_HEARTBEAT_FILE = Path("data/execution/active_conviction_monitor_heartbeat.json")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
@@ -38,6 +41,10 @@ class ActiveConvictionMonitor:
 
     async def monitor_step(self):
         """Perform a single monitoring pass over all active trades."""
+        run_started_ns = time.monotonic_ns()
+        reconcile_summary: Optional[Dict[str, Any]] = None
+        active_intent_count = 0
+
         if _env_bool("SWING_RECONCILIATION_ENABLED", default=False):
             try:
                 reconcile_summary = await self.reconciler.reconcile_once()
@@ -47,8 +54,16 @@ class ActiveConvictionMonitor:
                 logger.error("Reconciliation step failed: %s", e)
 
         active_intents = await asyncio.to_thread(self.state_mgr.list_active_intents)
+        active_intent_count = len(active_intents)
         if not active_intents:
             logger.debug("No active intents to monitor")
+            self._last_run = datetime.now(timezone.utc)
+            run_duration_ms = int((time.monotonic_ns() - run_started_ns) / 1_000_000)
+            self._write_heartbeat(
+                active_intent_count=active_intent_count,
+                reconcile_summary=reconcile_summary,
+                run_duration_ms=run_duration_ms,
+            )
             return
 
         logger.info(f"Monitoring {len(active_intents)} active trades for drift...")
@@ -60,6 +75,12 @@ class ActiveConvictionMonitor:
                 logger.error(f"Failed to monitor {intent['symbol']}: {e}")
 
         self._last_run = datetime.now(timezone.utc)
+        run_duration_ms = int((time.monotonic_ns() - run_started_ns) / 1_000_000)
+        self._write_heartbeat(
+            active_intent_count=active_intent_count,
+            reconcile_summary=reconcile_summary,
+            run_duration_ms=run_duration_ms,
+        )
 
     async def _process_intent(self, intent: Dict[str, Any]):
         symbol = intent["symbol"]
@@ -174,3 +195,26 @@ class ActiveConvictionMonitor:
             await asyncio.to_thread(dispatch_alert, "drift_monitor", message)
         except ImportError:
             pass
+
+    def _write_heartbeat(
+        self,
+        *,
+        active_intent_count: int,
+        reconcile_summary: Optional[Dict[str, Any]],
+        run_duration_ms: int,
+    ) -> None:
+        """Persist monitor heartbeat for ops visibility and stale-monitor detection."""
+        try:
+            from src.utils.atomic_write import atomic_json_write
+
+            payload = {
+                "last_run": (self._last_run or datetime.now(timezone.utc)).isoformat(),
+                "active_intent_count": int(active_intent_count),
+                "run_duration_ms": max(0, int(run_duration_ms)),
+                "reconciliation_enabled": _env_bool("SWING_RECONCILIATION_ENABLED", default=False),
+                "reconciliation_summary": reconcile_summary or {},
+                "status": "ok",
+            }
+            atomic_json_write(MONITOR_HEARTBEAT_FILE, payload)
+        except Exception as e:
+            logger.warning("Failed to write monitor heartbeat: %s", e)

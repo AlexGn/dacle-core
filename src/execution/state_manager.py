@@ -104,7 +104,16 @@ class ExecutionStateManager:
         """
         raw_key = str(idempotency_key or "").strip()
         if ":" in raw_key:
-            return raw_key
+            scoped_account, _, scoped_suffix = raw_key.partition(":")
+            scoped_account = scoped_account.strip()
+            scoped_suffix = scoped_suffix.strip()
+            if not scoped_account or not scoped_suffix:
+                raise ValueError("IDEMPOTENCY_KEY_INVALID_SCOPE")
+            if account_id is not None:
+                expected_account = self._normalize_account_id(account_id)
+                if scoped_account != expected_account:
+                    raise ValueError("IDEMPOTENCY_ACCOUNT_MISMATCH")
+            return f"{scoped_account}:{scoped_suffix}"
         scoped_account = self._normalize_account_id(account_id)
         return f"{scoped_account}:{raw_key}"
 
@@ -417,9 +426,14 @@ class ExecutionStateManager:
         """
         Return intents considered active for monitor workflows.
         Active intents are non-terminal, exchange-facing states.
+        Include inflight submit/protection states so rollback/reset guards
+        cannot treat them as quiescent.
         """
         active_states = {
+            ExecutionState.SUBMITTING,
+            ExecutionState.PROTECTION_SUBMITTING,
             ExecutionState.PROTECTION_ARMED,
+            ExecutionState.PROTECTION_FAILED,
             ExecutionState.SUBMITTED,
             ExecutionState.PARTIALLY_FILLED,
         }

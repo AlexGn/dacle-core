@@ -383,6 +383,11 @@ class AnalysisCommands(commands.Cog):
         logger.info("AnalysisCommands cog initialized")
 
     @staticmethod
+    def _strict_account_authz_enabled() -> bool:
+        raw = str(os.getenv("SWING_STRICT_DISCORD_ACCOUNT_AUTHZ", "false") or "false").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
+    @staticmethod
     def _allowed_user_ids() -> set[str]:
         raw = os.getenv("DISCORD_ALLOWED_USER_IDS", "").strip()
         allowed = {item.strip() for item in raw.split(",") if item.strip()} if raw else set()
@@ -452,12 +457,12 @@ class AnalysisCommands(commands.Cog):
         account_acl = self._account_acl()
         if not account_acl:
             # Backward compatibility: do not hard-lock commands if ACL is unconfigured.
-            return True
+            return False if self._strict_account_authz_enabled() else True
         resolved_account = self._resolve_account_id(account_id)
         allowed_for_account = account_acl.get(resolved_account) or account_acl.get("*")
         if not allowed_for_account:
             # Backward compatibility: only enforce when account has an explicit ACL entry.
-            return True
+            return False if self._strict_account_authz_enabled() else True
         return str(user_id) in allowed_for_account
 
     @staticmethod

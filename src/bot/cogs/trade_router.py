@@ -1,6 +1,7 @@
 from src.utils.logger import get_logger
 import json
 import re
+import hashlib
 import aiohttp
 import discord
 from discord import app_commands
@@ -40,7 +41,14 @@ class TradeRouter(commands.Cog):
         self.bot = bot
         self.api_url = os.getenv("DACLE_API_URL", "http://localhost:8000")
         self.api_key = os.getenv("DACLE_API_KEY", "").strip()
+        self._pretrade_dark_launch_paused = False
+        self._pretrade_comparator_critical_hits = 0
         logger.info("TradeRouter cog initialized")
+
+    @staticmethod
+    def _strict_account_authz_enabled() -> bool:
+        raw = str(os.getenv("SWING_STRICT_DISCORD_ACCOUNT_AUTHZ", "false") or "false").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
 
     @staticmethod
     def _allowed_user_ids() -> set[str]:
@@ -112,12 +120,12 @@ class TradeRouter(commands.Cog):
         account_acl = self._account_acl()
         if not account_acl:
             # Backward compatibility: do not hard-lock commands if ACL is unconfigured.
-            return True
+            return False if self._strict_account_authz_enabled() else True
         resolved_account = self._resolve_account_id(account_id)
         allowed_for_account = account_acl.get(resolved_account) or account_acl.get("*")
         if not allowed_for_account:
             # Backward compatibility: only enforce when account has an explicit ACL entry.
-            return True
+            return False if self._strict_account_authz_enabled() else True
         return str(user_id) in allowed_for_account
 
     @staticmethod
@@ -303,18 +311,243 @@ class TradeRouter(commands.Cog):
             return None
 
     async def call_pre_trade_check(self, setup: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        url = f"{self.api_url}/api/execution/pre-trade-check"
+        endpoint = "/api/execution/pre-trade-check"
+        payload: Dict[str, Any] = dict(setup)
+        v2_payload: Optional[Dict[str, Any]] = None
+        dark_launch_enabled = self._is_pretrade_dark_launch_enabled()
+        dark_launch_active = dark_launch_enabled and not self._pretrade_dark_launch_paused
+        if dark_launch_enabled and self._pretrade_dark_launch_paused:
+            logger.warning("TradeRouter pretrade dark launch is paused by comparator circuit breaker")
+
+        if self._resolve_pretrade_canonical() == "v2":
+            v2_payload = self._build_v2_pretrade_payload(setup)
+            if v2_payload is not None:
+                endpoint = "/api/execution/v2/pre-trade-check"
+                payload = v2_payload
+            else:
+                if self._is_pretrade_v2_strict_required():
+                    logger.error(
+                        "TradeRouter v2 pre-trade canonical requested but setup payload is incomplete; strict mode forbids v1 fallback"
+                    )
+                    return None
+                logger.warning(
+                    "TradeRouter v2 pre-trade canonical requested but setup payload is incomplete; falling back to v1"
+                )
+        elif dark_launch_active:
+            # Build once so v1-primary dark-launch can shadow-run v2 without mutating authority.
+            v2_payload = self._build_v2_pretrade_payload(setup)
+
+        shadow_endpoint: Optional[str] = None
+        shadow_payload: Optional[Dict[str, Any]] = None
+        if dark_launch_active:
+            if endpoint == "/api/execution/pre-trade-check":
+                if v2_payload is not None:
+                    shadow_endpoint = "/api/execution/v2/pre-trade-check"
+                    shadow_payload = v2_payload
+            elif endpoint == "/api/execution/v2/pre-trade-check":
+                shadow_endpoint = "/api/execution/pre-trade-check"
+                shadow_payload = dict(setup)
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=setup, headers=self._build_api_headers()) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"API error: {response.status}")
-                        return None
+                primary_result = await self._post_pre_trade_check(session, endpoint, payload)
+                if primary_result is None:
+                    return None
+
+                if shadow_endpoint and shadow_payload is not None:
+                    shadow_result = await self._post_pre_trade_check(session, shadow_endpoint, shadow_payload)
+                    if shadow_result is not None:
+                        primary_approved = self._extract_pretrade_approved(primary_result)
+                        shadow_approved = self._extract_pretrade_approved(shadow_result)
+                        mismatch_class = "critical" if primary_approved != shadow_approved else "none"
+                        self._emit_pretrade_comparator_event(
+                            {
+                                "authority": "v2" if endpoint.endswith("/v2/pre-trade-check") else "v1",
+                                "primary_endpoint": endpoint,
+                                "shadow_endpoint": shadow_endpoint,
+                                "primary_approved": primary_approved,
+                                "shadow_approved": shadow_approved,
+                                "mismatch_class": mismatch_class,
+                                "symbol": str(setup.get("token", "") or "").upper(),
+                                "account_id": self._resolve_account_id(),
+                            }
+                        )
+
+                return primary_result
         except Exception as e:
             logger.error(f"Failed to call API: {e}")
             return None
+
+    async def _post_pre_trade_check(
+        self,
+        session: aiohttp.ClientSession,
+        endpoint: str,
+        payload: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        url = f"{self.api_url}{endpoint}"
+        async with session.post(url, json=payload, headers=self._build_api_headers()) as response:
+            if response.status != 200:
+                logger.error(f"API error: {response.status}")
+                return None
+            raw = await response.json()
+            if endpoint == "/api/execution/v2/pre-trade-check":
+                return self._normalize_v2_pretrade_response(raw)
+            return raw
+
+    @staticmethod
+    def _resolve_pretrade_canonical() -> str:
+        raw = str(os.getenv("SWING_PRETRADE_CANONICAL", "") or "").strip().lower()
+        if raw in {"v1", "v2"}:
+            return raw
+        execution_canonical = str(os.getenv("SWING_EXECUTION_CANONICAL", "v1") or "v1").strip().lower()
+        return "v2" if execution_canonical == "v2" else "v1"
+
+    @staticmethod
+    def _is_pretrade_v2_strict_required() -> bool:
+        raw = str(os.getenv("SWING_PRETRADE_V2_STRICT_REQUIRED", "false") or "false").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _is_pretrade_dark_launch_enabled() -> bool:
+        raw = str(os.getenv("SWING_PRETRADE_DARK_LAUNCH_ENABLED", "false") or "false").strip().lower()
+        return raw in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _extract_pretrade_approved(payload: Dict[str, Any]) -> bool:
+        if not isinstance(payload, dict):
+            return False
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return bool(data.get("approved"))
+        return False
+
+    @staticmethod
+    def _pretrade_comparator_critical_limit() -> int:
+        raw = str(os.getenv("SWING_PRETRADE_COMPARATOR_CRITICAL_LIMIT", "3") or "3").strip()
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            return 3
+        return max(1, parsed)
+
+    def _emit_pretrade_comparator_event(self, event: Dict[str, Any]) -> None:
+        if event.get("mismatch_class") == "critical":
+            self._pretrade_comparator_critical_hits += 1
+            limit = self._pretrade_comparator_critical_limit()
+            if self._pretrade_comparator_critical_hits >= limit:
+                self._pretrade_dark_launch_paused = True
+            logger.warning("TradeRouter pretrade comparator critical mismatch: %s", event)
+            if self._pretrade_dark_launch_paused:
+                logger.error(
+                    "TradeRouter pretrade dark launch paused after critical mismatches=%s limit=%s",
+                    self._pretrade_comparator_critical_hits,
+                    limit,
+                )
+            return
+        logger.info("TradeRouter pretrade comparator event: %s", event)
+
+    @staticmethod
+    def _coerce_reason_values(raw: Any) -> list[str]:
+        if not isinstance(raw, list):
+            return []
+        out: list[str] = []
+        for item in raw:
+            if isinstance(item, dict):
+                value = item.get("value") or item.get("code") or item.get("name")
+                if value is not None:
+                    out.append(str(value))
+            else:
+                out.append(str(item))
+        return [v for v in out if v]
+
+    @staticmethod
+    def _normalize_symbol(token: str) -> str:
+        raw = str(token or "").strip().upper()
+        if not raw:
+            return ""
+        if "-" in raw:
+            return raw
+        if "/" in raw:
+            return raw.replace("/", "-")
+        return f"{raw}-USDT"
+
+    def _build_v2_pretrade_payload(self, setup: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        token = str(setup.get("token", "") or "").strip().upper()
+        direction = str(setup.get("direction", "") or "").strip().upper()
+        side = "long" if direction == "LONG" else "short" if direction == "SHORT" else ""
+        if not token or not side:
+            return None
+
+        entry = setup.get("entry")
+        sl = setup.get("sl")
+        tp = setup.get("target")
+        if entry is None or sl is None or tp is None:
+            return None
+
+        try:
+            entry_f = float(entry)
+            sl_f = float(sl)
+            tp_f = float(tp)
+        except (TypeError, ValueError):
+            return None
+
+        account_id = self._resolve_account_id()
+        size_raw = str(os.getenv("SWING_PRETRADE_DEFAULT_SIZE_USD", "1500") or "1500").strip()
+        try:
+            size_usd = float(size_raw)
+        except (TypeError, ValueError):
+            size_usd = 1500.0
+        size_usd = max(1.0, size_usd)
+
+        rerun_marker = "1" if bool(setup.get("is_rerun")) else "0"
+        key_material = f"{account_id}:{token}:{direction}:{entry_f}:{sl_f}:{tp_f}:{rerun_marker}"
+        idempotency_key = hashlib.sha256(key_material.encode("utf-8")).hexdigest()[:32]
+
+        return {
+            "setup_id": f"trade-router:{token}:{direction}:{idempotency_key[:8]}",
+            "account_id": account_id,
+            "symbol": self._normalize_symbol(token),
+            "side": side,
+            "entry": entry_f,
+            "stop_loss": sl_f,
+            "take_profit": tp_f,
+            "size_usd": size_usd,
+            "idempotency_key": idempotency_key,
+        }
+
+    @classmethod
+    def _normalize_v2_pretrade_response(cls, raw: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(raw, dict):
+            return {
+                "status": "error",
+                "data": {
+                    "formatted_response": "❌ Trade check failed: invalid execution-v2 response.",
+                    "approved": False,
+                },
+            }
+
+        state = str(raw.get("state") or "UNKNOWN").upper()
+        veto_reasons = cls._coerce_reason_values(raw.get("veto_reasons"))
+        warnings = cls._coerce_reason_values(raw.get("warnings"))
+        approved = state == "READY"
+
+        lines = [f"Execution v2 pre-trade-check: state={state}"]
+        if veto_reasons:
+            lines.append(f"Veto reasons: {', '.join(veto_reasons)}")
+        if warnings:
+            lines.append(f"Warnings: {', '.join(warnings)}")
+
+        return {
+            "status": "success",
+            "data": {
+                "formatted_response": "\n".join(lines),
+                "approved": approved,
+                "signal": "WEAK — MONITOR ONLY" if approved else "BLOCKED",
+                "state": state,
+                "veto_reasons": veto_reasons,
+                "warnings": warnings,
+            },
+        }
 
     def format_score_decision(self, card: Dict[str, Any]) -> str:
         threshold = 8.0 if card["direction"] == "SHORT" else 8.5
