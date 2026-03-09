@@ -732,7 +732,7 @@ class MessageMonitor(commands.Cog):
         import requests
 
         resp = requests.post(
-            "http://localhost:8000/api/execution/full-analysis",
+            "http://localhost:8000/api/execution/v2/full-analysis",
             json=payload,
             timeout=20,
         )
