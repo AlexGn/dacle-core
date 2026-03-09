@@ -1554,7 +1554,8 @@ class LighterRealClient:
                     }
                 )
         except Exception as e:
-            return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": str(e)})
+            detail = str(e).strip() or f"{type(e).__name__}"
+            return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": detail})
 
     async def _infer_account_trade_permission(
         self,
