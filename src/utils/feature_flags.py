@@ -33,13 +33,9 @@ class FeatureFlag:
     DEPLOY_RELIABILITY_V2_ENABLED = "deploy_reliability_v2_enabled"
     POLY_RECONCILER_SHADOW_ENABLED = "poly_reconciler_shadow_enabled"
     POLY_ZOMBIE_TRACKER_ENABLED = "poly_zombie_tracker_enabled"
-    POLY_TYPED_INVENTORY_ENABLED = "poly_typed_inventory_enabled"
     POLY_MARKET_QUEUE_ENABLED = "poly_market_queue_enabled"
     POLY_ROUTER_SHADOW_ENABLED = "poly_router_shadow_enabled"
     POLY_ROUTER_LIVE_ENABLED = "poly_router_live_enabled"
-    POLY_RISK_CONTEXT_ENABLED = "poly_risk_context_enabled"
-    POLY_NONCE_REGISTRY_ENABLED = "poly_nonce_registry_enabled"
-    POLY_CHECKPOINT_V2_WRITE_ENABLED = "poly_checkpoint_v2_write_enabled"
     POLY_PREEMPTION_V2_ENABLED = "poly_preemption_v2_enabled"
     POLY_TERMINAL_DURABILITY_V2_ENABLED = "poly_terminal_durability_v2_enabled"
 

@@ -45,6 +45,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.utils.lifecycle_store import find_lifecycle_for_position, get_entry as get_lifecycle_entry
+from src.learning.exit_reason import infer_exit_reason
 
 logger = logging.getLogger(__name__)
 
@@ -55,67 +56,6 @@ DATA_TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
 
 # Tokens we track in DACLE (will match against these)
 TRACKED_TOKENS: Optional[List[str]] = None  # Loaded dynamically
-_EXIT_REASON_INFER = None
-_EXIT_REASON_IMPORT_FAILED = False
-
-
-def _resolve_sync_account_id(account_id: Optional[str] = None) -> str:
-    """Resolve account ID for sync storage and exchange credentials."""
-    candidate = str(account_id or "").strip()
-    if candidate:
-        return candidate
-    env_account = str(os.getenv("BLOFIN_SYNC_ACCOUNT_ID", "") or "").strip()
-    if env_account:
-        return env_account
-    fallback = str(os.getenv("EXECUTION_DEFAULT_ACCOUNT_ID", "primary") or "").strip()
-    return fallback or "primary"
-
-
-def _sanitize_account_fragment(account_id: Optional[str]) -> str:
-    raw = str(account_id or "").strip() or "primary"
-    cleaned = "".join(ch for ch in raw if ch.isalnum() or ch in {"-", "_"})
-    return cleaned or "primary"
-
-
-def _force_account_scoped_primary() -> bool:
-    raw = str(os.getenv("BLOFIN_SYNC_FORCE_ACCOUNT_SCOPED_PRIMARY", "false") or "false").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
-def _resolve_trade_log_path(account_id: Optional[str] = None) -> Path:
-    """Resolve trade log path with account-scoped isolation for non-primary accounts."""
-    resolved = _resolve_sync_account_id(account_id)
-    if resolved == "primary" and not _force_account_scoped_primary():
-        return TRADE_LOG_PATH
-    return TRADE_LOG_PATH.parent / "accounts" / _sanitize_account_fragment(resolved) / TRADE_LOG_PATH.name
-
-
-def _resolve_sync_state_path(account_id: Optional[str] = None) -> Path:
-    """Resolve sync-state path with account-scoped isolation for non-primary accounts."""
-    resolved = _resolve_sync_account_id(account_id)
-    if resolved == "primary" and not _force_account_scoped_primary():
-        return SYNC_STATE_PATH
-    return SYNC_STATE_PATH.parent / "accounts" / _sanitize_account_fragment(resolved) / SYNC_STATE_PATH.name
-
-
-def _resolve_exit_reason_infer():
-    """Load optional exit-reason dependency lazily to avoid import-time failures."""
-    global _EXIT_REASON_INFER, _EXIT_REASON_IMPORT_FAILED
-
-    if _EXIT_REASON_IMPORT_FAILED:
-        return None
-    if _EXIT_REASON_INFER is not None:
-        return _EXIT_REASON_INFER
-
-    try:
-        from src.learning.exit_reason import infer_exit_reason as infer_fn
-    except Exception as exc:
-        _EXIT_REASON_IMPORT_FAILED = True
-        logger.debug("Exit reason inference unavailable: %s", exc)
-        return None
-
-    _EXIT_REASON_INFER = infer_fn
-    return _EXIT_REASON_INFER
 
 
 def _get_tracked_tokens() -> List[str]:
@@ -134,12 +74,11 @@ def _get_tracked_tokens() -> List[str]:
     return tokens
 
 
-def _load_trade_log(account_id: Optional[str] = None) -> Dict[str, Any]:
+def _load_trade_log() -> Dict[str, Any]:
     """Load existing trade log."""
-    trade_log_path = _resolve_trade_log_path(account_id)
-    if trade_log_path.exists():
+    if TRADE_LOG_PATH.exists():
         try:
-            with open(trade_log_path) as f:
+            with open(TRADE_LOG_PATH) as f:
                 return json.load(f)
         except json.JSONDecodeError:
             logger.warning("Corrupted trade log, starting fresh")
@@ -151,21 +90,18 @@ def _load_trade_log(account_id: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-def _save_trade_log(data: Dict[str, Any], account_id: Optional[str] = None) -> None:
+def _save_trade_log(data: Dict[str, Any]) -> None:
     """Save trade log to disk."""
     from src.utils.atomic_write import atomic_json_write
-    trade_log_path = _resolve_trade_log_path(account_id)
-    trade_log_path.parent.mkdir(parents=True, exist_ok=True)
     data["last_updated"] = datetime.now(timezone.utc).isoformat()
-    atomic_json_write(trade_log_path, data)
+    atomic_json_write(TRADE_LOG_PATH, data)
 
 
-def _load_sync_state(account_id: Optional[str] = None) -> Dict[str, Any]:
+def _load_sync_state() -> Dict[str, Any]:
     """Load sync state (last sync timestamp, synced trade IDs)."""
-    sync_state_path = _resolve_sync_state_path(account_id)
-    if sync_state_path.exists():
+    if SYNC_STATE_PATH.exists():
         try:
-            with open(sync_state_path) as f:
+            with open(SYNC_STATE_PATH) as f:
                 return json.load(f)
         except json.JSONDecodeError:
             pass
@@ -177,13 +113,12 @@ def _load_sync_state(account_id: Optional[str] = None) -> Dict[str, Any]:
     }
 
 
-def _save_sync_state(state: Dict[str, Any], account_id: Optional[str] = None) -> None:
+def _save_sync_state(state: Dict[str, Any]) -> None:
     """Save sync state."""
     from src.utils.atomic_write import atomic_json_write
-    sync_state_path = _resolve_sync_state_path(account_id)
-    sync_state_path.parent.mkdir(parents=True, exist_ok=True)
+    SYNC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     state["last_sync"] = datetime.now(timezone.utc).isoformat()
-    atomic_json_write(sync_state_path, state)
+    atomic_json_write(SYNC_STATE_PATH, state)
 
 
 def _generate_trade_id(trade: Dict[str, Any]) -> str:
@@ -208,72 +143,23 @@ class BlofinTradeSync:
     5. Triggers forward_validation sync
     """
 
-    def __init__(self, account_id: Optional[str] = None):
+    def __init__(self):
         """Initialize Blofin connection."""
-        self._default_account_id = _resolve_sync_account_id(None)
-        self.account_id = _resolve_sync_account_id(account_id)
         self.exchange = None
         self._init_exchange()
-
-    @staticmethod
-    def _account_env_suffix(account_id: str) -> str:
-        raw = str(account_id or "").strip()
-        if not raw:
-            return ""
-        return "".join(ch if ch.isalnum() else "_" for ch in raw).upper()
-
-    def _resolve_account_credentials(self) -> Optional[tuple[str, str, str]]:
-        resolved_account = str(self.account_id or "").strip() or "primary"
-        suffix = self._account_env_suffix(resolved_account)
-
-        scoped_key = os.getenv(f"BLOFIN_API_KEY_{suffix}")
-        scoped_secret = os.getenv(f"BLOFIN_API_SECRET_{suffix}")
-        scoped_passphrase = os.getenv(f"BLOFIN_PASSPHRASE_{suffix}")
-        scoped_any = any([scoped_key, scoped_secret, scoped_passphrase])
-        scoped_complete = all([scoped_key, scoped_secret, scoped_passphrase])
-        if scoped_any:
-            if not scoped_complete:
-                logger.error("Incomplete Blofin scoped credentials for account_id=%s", resolved_account)
-                return None
-            return (str(scoped_key), str(scoped_secret), str(scoped_passphrase))
-
-        base_key = os.getenv("BLOFIN_API_KEY")
-        base_secret = os.getenv("BLOFIN_API_SECRET")
-        base_passphrase = os.getenv("BLOFIN_PASSPHRASE")
-        if not all([base_key, base_secret, base_passphrase]):
-            return None
-        if resolved_account == self._default_account_id:
-            return (str(base_key), str(base_secret), str(base_passphrase))
-
-        live_enabled = str(os.getenv("BLOFIN_LIVE_ENABLED", "false") or "false").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
-        allow_live_fallback = str(
-            os.getenv("SWING_BLOFIN_ALLOW_DEFAULT_CREDENTIAL_FALLBACK_LIVE", "false") or "false"
-        ).strip().lower() in {"1", "true", "yes", "on"}
-        if live_enabled and not allow_live_fallback:
-            logger.error(
-                "Blocked default Blofin credentials fallback for account_id=%s in live mode",
-                resolved_account,
-            )
-            return None
-        if live_enabled and allow_live_fallback:
-            logger.warning("Using default Blofin credentials fallback for account_id=%s", resolved_account)
-        return (str(base_key), str(base_secret), str(base_passphrase))
 
     def _init_exchange(self) -> None:
         """Initialize ccxt Blofin exchange."""
         try:
             import ccxt
 
-            creds = self._resolve_account_credentials()
-            if not creds:
-                logger.warning("Blofin API credentials not configured for account_id=%s", self.account_id)
+            api_key = os.getenv("BLOFIN_API_KEY")
+            api_secret = os.getenv("BLOFIN_API_SECRET")
+            passphrase = os.getenv("BLOFIN_PASSPHRASE")
+
+            if not api_key or not api_secret or not passphrase:
+                logger.warning("Blofin API credentials not configured")
                 return
-            api_key, api_secret, passphrase = creds
 
             # Blofin uses 'password' for passphrase in ccxt
             self.exchange = ccxt.blofin({
@@ -695,8 +581,7 @@ class BlofinTradeSync:
             "skipped_existing": [],
             "skipped_untracked": [],
             "errors": [],
-            "sync_timestamp": datetime.now(timezone.utc).isoformat(),
-            "account_id": self.account_id,
+            "sync_timestamp": datetime.now(timezone.utc).isoformat()
         }
 
         if not self.exchange:
@@ -704,8 +589,8 @@ class BlofinTradeSync:
             return results
 
         # Load current state
-        trade_log = _load_trade_log(account_id=self.account_id)
-        sync_state = _load_sync_state(account_id=self.account_id)
+        trade_log = _load_trade_log()
+        sync_state = _load_sync_state()
         synced_ids = set(sync_state.get("synced_trade_ids", []))
         tracked_tokens = _get_tracked_tokens()
 
@@ -829,7 +714,7 @@ class BlofinTradeSync:
 
         # Save updated data
         if results["new_trades"]:
-            _save_trade_log(trade_log, account_id=self.account_id)
+            _save_trade_log(trade_log)
             sync_state["synced_trade_ids"] = list(synced_ids)
 
             # Trigger forward validation sync
@@ -837,7 +722,7 @@ class BlofinTradeSync:
 
         # Always update last_sync timestamp on successful run
         # (health check uses this to verify sync is running, not just new trades)
-        _save_sync_state(sync_state, account_id=self.account_id)
+        _save_sync_state(sync_state)
 
         return results
 
@@ -965,17 +850,15 @@ class BlofinTradeSync:
             try:
                 playbook_levels = self._get_setup_levels(token, trade_type)
                 if playbook_levels:
-                    infer_exit_reason = _resolve_exit_reason_infer()
-                    if infer_exit_reason is not None:
-                        exit_reason = infer_exit_reason(
-                            exit_price=close_price,
-                            direction=trade_type,
-                            entry_price=entry_price,
-                            stop_loss=playbook_levels.get("stop_loss"),
-                            take_profit=playbook_levels.get("target"),
-                        )
-                        sl_hit = exit_reason == "SL_HIT"
-                        tp_hit = exit_reason == "TP_HIT"
+                    exit_reason = infer_exit_reason(
+                        exit_price=close_price,
+                        direction=trade_type,
+                        entry_price=entry_price,
+                        stop_loss=playbook_levels.get("stop_loss"),
+                        take_profit=playbook_levels.get("target"),
+                    )
+                    sl_hit = exit_reason == "SL_HIT"
+                    tp_hit = exit_reason == "TP_HIT"
             except Exception as e:
                 logger.debug(f"Exit reason inference failed for {token}: {e}")
 

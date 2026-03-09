@@ -1,14 +1,14 @@
 import json
 import logging
 import os
-import base64
-import time
 import hashlib
 import hmac
 import asyncio
+import base64
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List
 from threading import Lock
 from uuid import uuid4
 
@@ -23,11 +23,6 @@ INTENTS_FILE = DATA_DIR / "execution_intents.json"
 EVENTS_FILE = DATA_DIR / "execution_events.json"
 EVENTS_CHAIN_FILE = DATA_DIR / "execution_events.chain.jsonl"
 EVENTS_CHAIN_HEAD_FILE = DATA_DIR / "execution_events.chain.head.json"
-DEFAULT_CONTEXT_TOKEN_TTL_SEC = 60
-DEFAULT_CONTEXT_CLOCK_SKEW_SEC = 5
-DEV_ONLY_CONTEXT_SECRET = "DEV_ONLY_EXECUTION_CONTEXT_SECRET"
-DEFAULT_CONTEXT_NONCE_PREFIX = "exec_ctx_nonce:"
-DEFAULT_CONTEXT_NONCE_TIMEOUT_MS = 50
 
 class ExecutionStateManager:
     """
@@ -63,12 +58,12 @@ class ExecutionStateManager:
             
         self._intents_lock = Lock()
         self._events_lock = Lock()
-        self._nonce_lock = Lock()
         self._async_intents_lock: Optional[asyncio.Lock] = None
         self._async_events_lock: Optional[asyncio.Lock] = None
-        self._consumed_context_nonces: Dict[str, int] = {}
-        self._context_store: Optional[ContextTokenStore] = None
-        self._context_store_config: Optional[Tuple[str, str, int]] = None
+        self._context_nonce_lock = Lock()
+        self._context_nonce_seen: Dict[str, int] = {}
+        self._context_token_store: Optional[ContextTokenStore] = None
+        self._context_token_store_url: str = ""
 
     def _get_async_intents_lock(self) -> asyncio.Lock:
         if self._async_intents_lock is None:
@@ -122,19 +117,6 @@ class ExecutionStateManager:
         return str(idempotency_key or "").strip()
 
     @staticmethod
-    def _b64url_encode(raw: bytes) -> str:
-        return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
-
-    @staticmethod
-    def _b64url_decode(raw: str) -> bytes:
-        padded = raw + "=" * ((4 - len(raw) % 4) % 4)
-        return base64.urlsafe_b64decode(padded.encode("utf-8"))
-
-    @staticmethod
-    def _state_value(state: ExecutionState) -> str:
-        return state.value if isinstance(state, ExecutionState) else str(state)
-
-    @staticmethod
     def _env_bool(name: str, default: bool = False) -> bool:
         raw = os.getenv(name)
         if raw is None:
@@ -144,73 +126,93 @@ class ExecutionStateManager:
     def _is_live_mode(self) -> bool:
         return self._env_bool("BLOFIN_LIVE_ENABLED", default=False)
 
-    @staticmethod
-    def _resolve_context_secret() -> str:
+    def _context_secret(self) -> str:
         primary = str(os.getenv("EXECUTION_CONTEXT_HMAC_KEY", "") or "").strip()
         if primary:
             return primary
-        
-        # In live mode, we do NOT fall back to the audit key for execution context tokens.
-        live_enabled = str(os.getenv("BLOFIN_LIVE_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
-        if live_enabled:
-            return DEV_ONLY_CONTEXT_SECRET # This will trigger the UNCONFIGURED failure in issue/validate
-            
-        return str(os.getenv("EXECUTION_AUDIT_HMAC_KEY", "") or "").strip() or DEV_ONLY_CONTEXT_SECRET
+        return str(os.getenv("EXECUTION_AUDIT_HMAC_KEY", "") or "").strip()
 
     @staticmethod
-    def _resolve_context_ttl(ttl_sec: Optional[int]) -> int:
-        if ttl_sec is not None:
-            ttl = int(ttl_sec)
-        else:
-            ttl = int(os.getenv("EXECUTION_CONTEXT_TOKEN_TTL_SEC", str(DEFAULT_CONTEXT_TOKEN_TTL_SEC)))
-        return max(1, min(ttl, 300))
+    def _context_token_ttl_sec() -> int:
+        raw = os.getenv("EXECUTION_CONTEXT_TOKEN_TTL_SEC", "60")
+        try:
+            val = int(raw)
+        except Exception:
+            val = 60
+        return max(5, min(val, 300))
 
     @staticmethod
-    def _resolve_context_clock_skew() -> int:
-        skew = int(os.getenv("EXECUTION_CONTEXT_CLOCK_SKEW_SEC", str(DEFAULT_CONTEXT_CLOCK_SKEW_SEC)))
-        return max(0, min(skew, 30))
+    def _context_clock_skew_sec() -> int:
+        raw = os.getenv("EXECUTION_CONTEXT_CLOCK_SKEW_SEC", "5")
+        try:
+            val = int(raw)
+        except Exception:
+            val = 5
+        return max(0, min(val, 30))
 
-    def _require_distributed_nonce_store(self) -> bool:
+    @staticmethod
+    def _context_nonce_timeout_ms() -> int:
+        raw = os.getenv("EXECUTION_CONTEXT_NONCE_TIMEOUT_MS", "50")
+        try:
+            val = int(raw)
+        except Exception:
+            val = 50
+        return max(10, min(val, 100))
+
+    @staticmethod
+    def _context_nonce_prefix() -> str:
+        return str(os.getenv("EXECUTION_CONTEXT_NONCE_PREFIX", "exec_ctx_nonce:") or "exec_ctx_nonce:")
+
+    @staticmethod
+    def _context_nonce_redis_url() -> str:
+        return str(os.getenv("EXECUTION_CONTEXT_NONCE_REDIS_URL", "") or "").strip()
+
+    def _context_require_distributed_nonce(self, strict_default: bool = False) -> bool:
         raw = os.getenv("EXECUTION_CONTEXT_REQUIRE_DISTRIBUTED_NONCE")
         if raw is None:
-            return self._is_live_mode()
-        return self._env_bool("EXECUTION_CONTEXT_REQUIRE_DISTRIBUTED_NONCE", default=False)
+            # Default to live-mode strictness unless caller explicitly requests strictness.
+            return self._is_live_mode() or bool(strict_default)
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
-    def _context_nonce_store_timeout_ms(self) -> int:
-        raw = os.getenv("EXECUTION_CONTEXT_NONCE_TIMEOUT_MS")
-        try:
-            timeout_ms = int(raw) if raw is not None else DEFAULT_CONTEXT_NONCE_TIMEOUT_MS
-        except (TypeError, ValueError):
-            timeout_ms = DEFAULT_CONTEXT_NONCE_TIMEOUT_MS
-        return max(10, min(timeout_ms, 100))
-
-    def _get_context_store(self) -> Optional[ContextTokenStore]:
-        redis_url = str(os.getenv("EXECUTION_CONTEXT_NONCE_REDIS_URL", "") or "").strip()
+    def _get_context_token_store(self) -> Optional[ContextTokenStore]:
+        redis_url = self._context_nonce_redis_url()
         if not redis_url:
+            self._context_token_store = None
+            self._context_token_store_url = ""
             return None
-        prefix = str(os.getenv("EXECUTION_CONTEXT_NONCE_PREFIX", DEFAULT_CONTEXT_NONCE_PREFIX) or DEFAULT_CONTEXT_NONCE_PREFIX)
-        timeout_ms = self._context_nonce_store_timeout_ms()
-        config = (redis_url, prefix, timeout_ms)
-        if self._context_store is None or self._context_store_config != config:
-            self._context_store = ContextTokenStore(
+
+        if self._context_token_store is None or self._context_token_store_url != redis_url:
+            self._context_token_store = ContextTokenStore(
                 redis_url=redis_url,
-                prefix=prefix,
-                timeout_ms=timeout_ms,
+                prefix=self._context_nonce_prefix(),
+                timeout_ms=self._context_nonce_timeout_ms(),
             )
-            self._context_store_config = config
-        return self._context_store
+            self._context_token_store_url = redis_url
+        return self._context_token_store
 
-    def ensure_context_runtime_ready(self, strict: Optional[bool] = None) -> Tuple[bool, str]:
+    @staticmethod
+    def _b64url_encode(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
+
+    @staticmethod
+    def _b64url_decode(value: str) -> bytes:
+        raw = str(value or "")
+        padding = "=" * ((4 - (len(raw) % 4)) % 4)
+        return base64.urlsafe_b64decode(raw + padding)
+
+    def ensure_context_runtime_ready(self, strict: Optional[bool] = None) -> tuple[bool, str]:
         strict_mode = self._is_live_mode() if strict is None else bool(strict)
-        secret = self._resolve_context_secret()
-        if strict_mode and secret == DEV_ONLY_CONTEXT_SECRET:
-            return False, "TOKEN_SECRET_UNCONFIGURED"
-
-        distributed_required = strict_mode or self._require_distributed_nonce_store()
-        if not distributed_required:
+        secret = self._context_secret()
+        if not secret:
+            if strict_mode:
+                return False, "TOKEN_SECRET_UNCONFIGURED"
             return True, "OK"
 
-        store = self._get_context_store()
+        require_distributed = self._context_require_distributed_nonce(strict_default=strict_mode)
+        if not require_distributed:
+            return True, "OK"
+
+        store = self._get_context_token_store()
         if store is None:
             return False, "TOKEN_NONCE_STORE_UNAVAILABLE"
 
@@ -224,131 +226,155 @@ class ExecutionStateManager:
     def issue_bridge_context_token(
         self,
         idempotency_key: str,
-        required_state: ExecutionState = ExecutionState.PROTECTION_SUBMITTING,
-        *,
-        account_id: Optional[str] = None,
+        required_state: ExecutionState,
         ttl_sec: Optional[int] = None,
     ) -> str:
-        scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
-        intent = self.get_intent(scoped_key)
+        secret = self._context_secret()
+        if not secret:
+            raise RuntimeError("TOKEN_SECRET_UNCONFIGURED")
+
+        key = str(idempotency_key or "").strip()
+        if not key:
+            raise ValueError("TOKEN_KEY_MISSING")
+
+        intent = self.get_intent(key)
         if not intent:
-            raise ValueError("CONTEXT_INTENT_NOT_FOUND")
+            raise ValueError("TOKEN_INTENT_NOT_FOUND")
 
-        expected_state = self._state_value(required_state)
-        current_state = str(intent.get("state", "") or "")
-        if current_state != expected_state:
-            raise ValueError(f"CONTEXT_STATE_MISMATCH:{current_state}->{expected_state}")
-
-        secret = self._resolve_context_secret()
-        if self._is_live_mode() and secret == DEV_ONLY_CONTEXT_SECRET:
-            raise ValueError("CONTEXT_SECRET_UNCONFIGURED")
+        current_state_raw = intent.get("state")
+        current_state = ExecutionState(current_state_raw)
+        if current_state != required_state:
+            raise ValueError("TOKEN_STATE_MISMATCH")
 
         now = int(time.time())
-        ttl = self._resolve_context_ttl(ttl_sec)
+        ttl = self._context_token_ttl_sec() if ttl_sec is None else max(5, min(int(ttl_sec), 300))
         payload = {
-            "idempotency_key": scoped_key,
-            "required_state": expected_state,
+            "idempotency_key": key,
+            "required_state": required_state.value,
             "iat": now,
             "exp": now + ttl,
             "nonce": uuid4().hex,
         }
-        encoded = self._b64url_encode(
-            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-        )
+        payload_bytes = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        encoded = self._b64url_encode(payload_bytes)
         signature = hmac.new(secret.encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256).hexdigest()
         return f"{encoded}.{signature}"
 
-    def _consume_context_nonce(self, nonce: str, expiry_ts: int, now_ts: int, skew_sec: int) -> Tuple[bool, str]:
-        ttl_sec = max(1, int(expiry_ts - now_ts + skew_sec))
-        distributed_required = self._require_distributed_nonce_store()
-        store = self._get_context_store()
+    def _consume_context_nonce_once_local(self, nonce: str, ttl_sec: int) -> tuple[bool, str]:
+        now = int(time.time())
+        expiry = now + max(1, min(int(ttl_sec), 300))
+        with self._context_nonce_lock:
+            stale = [k for k, ts in self._context_nonce_seen.items() if ts <= now]
+            for key in stale:
+                self._context_nonce_seen.pop(key, None)
+            if nonce in self._context_nonce_seen:
+                return False, "REPLAYED"
+            self._context_nonce_seen[nonce] = expiry
+        return True, "OK"
+
+    def _consume_context_nonce_once(self, nonce: str, ttl_sec: int) -> tuple[bool, str]:
+        require_distributed = self._context_require_distributed_nonce()
+        store = self._get_context_token_store()
         if store is not None:
             ok, reason = store.consume_once(nonce, ttl_sec=ttl_sec)
             if ok:
                 return True, "OK"
             if reason == "REPLAYED":
-                return False, "TOKEN_REPLAYED"
+                return False, "REPLAYED"
             if reason == "TIMEOUT":
-                return False, "TOKEN_NONCE_STORE_TIMEOUT"
-            return False, "TOKEN_NONCE_STORE_UNAVAILABLE"
-        if distributed_required:
-            return False, "TOKEN_NONCE_STORE_UNAVAILABLE"
+                return False, "TIMEOUT"
+            if reason == "INVALID_NONCE":
+                return False, "INVALID_NONCE"
+            if require_distributed:
+                return False, "UNAVAILABLE"
+            return self._consume_context_nonce_once_local(nonce, ttl_sec)
 
-        with self._nonce_lock:
-            for key, expiry in list(self._consumed_context_nonces.items()):
-                if int(expiry) < now_ts - skew_sec:
-                    self._consumed_context_nonces.pop(key, None)
-            if nonce in self._consumed_context_nonces:
-                return False, "TOKEN_REPLAYED"
-            self._consumed_context_nonces[nonce] = expiry_ts
-        return True, "OK"
+        if require_distributed:
+            return False, "UNAVAILABLE"
+        return self._consume_context_nonce_once_local(nonce, ttl_sec)
 
     def validate_bridge_context_token(
         self,
         token: str,
         idempotency_key: str,
-        required_state: ExecutionState = ExecutionState.PROTECTION_SUBMITTING,
-        *,
-        account_id: Optional[str] = None,
+        required_state: ExecutionState,
         consume_nonce: bool = True,
-    ) -> Tuple[bool, str]:
-        raw_token = str(token or "").strip()
-        if not raw_token:
-            return False, "MISSING_TOKEN"
-
-        encoded, sep, signature = raw_token.partition(".")
-        if not sep or not encoded or not signature:
-            return False, "TOKEN_FORMAT_INVALID"
-
-        secret = self._resolve_context_secret()
-        if self._is_live_mode() and secret == DEV_ONLY_CONTEXT_SECRET:
+    ) -> tuple[bool, str]:
+        secret = self._context_secret()
+        if not secret:
             return False, "TOKEN_SECRET_UNCONFIGURED"
 
+        raw_token = str(token or "").strip()
+        if not raw_token:
+            return False, "TOKEN_MISSING"
+
+        encoded, sep, signature = raw_token.partition(".")
+        if sep != "." or not encoded or not signature:
+            return False, "TOKEN_FORMAT_INVALID"
+
         expected_sig = hmac.new(secret.encode("utf-8"), encoded.encode("utf-8"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(signature, expected_sig):
+        if not hmac.compare_digest(expected_sig, signature):
             return False, "TOKEN_SIGNATURE_INVALID"
 
         try:
             payload = json.loads(self._b64url_decode(encoded).decode("utf-8"))
         except Exception:
-            return False, "TOKEN_DECODE_FAILED"
+            return False, "TOKEN_PAYLOAD_INVALID"
 
-        expected_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
-        if str(payload.get("idempotency_key", "")) != expected_key:
+        if not isinstance(payload, dict):
+            return False, "TOKEN_PAYLOAD_INVALID"
+
+        token_key = str(payload.get("idempotency_key", "") or "").strip()
+        if token_key != str(idempotency_key or "").strip():
             return False, "TOKEN_KEY_MISMATCH"
 
-        expected_state = self._state_value(required_state)
-        if str(payload.get("required_state", "")) != expected_state:
-            return False, "TOKEN_STATE_CLAIM_MISMATCH"
+        token_state = str(payload.get("required_state", "") or "").strip()
+        if token_state != required_state.value:
+            return False, "TOKEN_STATE_MISMATCH"
 
-        try:
-            issued_at = int(payload.get("iat"))
-            expires_at = int(payload.get("exp"))
-        except Exception:
-            return False, "TOKEN_TIME_INVALID"
-
-        now = int(time.time())
-        skew = self._resolve_context_clock_skew()
-        if now < issued_at - skew:
-            return False, "TOKEN_NOT_YET_VALID"
-        if now > expires_at + skew:
-            return False, "TOKEN_EXPIRED"
-
-        intent = self.get_intent(expected_key)
-        if not intent:
-            return False, "INTENT_NOT_FOUND"
-        if str(intent.get("state", "")) != expected_state:
-            return False, "INTENT_STATE_MISMATCH"
-
-        nonce = str(payload.get("nonce", "") or "")
+        nonce = str(payload.get("nonce", "") or "").strip()
         if not nonce:
             return False, "TOKEN_NONCE_MISSING"
 
-        if consume_nonce:
-            ok, reason = self._consume_context_nonce(nonce, expires_at, now, skew)
-            if not ok:
-                return False, reason
-        return True, "OK"
+        try:
+            iat = int(payload.get("iat"))
+            exp = int(payload.get("exp"))
+        except Exception:
+            return False, "TOKEN_TIME_INVALID"
+        if exp <= iat:
+            return False, "TOKEN_TIME_INVALID"
+
+        now = int(time.time())
+        skew = self._context_clock_skew_sec()
+        if now + skew < iat:
+            return False, "TOKEN_NOT_YET_VALID"
+        if now - skew > exp:
+            return False, "TOKEN_EXPIRED"
+
+        intent = self.get_intent(idempotency_key)
+        if not intent:
+            return False, "TOKEN_INTENT_NOT_FOUND"
+        try:
+            current_state = ExecutionState(intent.get("state"))
+        except Exception:
+            return False, "TOKEN_STATE_MISMATCH"
+        if current_state != required_state:
+            return False, "TOKEN_STATE_MISMATCH"
+
+        if not consume_nonce:
+            return True, "OK"
+
+        ttl = max(1, exp - now + skew)
+        consumed, consume_reason = self._consume_context_nonce_once(nonce, ttl_sec=ttl)
+        if consumed:
+            return True, "OK"
+        if consume_reason == "REPLAYED":
+            return False, "TOKEN_REPLAYED"
+        if consume_reason == "TIMEOUT":
+            return False, "TOKEN_NONCE_STORE_TIMEOUT"
+        if consume_reason == "INVALID_NONCE":
+            return False, "TOKEN_NONCE_INVALID"
+        return False, "TOKEN_NONCE_STORE_UNAVAILABLE"
 
     # --- Sync Interface ---
 
@@ -413,39 +439,6 @@ class ExecutionStateManager:
             scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
             return self._get_pretrade_snapshot_logic(scoped_key)
 
-    def list_active_intents(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Return intents considered active for monitor workflows.
-        Active intents are non-terminal, exchange-facing states.
-        """
-        active_states = {
-            ExecutionState.PROTECTION_ARMED,
-            ExecutionState.SUBMITTED,
-            ExecutionState.PARTIALLY_FILLED,
-        }
-        return self._list_intents_by_states(active_states, account_id=account_id)
-
-    def list_reconcilable_intents(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """
-        Return intents that should be reconciled against exchange truth.
-        """
-        reconcilable_states = {
-            ExecutionState.SUBMITTED,
-            ExecutionState.PARTIALLY_FILLED,
-        }
-        return self._list_intents_by_states(reconcilable_states, account_id=account_id)
-
-    def update_intent_metadata(
-        self,
-        idempotency_key: str,
-        metadata: Dict[str, Any],
-        account_id: Optional[str] = None,
-    ) -> bool:
-        """Merge metadata into an existing intent without state transition."""
-        with self._intents_lock:
-            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
-            return self._update_intent_metadata_logic(scoped_key, metadata)
-
     # --- Async Interface (Avoids to_thread overhead) ---
 
     async def get_intent_async(self, idempotency_key: str, account_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
@@ -500,24 +493,6 @@ class ExecutionStateManager:
         async with self._get_async_intents_lock():
             scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
             return self._get_pretrade_snapshot_logic(scoped_key)
-
-    async def list_active_intents_async(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        async with self._get_async_intents_lock():
-            return self.list_active_intents(account_id=account_id)
-
-    async def list_reconcilable_intents_async(self, account_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        async with self._get_async_intents_lock():
-            return self.list_reconcilable_intents(account_id=account_id)
-
-    async def update_intent_metadata_async(
-        self,
-        idempotency_key: str,
-        metadata: Dict[str, Any],
-        account_id: Optional[str] = None,
-    ) -> bool:
-        async with self._get_async_intents_lock():
-            scoped_key = self._resolve_effective_key(idempotency_key, account_id=account_id)
-            return self._update_intent_metadata_logic(scoped_key, metadata)
 
     # --- Private Logic (No Locking) ---
 
@@ -666,70 +641,6 @@ class ExecutionStateManager:
         except Exception as e:
             logger.error("Failed to read pre-trade snapshot: %s", e)
             return None
-
-    @staticmethod
-    def _normalize_state(raw_state: Any) -> Optional[ExecutionState]:
-        if isinstance(raw_state, ExecutionState):
-            return raw_state
-        text = str(raw_state or "").strip()
-        if not text:
-            return None
-        try:
-            return ExecutionState(text)
-        except ValueError:
-            return None
-
-    def _list_intents_by_states(
-        self,
-        allowed_states: set[ExecutionState],
-        *,
-        account_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        try:
-            intents = self._load_intents()
-            resolved_account = self._normalize_account_id(account_id) if account_id else None
-            rows: List[Dict[str, Any]] = []
-            for scoped_key, intent in intents.items():
-                if not isinstance(intent, dict):
-                    continue
-                if resolved_account:
-                    intent_account = intent.get("account_id") or self.account_id_from_scoped_key(scoped_key)
-                    if str(intent_account or "").strip() != resolved_account:
-                        continue
-                state = self._normalize_state(intent.get("state"))
-                if state is None or state not in allowed_states:
-                    continue
-                row = dict(intent)
-                if "idempotency_key" not in row:
-                    row["idempotency_key"] = scoped_key
-                rows.append(row)
-            rows.sort(key=lambda item: str(item.get("created_at", "")))
-            return rows
-        except Exception as e:
-            logger.error("Failed to list intents by state: %s", e)
-            return []
-
-    def _update_intent_metadata_logic(self, idempotency_key: str, metadata: Optional[Dict[str, Any]]) -> bool:
-        if not isinstance(metadata, dict):
-            return False
-        try:
-            intents = self._load_intents()
-            intent = intents.get(idempotency_key)
-            if not isinstance(intent, dict):
-                return False
-            intent.update(metadata)
-            intent["updated_at"] = datetime.now(timezone.utc).isoformat()
-            intents[idempotency_key] = intent
-            self._save_intents(intents)
-            self._log_event(
-                idempotency_key,
-                "METADATA_UPDATED",
-                {"updated_fields": sorted(metadata.keys())},
-            )
-            return True
-        except Exception as e:
-            logger.error("Failed to update intent metadata: %s", e)
-            return False
 
     def _is_valid_transition(self, from_state: ExecutionState, to_state: ExecutionState) -> bool:
         """

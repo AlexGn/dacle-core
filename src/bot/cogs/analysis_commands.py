@@ -114,6 +114,14 @@ def _is_timeout_like_error(exc: BaseException) -> bool:
 
 def _format_user_facing_analysis_error(exc: BaseException) -> str:
     """Convert internal exception details into stable user-facing text."""
+    if isinstance(exc, requests.HTTPError):
+        status = getattr(exc.response, "status_code", "unknown")
+        try:
+            body = exc.response.text[:200]
+            return f"HTTP {status} Error: {body}"
+        except Exception:
+            return f"HTTP {status} Error (no body)"
+
     err_text = str(exc)
     if "Permission denied" in err_text and "consolidated.json" in err_text:
         return (
@@ -383,11 +391,6 @@ class AnalysisCommands(commands.Cog):
         logger.info("AnalysisCommands cog initialized")
 
     @staticmethod
-    def _strict_account_authz_enabled() -> bool:
-        raw = str(os.getenv("SWING_STRICT_DISCORD_ACCOUNT_AUTHZ", "false") or "false").strip().lower()
-        return raw in {"1", "true", "yes", "on"}
-
-    @staticmethod
     def _allowed_user_ids() -> set[str]:
         raw = os.getenv("DISCORD_ALLOWED_USER_IDS", "").strip()
         allowed = {item.strip() for item in raw.split(",") if item.strip()} if raw else set()
@@ -457,12 +460,12 @@ class AnalysisCommands(commands.Cog):
         account_acl = self._account_acl()
         if not account_acl:
             # Backward compatibility: do not hard-lock commands if ACL is unconfigured.
-            return False if self._strict_account_authz_enabled() else True
+            return True
         resolved_account = self._resolve_account_id(account_id)
         allowed_for_account = account_acl.get(resolved_account) or account_acl.get("*")
         if not allowed_for_account:
             # Backward compatibility: only enforce when account has an explicit ACL entry.
-            return False if self._strict_account_authz_enabled() else True
+            return True
         return str(user_id) in allowed_for_account
 
     @staticmethod

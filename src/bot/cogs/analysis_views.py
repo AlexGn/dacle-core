@@ -29,43 +29,6 @@ def _api_headers() -> dict:
     return {"X-API-Key": api_key} if api_key else {}
 
 
-def _resolve_execution_invoke_mode() -> str:
-    raw = str(os.getenv("SWING_EXECUTION_INVOKE_MODE", "inprocess") or "inprocess").strip().lower()
-    return raw if raw in {"inprocess", "http"} else "inprocess"
-
-
-def _resolve_execution_account_id() -> str:
-    # Keep Discord-facing account routing aligned with execution defaults.
-    for env_name in (
-        "DISCORD_ANALYSIS_ACCOUNT_ID",
-        "DISCORD_DEFAULT_ACCOUNT_ID",
-        "EXECUTION_DEFAULT_ACCOUNT_ID",
-    ):
-        raw = str(os.getenv(env_name, "") or "").strip()
-        if raw:
-            return raw
-    return "primary"
-
-
-def _resolve_approval_execute_dry_run() -> bool:
-    raw = str(os.getenv("SWING_APPROVAL_EXECUTE_DRY_RUN", "true") or "true").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
-
-
-async def _approve_and_execute_v2_http(request: Any) -> Any:
-    from src.execution.v2_models import ApproveAndExecuteResponseV2
-
-    payload = request.model_dump() if hasattr(request, "model_dump") else request.dict()
-    url = f"{API_BASE_URL}/api/execution/v2/approve-and-execute"
-    async with aiohttp.ClientSession() as session:
-        async with session.post(url, json=payload, headers=_api_headers()) as resp:
-            if resp.status != 200:
-                body = await resp.text()
-                raise RuntimeError(f"execution_v2_http_failed status={resp.status} body={body[:300]}")
-            raw = await resp.json()
-    return ApproveAndExecuteResponseV2(**raw)
-
-
 def _load_execution_state(symbol: str, direction: str) -> Optional[dict]:
     """Load playbook execution state for a token."""
     token_dir = TOKENS_DIR / symbol.upper()
@@ -391,7 +354,7 @@ class TradeApprovalView(discord.ui.View):
         from api.routers.execution_v2 import approve_and_execute_v2
         from src.execution.v2_models import ApproveAndExecuteRequestV2, ExecutionState
 
-        account_id = _resolve_execution_account_id()
+        account_id = str(os.getenv("EXECUTION_DEFAULT_ACCOUNT_ID", "primary") or "").strip() or "primary"
         # Deterministic key prevents duplicate orders from repeated button clicks/retries.
         key_material = (
             f"{account_id}:{interaction.message.id}:{interaction.user.id}:"
@@ -410,14 +373,11 @@ class TradeApprovalView(discord.ui.View):
             stop_loss=sl,
             take_profit=tp,
             size_usd=1500.0, # Default Phase 2 size
-            dry_run=_resolve_approval_execute_dry_run()
+            dry_run=True # Force Dry-Run for initial rollout
         )
 
         try:
-            if _resolve_execution_invoke_mode() == "http":
-                result = await _approve_and_execute_v2_http(request)
-            else:
-                result = await approve_and_execute_v2(request)
+            result = await approve_and_execute_v2(request)
             
             if result.state == ExecutionState.VETOED:
                 reasons = ", ".join([r.value for r in result.veto_reasons])
