@@ -600,24 +600,13 @@ class UpdateCommands(commands.Cog):
             "triggered_by": str(interaction.user),
             "requested_channel_id": str(interaction.channel_id),
         }
-        
-        error_detail = "Unknown error"
-        url = f"{self.api_url}/api/futures/refresh/run"
-        
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.post(url, json=payload, headers=self._headers())
-                if 200 <= resp.status_code < 300:
-                    result = self._normalize_refresh_payload(resp.json())
-                else:
-                    error_detail = f"HTTP {resp.status_code}: {resp.text[:100]}"
-                    result = None
-        except Exception as e:
-            error_detail = f"Connection error: {type(e).__name__}"
-            result = None
+
+        result = self._normalize_refresh_payload(
+            await self._api_post("/api/futures/refresh/run", payload)
+        )
 
         if not result:
-            await self._handle_start_failure(interaction, error_detail)
+            await self._handle_start_failure(interaction)
             return
 
         request_status = self._resolve_request_status(result)

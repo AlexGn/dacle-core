@@ -27,6 +27,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 MACRO_CACHE_DIR = PROJECT_ROOT / "data" / "cache" / "macro"
 CG_CACHE_FILE = MACRO_CACHE_DIR / "coingecko_global.json"
 ECON_CACHE_FILE = MACRO_CACHE_DIR / "economic_calendar.json"
+LEGACY_MACRO_CACHE_FILE = PROJECT_ROOT / "data" / "cache" / "macro_indices_cache.json"
 
 # TTLs
 CG_TTL = 15 * 60  # 15 minutes
@@ -79,7 +80,12 @@ class MacroDataService:
             logger.error(f"CoinGecko fetch exception: {e}")
 
         # 3. Fallback to Disk
-        return self._load_from_disk(CG_CACHE_FILE, max_age_hours=24)
+        cached = self._load_from_disk(CG_CACHE_FILE, max_age_hours=24)
+        if cached:
+            return cached
+
+        # 4. Last-resort fallback to the legacy macro indices cache snapshot.
+        return self._load_legacy_macro_indices_cache()
 
     def get_economic_calendar(self, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """
@@ -163,6 +169,47 @@ class MacroDataService:
             return payload["data"]
         except Exception as e:
             logger.error(f"Failed to load macro cache from disk ({path.name}): {e}")
+            return None
+
+    def _load_legacy_macro_indices_cache(self) -> Optional[Dict[str, Any]]:
+        """Map the older macro indices cache into the CoinGecko-global shape."""
+        if not LEGACY_MACRO_CACHE_FILE.exists():
+            return None
+
+        try:
+            with open(LEGACY_MACRO_CACHE_FILE) as f:
+                payload = json.load(f)
+            indices = payload.get("indices") or {}
+
+            btc_dom = indices.get("btc_d", {}).get("value")
+            total_mc = indices.get("total", {}).get("value")
+            total3_mc = indices.get("total3", {}).get("value")
+            if btc_dom is None or total_mc is None:
+                return None
+
+            if total3_mc is not None and total_mc:
+                derived_btc_dom = 100.0 - ((float(total3_mc) / float(total_mc)) * 100.0)
+                if abs(float(btc_dom) - derived_btc_dom) > 15.0:
+                    logger.warning(
+                        "Legacy macro cache drift detected (btc_d=%.2f derived=%.2f)",
+                        float(btc_dom),
+                        derived_btc_dom,
+                    )
+
+            logger.info("Using legacy macro indices cache fallback for CoinGecko global data")
+            return {
+                "market_cap_percentage": {
+                    "btc": float(btc_dom),
+                },
+                "market_cap_change_percentage_24h": {
+                    "btc": 0.0,
+                },
+                "total_market_cap": {
+                    "usd": float(total_mc),
+                },
+            }
+        except Exception as e:
+            logger.error("Failed to load legacy macro cache fallback: %s", e)
             return None
 
 # Singleton
