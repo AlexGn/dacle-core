@@ -1242,27 +1242,49 @@ class LighterRealClient:
 
         last_error: Optional[Exception] = None
         for api_url in self.api_urls:
-            url = f"{api_url}/account/{self.signer.address}/balances"
-            try:
-                async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-                    async with session.get(url) as resp:
-                        if resp.status == 200:
-                            return await resp.json()
-            except _FAILOVER_ERRORS as e:
-                logger.warning(f"Failover: {url} failed ({type(e).__name__}: {e}), trying next URL")
-                last_error = e
-                continue
-            except Exception:
-                pass
-                return {}
+            balance_urls = await self._build_balance_urls(api_url)
+            for url in balance_urls:
+                try:
+                    async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
+                        async with session.get(url) as resp:
+                            if resp.status == 200:
+                                return await resp.json()
+                except _FAILOVER_ERRORS as e:
+                    logger.warning(f"Failover: {url} failed ({type(e).__name__}: {e}), trying next URL")
+                    last_error = e
+                    continue
+                except Exception:
+                    pass
+                    return {}
 
         if last_error:
             logger.error(f"get_balance: all API URLs failed: {last_error}")
         return {}
 
-    def _build_balance_url(self, api_url: str) -> str:
-        """Build balance endpoint URL."""
-        return f"{api_url}/account/{self.signer.address}/balances"
+    async def _build_balance_urls(self, api_url: str) -> List[str]:
+        """Build candidate balance URLs (account-index first, address fallback)."""
+        base = str(api_url).rstrip("/")
+        urls: List[str] = []
+
+        account_index = self._to_int(self._resolved_account_index)
+        if account_index is None:
+            account_index, _ = await self._resolve_runtime_account_index()
+
+        if account_index is not None:
+            urls.append(f"{base}/account/{int(account_index)}/balances")
+
+        if self.signer and getattr(self.signer, "address", None):
+            urls.append(f"{base}/account/{self.signer.address}/balances")
+
+        # Preserve order and remove duplicates.
+        seen = set()
+        deduped: List[str] = []
+        for url in urls:
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append(url)
+        return deduped
 
     def _normalize_balance_payload(self, raw: Any) -> dict:
         """Normalize balance response into flat {asset: float} map.
@@ -1315,40 +1337,45 @@ class LighterRealClient:
         effective_timeout = aiohttp.ClientTimeout(total=timeout_sec) if timeout_sec else self.timeout
 
         for api_url in self.api_urls:
-            url = self._build_balance_url(api_url)
+            balance_urls = await self._build_balance_urls(api_url)
+            if not balance_urls:
+                continue
+
             params = {}
             if self.auth_token:
                 params["auth"] = self.auth_token
-            try:
-                async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
-                    async with session.get(url, params=params) as resp:
-                        if resp.status == 200:
-                            raw = await resp.json(content_type=None)
-                            normalized = self._normalize_balance_payload(raw)
-                            
-                            # Phase 2: Persist to cache
-                            if self.cache:
-                                # We merge with existing index if available
-                                existing = await self.cache.get_account_info(self.signer.address) or {}
-                                existing["balances"] = normalized
-                                await self.cache.set_account_info(self.signer.address, existing)
-                                
-                            return (True, normalized)
-                        else:
-                            # Phase 2: Invalidate on 429
-                            if resp.status == 429 and self.cache:
-                                await self.cache.handle_transport_error(self.signer.address, resp.status)
-                                
-                            # Auth expiry detection (Day 3)
-                            if resp.status in (401, 403):
-                                await self._handle_auth_failure(resp.status, url)
-                            logger.warning(f"get_balance_checked HTTP {resp.status} from {url}")
-            except _FAILOVER_ERRORS as e:
-                logger.warning(f"get_balance_checked failover: {url} ({type(e).__name__}: {e})")
-                continue
-            except Exception as e:
-                logger.error(f"get_balance_checked error: {e}")
-                return (False, {})
+
+            for url in balance_urls:
+                try:
+                    async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
+                        async with session.get(url, params=params) as resp:
+                            if resp.status == 200:
+                                raw = await resp.json(content_type=None)
+                                normalized = self._normalize_balance_payload(raw)
+
+                                # Phase 2: Persist to cache
+                                if self.cache:
+                                    # We merge with existing index if available
+                                    existing = await self.cache.get_account_info(self.signer.address) or {}
+                                    existing["balances"] = normalized
+                                    await self.cache.set_account_info(self.signer.address, existing)
+
+                                return (True, normalized)
+                            else:
+                                # Phase 2: Invalidate on 429
+                                if resp.status == 429 and self.cache:
+                                    await self.cache.handle_transport_error(self.signer.address, resp.status)
+
+                                # Auth expiry detection (Day 3)
+                                if resp.status in (401, 403):
+                                    await self._handle_auth_failure(resp.status, url)
+                                logger.warning(f"get_balance_checked HTTP {resp.status} from {url}")
+                except _FAILOVER_ERRORS as e:
+                    logger.warning(f"get_balance_checked failover: {url} ({type(e).__name__}: {e})")
+                    continue
+                except Exception as e:
+                    logger.error(f"get_balance_checked error: {e}")
+                    return (False, {})
 
         return (False, {})
 
