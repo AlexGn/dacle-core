@@ -168,6 +168,49 @@ class PolymarketCTFExecutor:
         self.w3 = Web3(Web3.HTTPProvider(new_rpc))
         self._init_contracts()
 
+    @staticmethod
+    def _should_rotate_on_error(error: Exception) -> bool:
+        """Rotate only for provider/network-class failures, not deterministic call/schema errors."""
+        msg = str(error or "").lower()
+        if not msg:
+            return False
+
+        non_retryable_markers = (
+            "abi not found",
+            "not compatible with type",
+            "execution reverted",
+            "invalid hex",
+            "insufficient funds",
+            "replacement transaction underpriced",
+            "nonce too low",
+            "already known",
+        )
+        if any(marker in msg for marker in non_retryable_markers):
+            return False
+
+        retryable_markers = (
+            "401",
+            "429",
+            "too many requests",
+            "unauthorized",
+            "nameresolutionerror",
+            "temporary failure in name resolution",
+            "failed to resolve",
+            "max retries exceeded",
+            "connection aborted",
+            "connection refused",
+            "read timed out",
+            "connect timeout",
+            "timed out",
+            "remote end closed connection",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "rpc endpoint",
+            "dns",
+        )
+        return any(marker in msg for marker in retryable_markers)
+
     async def _call_with_rpc_retry(self, func, *args, **kwargs):
         """Execute a web3 call with automatic RPC rotation on failure."""
         max_retries = len(self.rpc_urls)
@@ -178,7 +221,7 @@ class PolymarketCTFExecutor:
                 else:
                     return await asyncio.to_thread(func, *args, **kwargs)
             except Exception as e:
-                if attempt < max_retries - 1:
+                if self._should_rotate_on_error(e) and attempt < max_retries - 1:
                     self._rotate_rpc()
                     continue
                 logger.error(f"CTF Executor RPC call failed after {attempt+1} attempts: {e}")
