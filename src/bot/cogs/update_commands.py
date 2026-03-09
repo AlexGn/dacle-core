@@ -321,7 +321,7 @@ class UpdateCommands(commands.Cog):
             logger.warning("/discovery followup failed: %s", e)
             return False
 
-    async def _handle_start_failure(self, interaction: discord.Interaction) -> None:
+    async def _handle_start_failure(self, interaction: discord.Interaction, error_detail: str = "") -> None:
         latest_payload = self._normalize_refresh_payload(
             await self._api_get("/api/futures/refresh/latest")
         )
@@ -345,9 +345,13 @@ class UpdateCommands(commands.Cog):
                         )
                 return
 
+        msg = "❌ Failed to start refresh. API unavailable or rejected request."
+        if error_detail:
+            msg += f"\n`Detail: {error_detail}`"
+            
         await self._send_followup(
             interaction,
-            "❌ Failed to start refresh. API unavailable or rejected request.",
+            msg,
             ephemeral=True,
         )
 
@@ -596,11 +600,24 @@ class UpdateCommands(commands.Cog):
             "triggered_by": str(interaction.user),
             "requested_channel_id": str(interaction.channel_id),
         }
-        result = self._normalize_refresh_payload(
-            await self._api_post("/api/futures/refresh/run", payload)
-        )
+        
+        error_detail = "Unknown error"
+        url = f"{self.api_url}/api/futures/refresh/run"
+        
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, json=payload, headers=self._headers())
+                if 200 <= resp.status_code < 300:
+                    result = self._normalize_refresh_payload(resp.json())
+                else:
+                    error_detail = f"HTTP {resp.status_code}: {resp.text[:100]}"
+                    result = None
+        except Exception as e:
+            error_detail = f"Connection error: {type(e).__name__}"
+            result = None
+
         if not result:
-            await self._handle_start_failure(interaction)
+            await self._handle_start_failure(interaction, error_detail)
             return
 
         request_status = self._resolve_request_status(result)
