@@ -475,6 +475,9 @@ class DACLEBot(commands.Bot):
                             return data
                         return {"error": "Gateway returned 200 but no answer was found."}
 
+                    if resp.status_code == 401:
+                        return {"error": "Authentication failed (401). Check if DACLE_API_KEY is correctly set in the bot's environment."}
+
                     if resp.status_code == 429:
                         return {"error": "AI rate limit reached upstream. Please retry in a few minutes."}
 
