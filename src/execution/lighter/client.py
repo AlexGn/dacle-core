@@ -1571,37 +1571,70 @@ class LighterRealClient:
             except Exception as e:
                 return {"status": "error", "error": f"Account resolution error: {e}"}
 
-        url = f"{self.api_url}/account/{account_index}/nonce"
         params = {}
         if self.auth_token:
             params["auth"] = self.auth_token
+
+        candidate_urls: List[str] = []
+        for base_url in self.api_urls or [self.api_url]:
+            clean = str(base_url or "").strip().rstrip("/")
+            if clean and clean not in candidate_urls:
+                candidate_urls.append(clean)
+        if not candidate_urls:
+            candidate_urls.append(str(self.api_url or "").strip().rstrip("/"))
+
+        best_result: Optional[dict] = None
+        last_error: Optional[str] = None
         try:
             async with aiohttp.ClientSession(headers=get_standard_headers()) as session:
-                async with session.get(url, params=params) as resp:
-                    if resp.status == 200:
-                        data = await resp.json(content_type=None)
-                        nonce_val = data if isinstance(data, int) else data.get("nonce", 0) if isinstance(data, dict) else 0
-                        return {"status": "success", "nonce": int(nonce_val)}
-                    
-                    if resp.status in (401, 403):
-                        await self._handle_auth_failure(resp.status, url)
-                    if resp.status == 403:
-                        fallback_nonce = await self._fallback_nonce_from_account_metadata(
-                            session=session,
-                            account_index=int(account_index),
-                        )
-                        if fallback_nonce is not None:
-                            logger.warning(
-                                "Nonce endpoint forbidden (403); using accountsByL1Address fallback nonce=%s",
-                                fallback_nonce,
-                            )
-                            return {
-                                "status": "success",
-                                "nonce": int(fallback_nonce),
-                                "source": "accountsByL1Address_fallback",
-                            }
-                    err_text = await resp.text()
-                    return {"status": "error", "error": f"HTTP {resp.status}: {err_text}"}
+                for base_url in candidate_urls:
+                    url = f"{base_url}/account/{account_index}/nonce"
+                    try:
+                        async with session.get(url, params=params) as resp:
+                            if resp.status == 200:
+                                data = await resp.json(content_type=None)
+                                nonce_val = data if isinstance(data, int) else data.get("nonce", 0) if isinstance(data, dict) else 0
+                                nonce_result = {
+                                    "status": "success",
+                                    "nonce": int(nonce_val),
+                                    "source": "nonce_endpoint",
+                                    "url": base_url,
+                                }
+                                if best_result is None or int(nonce_result["nonce"]) > int(best_result["nonce"]):
+                                    best_result = nonce_result
+                                continue
+
+                            if resp.status in (401, 403):
+                                await self._handle_auth_failure(resp.status, url)
+                            if resp.status == 403:
+                                fallback_nonce = await self._fallback_nonce_from_account_metadata(
+                                    session=session,
+                                    account_index=int(account_index),
+                                )
+                                if fallback_nonce is not None:
+                                    logger.warning(
+                                        "Nonce endpoint forbidden (403); using accountsByL1Address fallback nonce=%s",
+                                        fallback_nonce,
+                                    )
+                                    nonce_result = {
+                                        "status": "success",
+                                        "nonce": int(fallback_nonce),
+                                        "source": "accountsByL1Address_fallback",
+                                        "url": base_url,
+                                    }
+                                    if best_result is None or int(nonce_result["nonce"]) > int(best_result["nonce"]):
+                                        best_result = nonce_result
+                                    continue
+
+                            err_text = await resp.text()
+                            last_error = f"HTTP {resp.status}: {err_text}"
+                    except Exception as exc:
+                        last_error = str(exc)
+                        logger.warning("Nonce fetch error via %s: %s", base_url, exc)
+
+                if best_result is not None:
+                    return best_result
+                return {"status": "error", "error": last_error or "nonce fetch failed"}
         except Exception as e:
             logger.error(f"Nonce fetch error: {e}")
             return {"status": "error", "error": str(e)}
