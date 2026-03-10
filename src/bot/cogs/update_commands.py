@@ -16,6 +16,7 @@ from discord.ext import commands
 from scripts.cron.daily_futures_movers import format_discord_message
 from src.bot.utils.safe_task import safe_create_task
 from src.ops.discord_channel_contract import get_discord_channel_contract
+from src.bot.runtime_routing import get_bot_api_base_url
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -42,7 +43,7 @@ def _fmt_utc(value: Any) -> str:
 class UpdateCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.api_url = os.getenv("DACLE_API_URL", "http://localhost:8000").rstrip("/")
+        self.api_url = get_bot_api_base_url()
         self.api_key = os.getenv("DACLE_API_KEY", "").strip()
         self.api_post_attempts = max(
             1,

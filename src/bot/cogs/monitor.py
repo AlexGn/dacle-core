@@ -24,6 +24,7 @@ from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
 from src.bot.utils.safe_task import safe_create_task
 from src.agent.reasoning.evolver import CapabilityEvolver
+from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id, resolve_channel
 from api.routers.macro import get_btc_regime_widget
 
 logger = get_logger(__name__)
@@ -133,6 +134,10 @@ class MessageMonitor(commands.Cog):
             self.thread_bq_cache_ttl_seconds = 300
 
         logger.info("MessageMonitor cog initialized with conviction scoring")
+
+    @staticmethod
+    def _api_base_url() -> str:
+        return get_bot_api_base_url()
 
     def _load_researchers(self) -> Dict[str, Dict[str, str]]:
         """
@@ -732,7 +737,7 @@ class MessageMonitor(commands.Cog):
         import requests
 
         resp = requests.post(
-            "http://localhost:8000/api/execution/v2/full-analysis",
+            f"{self._api_base_url()}/api/execution/v2/full-analysis",
             json=payload,
             timeout=20,
         )
@@ -923,7 +928,7 @@ class MessageMonitor(commands.Cog):
                                 "target": trade_setup["target"],
                             }
                             resp = requests.post(
-                                "http://localhost:8000/api/execution/pre-trade-check",
+                                f"{self._api_base_url()}/api/execution/v2/full-analysis",
                                 json=payload,
                                 timeout=20,
                             )
@@ -944,7 +949,7 @@ class MessageMonitor(commands.Cog):
                             formatted = data.get("data", {}).get("formatted_response")
                             if formatted:
                                 final_target = None
-                                trades_channel_id = 1468948950412431598
+                                trades_channel_id = get_channel_id("trades")
                                 if isinstance(target_channel, discord.Thread):
                                     final_target = target_channel
                                 elif (
@@ -1033,7 +1038,7 @@ class MessageMonitor(commands.Cog):
                     if target_channel:
                          logger.info(f"🔍 DEBUG: run_and_report target_channel type: {type(target_channel)}, ID: {target_channel.id}")
 
-                    trades_channel_id = 1468948950412431598
+                    trades_channel_id = get_channel_id("trades")
                     if isinstance(target_channel, discord.Thread):
                         final_target = target_channel
                     elif (
@@ -1043,11 +1048,7 @@ class MessageMonitor(commands.Cog):
                     ):
                         final_target = target_channel
                     else:
-                        from src.utils.config import get_discord_config
-                        discord_cfg = get_discord_config()
-                        # Fallback to known #analysis-updates ID if not in config
-                        analysis_channel_id = discord_cfg.analysis_channel_id or 1470403542253703369
-                        final_target = self.bot.get_channel(analysis_channel_id)
+                        final_target = resolve_channel(self.bot, "analysis-updates")
 
                     if final_target:
                         logger.info(f"📤 Sending rich candidate report for {symbol} to {final_target}")
@@ -1160,7 +1161,7 @@ class MessageMonitor(commands.Cog):
         researcher_name = self._detect_researcher(message.author.name, message_content)
 
         # Allow structured trade setups in #trades even if researcher is unknown
-        trades_channel_id = 1468948950412431598
+        trades_channel_id = get_channel_id("trades")
         is_trades_channel = (
             getattr(message.channel, "name", "") == "trades" or message.channel.id == trades_channel_id
         )

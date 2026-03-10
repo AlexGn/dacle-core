@@ -15,13 +15,14 @@ import discord
 from src.utils.logger import get_logger
 from src.utils.lifecycle_id import generate_lifecycle_id
 from src.utils.lifecycle_store import record_setup
+from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id
 
 logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
-TRADES_CHANNEL_ID = 1468948950412431598
-API_BASE_URL = os.getenv("DACLE_API_URL", "http://localhost:8000")
+TRADES_CHANNEL_ID = get_channel_id("trades")
+API_BASE_URL = get_bot_api_base_url()
 
 
 def _api_headers() -> dict:

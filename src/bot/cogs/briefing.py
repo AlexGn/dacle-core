@@ -15,6 +15,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.bot.utils.interaction_response import safe_defer, safe_send
+from src.bot.runtime_routing import get_bot_api_base_url
 
 logger = get_logger(__name__)
 
@@ -123,7 +124,7 @@ class ScanCog(commands.Cog):
             import httpx
 
             # Fetch positions from DACLE API
-            api_url = os.getenv("DACLE_API_URL", "http://localhost:8000")
+            api_url = get_bot_api_base_url()
             positions = []
             try:
                 async with httpx.AsyncClient(timeout=10, headers=_api_headers()) as client:

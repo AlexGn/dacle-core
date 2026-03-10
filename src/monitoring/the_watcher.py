@@ -9,14 +9,15 @@ from typing import Dict, Any, List, Optional
 import httpx
 from src.utils.logger import get_logger
 from src.utils.config import get_discord_config
+from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id
 
 logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-API_BASE_URL = os.getenv("DACLE_API_URL", "http://localhost:8000")
+API_BASE_URL = get_bot_api_base_url()
 API_KEY = os.getenv("DACLE_API_KEY", "").strip()
 API_HEADERS = {"X-API-Key": API_KEY} if API_KEY else {}
-TRADES_CHANNEL_ID = 1468948950412431598 # #trades
+TRADES_CHANNEL_ID = get_channel_id("trades")  # #trades
 
 class TheWatcher:
     """

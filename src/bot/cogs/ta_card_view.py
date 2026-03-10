@@ -13,17 +13,18 @@ import aiohttp
 import discord
 
 from src.utils.logger import get_logger
+from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id
 
 logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
-TRADES_CHANNEL_ID = 1468948950412431598
+TRADES_CHANNEL_ID = get_channel_id("trades")
 
 
 def _get_api_base_url() -> str:
     """Resolve API base URL at call time."""
-    return os.getenv("DACLE_API_URL", "http://localhost:8000")
+    return get_bot_api_base_url()
 
 
 def _get_api_headers() -> dict:

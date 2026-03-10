@@ -32,6 +32,7 @@ from src.bot.utils.memory_guard import (
     should_skip_sync,
 )
 from src.bot.utils.interaction_response import safe_send
+from src.bot.runtime_routing import get_bot_api_base_url
 
 # Load configuration explicitly at startup if not already loaded
 try:
@@ -437,7 +438,7 @@ class DACLEBot(commands.Bot):
 
     @staticmethod
     def _get_api_url() -> str:
-        return os.getenv("DACLE_API_URL", "http://localhost:8000").rstrip("/")
+        return get_bot_api_base_url()
 
     async def _query_agent_endpoint(
         self,

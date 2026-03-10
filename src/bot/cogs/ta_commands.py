@@ -16,13 +16,14 @@ from src.utils.logger import get_logger
 from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.bot.formatters.ta_card import build_ta_card_embed
 from src.bot.cogs.ta_card_view import TACardView
+from src.bot.runtime_routing import get_bot_api_base_url
 
 logger = get_logger(__name__)
 
 
 def _get_api_base_url() -> str:
     """Resolve API base URL at call time (after load_config)."""
-    return os.getenv("DACLE_API_URL", "http://localhost:8000")
+    return get_bot_api_base_url()
 
 
 def _get_api_headers() -> dict:
