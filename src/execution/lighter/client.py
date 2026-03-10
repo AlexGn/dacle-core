@@ -56,6 +56,8 @@ class LighterRealClient:
         # Backward-compatible alias for older callers that still read account_type.
         self.account_type = self.account_tier
         self.mode = str(config.get("mode", "SHADOW")).upper()
+        use_signer_sendtx = self._to_bool(config.get("use_signer_client_sendtx"))
+        self.use_signer_client_sendtx = bool(use_signer_sendtx) if use_signer_sendtx is not None else False
         configured_account_index = config.get("account_index")
         if configured_account_index is None and self.mode == "LIVE":
             env_account_index = str(os.getenv("SCALPER_ACCOUNT_INDEX") or "").strip()
@@ -287,6 +289,125 @@ class LighterRealClient:
             "order_type": order_type,
         }
 
+    def _resolve_lighter_api_private_key(self) -> str:
+        return str(
+            os.getenv("LIGHTER_API_PRIVATE_KEY")
+            or os.getenv("SCALPER_API_PRIVATE_KEY")
+            or ""
+        ).strip()
+
+    async def _create_order_via_signer_client(
+        self,
+        *,
+        side: str,
+        price_int: int,
+        size_int: int,
+        nonce: int,
+        order_type: str,
+        is_reduce_only: bool,
+    ) -> Tuple[bool, dict]:
+        """
+        Submit live orders through the official Lighter signer client/sendTx form contract.
+
+        Returns:
+            (attempted, result)
+            - attempted=False when signer-client path is unavailable and caller should
+              continue with legacy JSON path.
+            - attempted=True with success/error result when signer-client path was used.
+        """
+        if not self.use_signer_client_sendtx:
+            return False, {}
+        api_private_key = self._resolve_lighter_api_private_key()
+        if not api_private_key:
+            return False, {}
+
+        try:
+            from lighter.signer_client import SignerClient
+        except Exception:
+            return False, {}
+
+        account_index, idx_err = await self._resolve_runtime_account_index()
+        if idx_err or account_index is None:
+            return True, {
+                "status": "error",
+                "error": f"account_index_unavailable: {idx_err}",
+                "error_code": "API_ERROR",
+            }
+        if self.enforce_account_tier_match and self._account_tier_mismatch:
+            return True, self._account_tier_mismatch_error(context="create_order")
+
+        api_key_index = int(self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=0) or 0)
+        is_ask = str(side).upper() != "BUY"
+        order_type_u = str(order_type or "IOC").upper()
+
+        # Mirror Lighter SDK semantics:
+        # - IOC => market order + IOC tif + immediate expiry
+        # - LIMIT => limit + GTT
+        # - POST_ONLY => limit + post-only tif
+        if order_type_u == "IOC":
+            sdk_order_type = SignerClient.ORDER_TYPE_MARKET
+            sdk_tif = SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
+            sdk_expiry = SignerClient.DEFAULT_IOC_EXPIRY
+        elif order_type_u == "LIMIT":
+            sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
+            sdk_tif = SignerClient.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME
+            sdk_expiry = SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY
+        else:  # POST_ONLY
+            sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
+            sdk_tif = SignerClient.ORDER_TIME_IN_FORCE_POST_ONLY
+            sdk_expiry = SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY
+
+        last_error = "unknown signer-client failure"
+        for api_url in self.api_urls:
+            root_url = self._api_root_url(api_url)
+            if not root_url:
+                continue
+            signer_client = None
+            try:
+                signer_client = SignerClient(
+                    url=root_url,
+                    account_index=int(account_index),
+                    api_private_keys={api_key_index: api_private_key},
+                )
+                _tx, resp, err = await signer_client.create_order(
+                    market_index=int(self.market_id),
+                    client_order_index=int(nonce),
+                    base_amount=int(size_int),
+                    price=int(price_int),
+                    is_ask=bool(is_ask),
+                    order_type=int(sdk_order_type),
+                    time_in_force=int(sdk_tif),
+                    reduce_only=bool(is_reduce_only),
+                    order_expiry=int(sdk_expiry),
+                    nonce=int(nonce),
+                    api_key_index=int(api_key_index),
+                )
+                if err:
+                    last_error = str(err)
+                    continue
+
+                payload = resp.to_dict() if hasattr(resp, "to_dict") else dict(resp or {})
+                code = int(payload.get("code") or 0)
+                if code == 200:
+                    tx_hash = str(payload.get("tx_hash") or "")
+                    return True, {"status": "success", "order_id": tx_hash, "raw": payload}
+
+                last_error = str(payload.get("message") or f"code={code}")
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+            finally:
+                if signer_client is not None:
+                    api_client = getattr(signer_client, "api_client", None)
+                    if api_client is not None:
+                        try:
+                            await api_client.close()
+                        except Exception:
+                            pass
+
+        error_code = "NONCE_ERROR" if "nonce" in last_error.lower() else "API_ERROR"
+        return True, {"status": "error", "error": last_error, "error_code": error_code}
+
     async def create_order(
         self,
         symbol: str,
@@ -352,6 +473,19 @@ class LighterRealClient:
         price_scale = 10 ** int(meta.price_decimals)
         price_int = max(1, int(round(price_f * price_scale)))
         price_f = price_int / price_scale
+
+        # Prefer official signer-client/sendTx flow in LIVE mode when API keys
+        # are available. Legacy JSON path remains as compatibility fallback.
+        attempted_signer_client, signer_client_result = await self._create_order_via_signer_client(
+            side=side,
+            price_int=price_int,
+            size_int=size_int,
+            nonce=int(nonce),
+            order_type=order_type,
+            is_reduce_only=bool(is_reduce_only),
+        )
+        if attempted_signer_client:
+            return signer_client_result
 
         # 1. Pre-send check against real-time risk ledger
         if self.risk_ledger:
