@@ -165,12 +165,52 @@ class PolymarketCTFExecutor:
                 else:
                     return await asyncio.to_thread(func, *args, **kwargs)
             except Exception as e:
-                if "401" in str(e) or "429" in str(e) or "Too Many Requests" in str(e) or "Unauthorized" in str(e):
-                    if attempt < max_retries - 1:
-                        self._rotate_rpc()
-                        continue
+                msg = str(e)
+                if attempt < max_retries - 1 and self._should_rotate_rpc_on_error(msg):
+                    self._rotate_rpc()
+                    continue
                 logger.error(f"CTF Executor RPC call failed after {attempt+1} attempts: {e}")
                 raise e
+
+    @staticmethod
+    def _should_rotate_rpc_on_error(message: str) -> bool:
+        """Return True when failure likely comes from transport/provider instability."""
+        msg = (message or "").lower()
+
+        # Deterministic execution errors should not trigger provider rotation.
+        non_recoverable_markers = (
+            "execution reverted",
+            "insufficient funds",
+            "nonce too low",
+            "replacement transaction underpriced",
+            "already known",
+            "invalid signature",
+            "invalid sender",
+        )
+        if any(marker in msg for marker in non_recoverable_markers):
+            return False
+
+        recoverable_markers = (
+            "401",
+            "429",
+            "unauthorized",
+            "too many requests",
+            "ssl",
+            "eof occurred in violation of protocol",
+            "httpsconnectionpool",
+            "max retries exceeded",
+            "timed out",
+            "connection aborted",
+            "connection reset",
+            "temporary failure",
+            "service unavailable",
+            "bad gateway",
+            "gateway timeout",
+            "502",
+            "503",
+            "504",
+        )
+        return any(marker in msg for marker in recoverable_markers)
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
