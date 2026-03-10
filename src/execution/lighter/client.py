@@ -7,6 +7,7 @@ Handles authenticated orders, signing, and REST API interactions.
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -32,9 +33,17 @@ _ORDER_TYPE_TO_TIF = {
 
 
 class MarketMetadata:
-    def __init__(self, price_decimals: int = 1, size_decimals: int = 5):
+    def __init__(
+        self,
+        price_decimals: int = 1,
+        size_decimals: int = 5,
+        min_base_amount: float = 0.0,
+        min_quote_amount: float = 0.0,
+    ):
         self.price_decimals = price_decimals
         self.size_decimals = size_decimals
+        self.min_base_amount = max(0.0, float(min_base_amount))
+        self.min_quote_amount = max(0.0, float(min_quote_amount))
 
 class LighterRealClient:
     def __init__(self, config: dict, signer: Optional[LighterSigner] = None, risk_ledger=None, redis_client=None):
@@ -124,7 +133,9 @@ class LighterRealClient:
                                 mid = int(ob["market_id"])
                                 self._market_metadata[mid] = MarketMetadata(
                                     price_decimals=int(ob["supported_price_decimals"]),
-                                    size_decimals=int(ob["supported_size_decimals"])
+                                    size_decimals=int(ob["supported_size_decimals"]),
+                                    min_base_amount=float(ob.get("min_base_amount") or 0.0),
+                                    min_quote_amount=float(ob.get("min_quote_amount") or 0.0),
                                 )
             except Exception as e:
                 logger.warning(f"Failed to fetch market metadata: {e}")
@@ -318,9 +329,33 @@ class LighterRealClient:
         if self.enforce_account_tier_match and self._account_tier_mismatch:
             return self._account_tier_mismatch_error(context="create_order")
 
+        # Resolve venue metadata and enforce minimum tradable size/notional before submit.
+        meta = await self._get_market_metadata(self.market_id)
+        price_f = float(price)
+        qty_f = float(qty)
+        min_qty = float(meta.min_base_amount or 0.0)
+        if price_f > 0 and float(meta.min_quote_amount or 0.0) > 0.0:
+            min_qty = max(min_qty, float(meta.min_quote_amount) / price_f)
+        if min_qty > 0.0 and qty_f < min_qty:
+            qty_f = min_qty
+            logger.info(
+                "ORDER_SIZE_FLOOR_APPLIED market_id=%s symbol=%s qty=%.8f min_qty=%.8f",
+                self.market_id,
+                symbol,
+                float(qty),
+                min_qty,
+            )
+
+        size_scale = 10 ** int(meta.size_decimals)
+        size_int = max(1, int(math.ceil(qty_f * size_scale)))
+        qty_f = size_int / size_scale
+        price_scale = 10 ** int(meta.price_decimals)
+        price_int = max(1, int(round(price_f * price_scale)))
+        price_f = price_int / price_scale
+
         # 1. Pre-send check against real-time risk ledger
         if self.risk_ledger:
-            intent_notional = price * qty
+            intent_notional = price_f * qty_f
             is_allowed, reason = await self.risk_ledger.check_order_allowed(
                 intent_notional,
                 is_reduce_only=is_reduce_only,
@@ -328,15 +363,12 @@ class LighterRealClient:
             if not is_allowed:
                 logger.warning(f"Order blocked by Risk Ledger: {reason}")
                 return {"status": "error", "error": f"BLOCKED_BY_RISK_LEDGER: {reason}", "error_code": "RISK_BLOCK"}
-
-        # Resolve Decimals
-        meta = await self._get_market_metadata(self.market_id)
         
         order_data = {
             "marketId": self.market_id,
             "side": 0 if side == "BUY" else 1,
-            "price": int(round(price * (10 ** meta.price_decimals))),
-            "size": int(round(qty * (10 ** meta.size_decimals))),
+            "price": price_int,
+            "size": size_int,
             "nonce": nonce,
         }
 
@@ -350,8 +382,8 @@ class LighterRealClient:
             "type": "create_order",
             "marketId": self.market_id,
             "side": side.lower(),
-            "price": str(price),
-            "size": str(qty),
+            "price": str(price_f),
+            "size": str(qty_f),
             "nonce": nonce,
             "signature": signature,
             "timeInForce": tif,
@@ -369,7 +401,7 @@ class LighterRealClient:
             try:
                 # 2. Mid-cycle kill-switch check right before transmit
                 if self.risk_ledger:
-                    intent_notional = price * qty
+                    intent_notional = price_f * qty_f
                     is_allowed, reason = await self.risk_ledger.check_order_allowed(
                         intent_notional,
                         is_reduce_only=is_reduce_only,
