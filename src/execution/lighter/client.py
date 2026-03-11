@@ -1322,6 +1322,7 @@ class LighterRealClient:
         if not symbol:
             symbol = "BTC-USDC" if self.market_id == 1 else f"MARKET-{self.market_id}"
 
+        fee_value = trade.get(fee_key) if trade.get(fee_key) is not None else trade.get("fee")
         return {
             "timestamp": trade.get("timestamp") or trade.get("transaction_time"),
             "symbol": symbol,
@@ -1329,12 +1330,25 @@ class LighterRealClient:
             "size": trade.get("size") or trade.get("qty") or trade.get("base_amount"),
             "qty": trade.get("size") or trade.get("qty") or trade.get("base_amount"),
             "price": trade.get("price") or trade.get("execution_price"),
-            "fee_usd": trade.get(fee_key) if trade.get(fee_key) is not None else trade.get("fee"),
+            "fee_usd": self._normalize_trade_fee_usd(trade, fee_value),
             "tx_hash": str(tx_hash) if tx_hash is not None else "",
             "trade_id": trade.get("trade_id"),
             "role": role,
             "market_id": trade.get("market_id", self.market_id),
         }
+
+    def _normalize_trade_fee_usd(self, trade: Dict[str, Any], fee_value: Any) -> float:
+        fee = self._to_float(fee_value, default=0.0) or 0.0
+        if fee <= 0.0:
+            return 0.0
+
+        # Live Lighter trades expose maker/taker fees as integer ppm fee rates
+        # (for example taker_fee=280 means 280 / 1_000_000 of usd_amount).
+        if isinstance(fee_value, int):
+            usd_amount = self._to_float(trade.get("usd_amount"), default=0.0) or 0.0
+            if usd_amount > 0.0:
+                return usd_amount * fee / 1_000_000.0
+        return fee
 
     def _extract_error_message(self, payload: Any) -> str:
         if isinstance(payload, dict):
@@ -1344,6 +1358,14 @@ class LighterRealClient:
         if isinstance(payload, str):
             return payload
         return ""
+
+    def _to_float(self, value: Any, default: Optional[float] = None) -> Optional[float]:
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except (TypeError, ValueError):
+            return default
 
     def _to_int(self, value: Any, default: Optional[int] = None) -> Optional[int]:
         try:
