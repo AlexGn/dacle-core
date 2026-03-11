@@ -128,6 +128,8 @@ class PreTradeCheckResponseV2(BaseModel):
     warnings: List[WarningCode] = []
     snapshot: MarketSnapshotV2
     reason_codes: List[str] = []
+    score_card: Optional[Dict[str, Any]] = None
+    score_lineage: Optional[Dict[str, Any]] = None
 
 class ApproveAndExecuteRequestV2(BaseModel):
     """Request to approve and execute setup."""
