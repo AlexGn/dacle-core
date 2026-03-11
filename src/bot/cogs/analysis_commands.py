@@ -1259,17 +1259,6 @@ class AnalysisCommands(commands.Cog):
                 request_id,
                 getattr(thread, "mention", None),
             )
-            safe_create_task(
-                _delete_message_with_retry(
-                    status_msg,
-                    logger_obj=logger,
-                    context=f"analyze starter cleanup {symbol}",
-                ),
-                logger=logger,
-                error_channel=thread,
-                name=f"analyze-starter-delete-{symbol.lower()}",
-            )
-            status_msg = None
         except Exception as e:
             logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
             target_channel = analysis_channel
