@@ -132,6 +132,20 @@ def _is_timeout_like_error(exc: BaseException) -> bool:
     return False
 
 
+def _is_local_api_unavailable_error(exc: BaseException) -> bool:
+    """Handle short local API outages during service restarts."""
+    for current in _iter_exception_chain(exc):
+        text = str(current).lower()
+        name = type(current).__name__.lower()
+        if ("connection refused" in text or "failed to establish a new connection" in text) and (
+            "127.0.0.1" in text or "localhost" in text
+        ):
+            return True
+        if "newconnectionerror" in name and ("127.0.0.1" in text or "localhost" in text):
+            return True
+    return False
+
+
 def _format_user_facing_analysis_error(exc: BaseException) -> str:
     """Convert internal exception details into stable user-facing text."""
     if isinstance(exc, requests.HTTPError):
@@ -147,6 +161,11 @@ def _format_user_facing_analysis_error(exc: BaseException) -> str:
         return (
             "Permission denied reading consolidated.json. "
             "Please fix data folder ownership (clawd) and retry."
+        )
+    if _is_local_api_unavailable_error(exc):
+        return (
+            "Local API was temporarily unavailable during refresh. "
+            "Please retry in ~1 minute."
         )
     if _is_timeout_like_error(exc):
         return (
@@ -182,12 +201,14 @@ def _request_with_retry(
         try:
             return requests.request(method=method, url=url, **kwargs)
         except requests.RequestException as exc:
-            if not _is_timeout_like_error(exc):
+            if not (_is_timeout_like_error(exc) or _is_local_api_unavailable_error(exc)):
                 raise
             if attempt > retries:
+                if _is_local_api_unavailable_error(exc):
+                    raise requests.ConnectionError(str(exc)) from exc
                 raise requests.Timeout(str(exc)) from exc
             logger.warning(
-                f"HTTP timeout on {method} {url} (attempt {attempt}/{retries + 1}); "
+                f"Transient local API error on {method} {url} (attempt {attempt}/{retries + 1}); "
                 f"retrying in {retry_delay_seconds}s"
             )
             time.sleep(retry_delay_seconds)
@@ -1472,6 +1493,19 @@ class AnalysisCommands(commands.Cog):
                     loop=loop,
                     symbol=symbol,
                     reason="api_timeout_during_refresh",
+                    request_id=request_id,
+                    status_msg=status_msg,
+                    target_channel=target_channel,
+                    load_cached_fn=lambda: self._load_consolidated(symbol),
+                )
+                if consolidated is None:
+                    return
+                used_refresh_fallback = True
+            except requests.ConnectionError:
+                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
+                    loop=loop,
+                    symbol=symbol,
+                    reason="api_unavailable_during_refresh",
                     request_id=request_id,
                     status_msg=status_msg,
                     target_channel=target_channel,
