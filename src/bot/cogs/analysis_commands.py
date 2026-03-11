@@ -54,6 +54,7 @@ ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240
 MAX_BATCH_SYMBOLS = 5
 BATCH_CONCURRENCY = 3
 TA_FRESHNESS_THRESHOLD_MINUTES = 30
+THREAD_STARTER_ANCHOR = "\u200b"
 API_CONNECT_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_CONNECT_TIMEOUT_SECONDS", "5"))
 API_READ_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_READ_TIMEOUT_SECONDS", "90"))
 API_STATUS_READ_TIMEOUT_SECONDS = float(os.getenv("DACLE_API_STATUS_READ_TIMEOUT_SECONDS", "15"))
@@ -1241,9 +1242,7 @@ class AnalysisCommands(commands.Cog):
             f"target channel #{analysis_channel.name} ({analysis_channel.id})"
         )
 
-        status_msg = await analysis_channel.send(
-            f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
-        )
+        status_msg = await analysis_channel.send(THREAD_STARTER_ANCHOR)
         target_channel: discord.abc.Messageable = analysis_channel
         thread_created = False
 
