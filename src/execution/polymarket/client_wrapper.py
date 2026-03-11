@@ -123,6 +123,12 @@ class PolymarketClientWrapper:
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
 
+    def _dry_run_admit_enabled(self) -> bool:
+        return self.mode == "LIVE" and self._live_execution_policy_enabled() and self._execution_mode() == "dry_run_admit"
+
+    def _is_execution_shadowed(self) -> bool:
+        return self._is_shadow_mode() or self._dry_run_admit_enabled()
+
     def _discord_entry_alerts_enabled(self) -> bool:
         if self.mode != "LIVE":
             return False
@@ -757,12 +763,23 @@ class PolymarketClientWrapper:
             return policy_error
 
         # 4. Shadow Mode Bypass
-        if self._is_shadow_mode():
-            logger.info(f"[SHADOW] Post Order: {side_val} {qty_norm} @ {norm_price} (token={token_id}, type={order_type})")
+        if self._is_execution_shadowed():
+            execution_mode = "DRY_RUN_ADMIT" if self._dry_run_admit_enabled() else "SHADOW"
+            order_prefix = "dryrun" if self._dry_run_admit_enabled() else "shadow"
+            logger.info(
+                "[%s] Post Order: %s %s @ %s (token=%s, type=%s)",
+                execution_mode,
+                side_val,
+                qty_norm,
+                norm_price,
+                token_id,
+                order_type,
+            )
             result = {
                 "status": "success",
-                "shadow": True,
-                "order_id": f"shadow_{client_order_id}",
+                "shadow": self._is_shadow_mode(),
+                "dry_run_admit": self._dry_run_admit_enabled(),
+                "order_id": f"{order_prefix}_{client_order_id}",
                 "client_order_id": client_order_id,
                 "filled_qty": 0.0,
                 "filled_price": 0.0
@@ -775,7 +792,7 @@ class PolymarketClientWrapper:
                     price=norm_price,
                     order_type=order_type,
                     order_id=str(result["order_id"]),
-                    mode="SHADOW",
+                    mode=execution_mode,
                     strategy=str(strategy or "unknown"),
                 )
             return result
@@ -897,7 +914,7 @@ class PolymarketClientWrapper:
 
     async def get_order_status(self, order_id: str) -> Optional[str]:
         """Fetch order status for verification/recovery flows."""
-        if self._is_shadow_mode():
+        if self._is_execution_shadowed():
             return "FILLED"
 
         getter = getattr(self.client, "get_order", None)
@@ -919,7 +936,7 @@ class PolymarketClientWrapper:
         Fetch individual trade records for a specific order ID.
         Used for reconciliation when WebSocket messages are missed.
         """
-        if self._is_shadow_mode():
+        if self._is_execution_shadowed():
             return []
 
         getter = getattr(self.client, "get_trades", None)
@@ -943,7 +960,7 @@ class PolymarketClientWrapper:
 
     async def get_open_orders(self) -> List[Dict[str, Any]]:
         """Fetch open orders when the underlying client supports it."""
-        if self._is_shadow_mode():
+        if self._is_execution_shadowed():
             return []
 
         getter = getattr(self.client, "get_open_orders", None)
@@ -982,7 +999,7 @@ class PolymarketClientWrapper:
         return await self.get_open_orders()
 
     async def cancel_order(self, order_id: str) -> bool:
-        if self._is_shadow_mode(): return True
+        if self._is_execution_shadowed(): return True
         try:
             async with self._exec_semaphore:
                 resp = await asyncio.to_thread(self.client.cancel, order_id)
@@ -993,7 +1010,7 @@ class PolymarketClientWrapper:
 
     async def cancel_all_orders(self) -> bool:
         """Cancel all open orders for the funder address."""
-        if self._is_shadow_mode():
+        if self._is_execution_shadowed():
             logger.info("[SHADOW] cancel_all_orders requested")
             return True
         try:
