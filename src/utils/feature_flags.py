@@ -38,6 +38,7 @@ class FeatureFlag:
     POLY_ROUTER_LIVE_ENABLED = "poly_router_live_enabled"
     POLY_PREEMPTION_V2_ENABLED = "poly_preemption_v2_enabled"
     POLY_TERMINAL_DURABILITY_V2_ENABLED = "poly_terminal_durability_v2_enabled"
+    POLYMARKET_ARB_VARIANT = "polymarket_arb_variant"
 
 
 
