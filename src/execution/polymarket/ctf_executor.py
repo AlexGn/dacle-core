@@ -212,6 +212,15 @@ class PolymarketCTFExecutor:
         )
         return any(marker in msg for marker in recoverable_markers)
 
+    @staticmethod
+    def _normalize_checked_error_message(message: str) -> str:
+        msg = (message or "").strip()
+        if not msg:
+            return "unknown error"
+        if "execution reverted" in msg.lower():
+            return "execution reverted"
+        return msg
+
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
 
@@ -463,4 +472,8 @@ class PolymarketCTFExecutor:
             }
         except Exception as e:
             logger.error(f"Failed to fetch conditional balance (checked): {e}")
-            return {"status": "UNKNOWN", "balance": 0.0, "error": str(e)}
+            return {
+                "status": "UNKNOWN",
+                "balance": 0.0,
+                "error": self._normalize_checked_error_message(str(e)),
+            }
