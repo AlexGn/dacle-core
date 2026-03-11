@@ -212,7 +212,8 @@ async def _load_cached_after_refresh_delay(
     symbol: str,
     reason: str,
     request_id: Optional[str],
-    status_msg: discord.Message,
+    status_msg: Optional[discord.Message],
+    target_channel: discord.abc.Messageable,
     load_cached_fn: Callable[[], Dict[str, Any]],
 ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
     logger.warning(
@@ -235,32 +236,38 @@ async def _load_cached_after_refresh_delay(
             "reason=refresh_timeout_and_cached_load_failed",
             exc_info=True,
         )
-        await status_msg.edit(
-            content=(
-                f"❌ Analysis timed out while refreshing **{symbol}**, and cached data "
-                "could not be loaded. Please retry in ~1 minute."
-            )
+        content = (
+            f"❌ Analysis timed out while refreshing **{symbol}**, and cached data "
+            "could not be loaded. Please retry in ~1 minute."
         )
+        if status_msg is not None:
+            await status_msg.edit(content=content)
+        else:
+            await target_channel.send(content)
         return None, None
 
     age_minutes = _estimate_snapshot_age_minutes(symbol, cached)
     max_age = max(0, ANALYSIS_REFRESH_FALLBACK_MAX_AGE_MINUTES)
     if age_minutes is not None and max_age > 0 and age_minutes > float(max_age):
-        await status_msg.edit(
-            content=(
-                f"❌ Analysis refresh timed out and cached data for **{symbol}** is too old "
-                f"({age_minutes:.0f}m > {max_age}m). Retry shortly."
-            )
+        content = (
+            f"❌ Analysis refresh timed out and cached data for **{symbol}** is too old "
+            f"({age_minutes:.0f}m > {max_age}m). Retry shortly."
         )
+        if status_msg is not None:
+            await status_msg.edit(content=content)
+        else:
+            await target_channel.send(content)
         return None, None
 
     age_text = f"{age_minutes:.0f}m old" if age_minutes is not None else "age unknown"
-    await status_msg.edit(
-        content=(
-            f"⚠️ Refresh delayed for **{symbol}**. Continuing with latest cached snapshot "
-            f"({age_text})."
-        )
+    content = (
+        f"⚠️ Refresh delayed for **{symbol}**. Continuing with latest cached snapshot "
+        f"({age_text})."
     )
+    if status_msg is not None:
+        await status_msg.edit(content=content)
+    else:
+        await target_channel.send(content)
     return cached, age_minutes
 
 
@@ -1234,6 +1241,11 @@ class AnalysisCommands(commands.Cog):
                 request_id,
                 getattr(thread, "mention", None),
             )
+            try:
+                await status_msg.delete()
+                status_msg = None
+            except Exception:
+                logger.debug("Failed to delete analyze starter message for %s", symbol, exc_info=True)
         except Exception as e:
             logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
             target_channel = analysis_channel
@@ -1241,7 +1253,10 @@ class AnalysisCommands(commands.Cog):
         try:
             resolved = await self._maybe_disambiguate(symbol, interaction.user, target_channel)
             if not resolved:
-                await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
+                if status_msg is not None:
+                    await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
+                else:
+                    await target_channel.send("❌ Analysis cancelled. No token selected.")
                 return
             resolved_symbol, resolved_name = resolved
             if not thread_created:
@@ -1401,7 +1416,7 @@ class AnalysisCommands(commands.Cog):
     async def _run_analysis_task(
         self,
         requester: Optional[discord.abc.User],
-        status_msg: discord.Message,
+        status_msg: Optional[discord.Message],
         symbol: str,
         target_channel: discord.abc.Messageable,
         notify_channel: Optional[discord.abc.Messageable] = None,
@@ -1446,6 +1461,7 @@ class AnalysisCommands(commands.Cog):
                     reason="api_timeout_during_refresh",
                     request_id=request_id,
                     status_msg=status_msg,
+                    target_channel=target_channel,
                     load_cached_fn=lambda: self._load_consolidated(symbol),
                 )
                 if consolidated is None:
@@ -1458,6 +1474,7 @@ class AnalysisCommands(commands.Cog):
                     reason="refresh_poll_timed_out",
                     request_id=request_id,
                     status_msg=status_msg,
+                    target_channel=target_channel,
                     load_cached_fn=lambda: self._load_consolidated(symbol),
                 )
                 if consolidated is None:
@@ -1470,6 +1487,7 @@ class AnalysisCommands(commands.Cog):
                     reason="refresh_timed_out",
                     request_id=request_id,
                     status_msg=status_msg,
+                    target_channel=target_channel,
                     load_cached_fn=lambda: self._load_consolidated(symbol),
                 )
                 if consolidated is None:
@@ -1480,9 +1498,12 @@ class AnalysisCommands(commands.Cog):
                 if not _check_ta_freshness(symbol):
                     logger.info(f"[{symbol}] TA data is stale (>{TA_FRESHNESS_THRESHOLD_MINUTES}min)")
                     try:
-                        await status_msg.edit(
-                            content=f"Refreshing stale TA data for **{symbol}**..."
-                        )
+                        if status_msg is not None:
+                            await status_msg.edit(
+                                content=f"Refreshing stale TA data for **{symbol}**..."
+                            )
+                        else:
+                            await target_channel.send(f"Refreshing stale TA data for **{symbol}**...")
                     except Exception:
                         pass
 
@@ -1508,13 +1529,15 @@ class AnalysisCommands(commands.Cog):
                     f"reason=missing_required_data "
                     f"missing={missing_str}"
                 )
-                await status_msg.edit(
-                    content=(
-                        f"❌ Analysis blocked: missing required data after refresh "
-                        f"({missing_str}). Please refresh in dashboard and verify sources."
-                        f"{diag_text}"
-                    )
+                content = (
+                    f"❌ Analysis blocked: missing required data after refresh "
+                    f"({missing_str}). Please refresh in dashboard and verify sources."
+                    f"{diag_text}"
                 )
+                if status_msg is not None:
+                    await status_msg.edit(content=content)
+                else:
+                    await target_channel.send(content)
                 return
 
             # Run the full pipeline
@@ -1534,12 +1557,14 @@ class AnalysisCommands(commands.Cog):
                     f"symbol={symbol} "
                     "reason=pipeline_timed_out"
                 )
-                await status_msg.edit(
-                    content=(
-                        f"❌ Analysis timed out while running pipeline for **{symbol}**. "
-                        "Please retry shortly."
-                    )
+                content = (
+                    f"❌ Analysis timed out while running pipeline for **{symbol}**. "
+                    "Please retry shortly."
                 )
+                if status_msg is not None:
+                    await status_msg.edit(content=content)
+                else:
+                    await target_channel.send(content)
                 return
             
             if result.has_error:
@@ -1550,7 +1575,10 @@ class AnalysisCommands(commands.Cog):
                     f"reason=pipeline_error "
                     f"error={result.error_message}"
                 )
-                await status_msg.edit(content=f"❌ Analysis failed: {result.error_message}")
+                if status_msg is not None:
+                    await status_msg.edit(content=f"❌ Analysis failed: {result.error_message}")
+                else:
+                    await target_channel.send(f"❌ Analysis failed: {result.error_message}")
                 return
 
             # Fetch macro data for context (optional)
@@ -1579,10 +1607,11 @@ class AnalysisCommands(commands.Cog):
             await target_channel.send(embed=embed, view=view)
 
             # Delete status only after successful delivery
-            try:
-                await status_msg.delete()
-            except discord.NotFound:
-                pass  # Message already deleted or not found
+            if status_msg is not None:
+                try:
+                    await status_msg.delete()
+                except discord.NotFound:
+                    pass  # Message already deleted or not found
             
             logger.info(
                 "ANALYZE_SLASH_SUCCESS "
