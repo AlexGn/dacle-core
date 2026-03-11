@@ -11,6 +11,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.bot.utils.interaction_response import safe_defer, safe_send
+from src.bot.runtime_routing import get_bot_api_base_url
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,7 +22,7 @@ class ScalperCommands(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.api_url = os.getenv("DACLE_API_URL", "http://localhost:8000")
+        self.api_url = get_bot_api_base_url()
         self.api_key = os.getenv("DACLE_API_KEY", "").strip()
         logger.info("ScalperCommands cog initialized")
 

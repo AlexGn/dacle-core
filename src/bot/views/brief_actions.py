@@ -8,10 +8,11 @@ Max 5 tokens (Discord 25-component / 5-row limit: 2 buttons per row = 10 max).
 import discord
 
 from src.utils.logger import get_logger
+from src.bot.runtime_routing import get_channel_id
 
 logger = get_logger(__name__)
 
-TRADES_CHANNEL_ID = 1468948950412431598
+TRADES_CHANNEL_ID = get_channel_id("trades")
 MAX_TOKENS = 5
 
 

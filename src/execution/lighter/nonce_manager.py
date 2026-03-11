@@ -45,23 +45,12 @@ class NonceManager:
             self._set_locked(nonce + 1)
             return nonce
 
-    async def resync(self, current_onchain_nonce: int, force: bool = False):
-        """Re-align local counter with exchange truth.
-
-        When ``force`` is true, exchange truth wins even if the local counter is ahead.
-        This is reserved for explicit server-side nonce rejection paths.
-        """
+    async def resync(self, current_onchain_nonce: int):
+        """Re-align local counter with exchange truth."""
         current_onchain_nonce = int(current_onchain_nonce)
         async with self._lock:
             local_next = self._peek_locked()
-            if force and current_onchain_nonce != local_next:
-                logger.warning(
-                    "NonceManager force resync: %s -> %s",
-                    local_next,
-                    current_onchain_nonce,
-                )
-                self._set_locked(current_onchain_nonce)
-            elif current_onchain_nonce > local_next:
+            if current_onchain_nonce > local_next:
                 logger.info(f"NonceManager resync: {local_next} -> {current_onchain_nonce}")
                 self._set_locked(current_onchain_nonce)
             elif current_onchain_nonce < local_next:

@@ -12,6 +12,7 @@ from typing import Optional, Dict, Any
 from src.utils.redis_lms import get_current_price
 from src.utils.lifecycle_id import generate_lifecycle_id
 from src.utils.lifecycle_store import record_setup
+from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id
 
 logger = get_logger(__name__)
 
@@ -28,7 +29,7 @@ ENTRY_SCORE_PATTERN = re.compile(r"entry(?:\s*score)?\s*:?\s*([0-9]+(?:\.[0-9]+)
 RR_SCORE_PATTERN = re.compile(r"r:r\s*([0-9]+(?:\.[0-9]+)?)\s*:\s*1", re.IGNORECASE | re.MULTILINE)
 
 # Default trades channel from Node.js code
-TRADES_CHANNEL_ID = 1468948950412431598
+TRADES_CHANNEL_ID = get_channel_id("trades")
 
 class TradeRouter(commands.Cog):
     """
@@ -38,7 +39,7 @@ class TradeRouter(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.api_url = os.getenv("DACLE_API_URL", "http://localhost:8000")
+        self.api_url = get_bot_api_base_url()
         self.api_key = os.getenv("DACLE_API_KEY", "").strip()
         logger.info("TradeRouter cog initialized")
 
@@ -303,7 +304,7 @@ class TradeRouter(commands.Cog):
             return None
 
     async def call_pre_trade_check(self, setup: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        url = f"{self.api_url}/api/execution/pre-trade-check"
+        url = f"{self.api_url}/api/execution/v2/full-analysis"
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, json=setup, headers=self._build_api_headers()) as response:

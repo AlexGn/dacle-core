@@ -105,6 +105,14 @@ class PolymarketClientWrapper:
         self._latency_lock = asyncio.Lock()
         order_guard_cfg = config.get("order_guard", {})
         self._order_guard_cfg = order_guard_cfg if isinstance(order_guard_cfg, dict) else {}
+        legacy_policy_cfg = config.get("execution_policy", {})
+        self._legacy_execution_policy_cfg = (
+            legacy_policy_cfg if isinstance(legacy_policy_cfg, dict) else {}
+        )
+        live_policy_cfg = config.get("live_execution_policy", {})
+        self._live_execution_policy_cfg = (
+            live_policy_cfg if isinstance(live_policy_cfg, dict) else {}
+        )
         self._order_submission_audit_path = str(
             config.get(
                 "order_submission_audit_path",
@@ -134,6 +142,179 @@ class PolymarketClientWrapper:
         if env_override is not None:
             return self._is_truthy_env(env_override)
         return bool(self._order_guard_cfg.get("enabled", False))
+
+    def _live_execution_policy_enabled(self) -> bool:
+        env_override = os.getenv("POLY_LIVE_EXECUTION_POLICY_ENABLED")
+        if env_override is not None:
+            return self._is_truthy_env(env_override)
+        if self._live_execution_policy_cfg:
+            return bool(self._live_execution_policy_cfg.get("enabled", False))
+        return bool(self._legacy_execution_policy_cfg)
+
+    def _execution_mode(self) -> str:
+        raw = (
+            os.getenv("POLY_LIVE_EXECUTION_MODE")
+            or self._live_execution_policy_cfg.get("execution_mode")
+            or self._legacy_execution_policy_cfg.get("mode")
+            or "live"
+        )
+        return str(raw).strip().lower().replace("-", "_")
+
+    def _policy_error_code(self) -> str:
+        if self._live_execution_policy_cfg:
+            return "LIVE_POLICY_REJECT"
+        return "ORDER_POLICY_REJECT"
+
+    def _resolve_policy_allowed_token_ids(self, key: str) -> Set[str]:
+        configured = self._live_execution_policy_cfg.get(key)
+        if isinstance(configured, list) and configured:
+            return {str(t).strip() for t in configured if str(t).strip()}
+        configured_targets = self.config.get("target_assets")
+        if isinstance(configured_targets, list):
+            return {str(t).strip() for t in configured_targets if str(t).strip()}
+        return set()
+
+    def _validate_live_execution_policy(
+        self,
+        *,
+        token_id: str,
+        strategy: Optional[str],
+        qty: float,
+        price: float,
+        policy_context: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if self.mode != "LIVE" or not self._live_execution_policy_enabled():
+            return None
+
+        ctx = policy_context if isinstance(policy_context, dict) else {}
+        required_fields = ("intent_source", "strategy_id", "approval_mode", "session_id", "reason_code")
+        missing = [field for field in required_fields if not str(ctx.get(field) or "").strip()]
+        error_code = self._policy_error_code()
+        if missing and self._live_execution_policy_cfg:
+            return {
+                "status": "error",
+                "error_code": error_code,
+                "error": f"live execution policy reject: missing policy context fields {','.join(missing)}",
+            }
+
+        mode = self._execution_mode()
+        intent_source = str(ctx.get("intent_source") or "").strip().lower()
+        approval_mode = str(ctx.get("approval_mode") or "").strip().lower()
+        notional = float(price) * float(qty)
+
+        if self._legacy_execution_policy_cfg:
+            legacy_cfg = self._legacy_execution_policy_cfg
+            if mode == "soak_only":
+                if not intent_source or not approval_mode:
+                    return {
+                        "status": "error",
+                        "error_code": error_code,
+                        "error": "order execution policy reject: missing soak provenance",
+                    }
+                allowed_sources = {
+                    str(s).strip().lower()
+                    for s in (legacy_cfg.get("allowed_intent_sources") or [])
+                    if str(s).strip()
+                }
+                if allowed_sources and intent_source not in allowed_sources:
+                    return {
+                        "status": "error",
+                        "error_code": error_code,
+                        "error": f"order execution policy reject: source '{intent_source}' not allowed",
+                    }
+                allowed_approval_modes = {
+                    str(s).strip().lower()
+                    for s in (legacy_cfg.get("allowed_approval_modes") or [])
+                    if str(s).strip()
+                }
+                if allowed_approval_modes and approval_mode not in allowed_approval_modes:
+                    return {
+                        "status": "error",
+                        "error_code": error_code,
+                        "error": f"order execution policy reject: approval_mode '{approval_mode}' not allowed",
+                    }
+                if bool(legacy_cfg.get("require_operator_reason")) and not str(ctx.get("operator_reason") or "").strip():
+                    return {
+                        "status": "error",
+                        "error_code": error_code,
+                        "error": "order execution policy reject: operator_reason required",
+                    }
+                return None
+
+            if mode == "approved_live" and bool(legacy_cfg.get("require_provenance")):
+                legacy_required = ("intent_source", "strategy_id", "approval_mode", "session_id")
+                missing_legacy = [field for field in legacy_required if not str(ctx.get(field) or "").strip()]
+                if missing_legacy:
+                    return {
+                        "status": "error",
+                        "error_code": error_code,
+                        "error": f"order execution policy reject: missing provenance {','.join(missing_legacy)}",
+                    }
+                return None
+
+        if mode == "soak_only":
+            if approval_mode != "diagnostic":
+                return {
+                    "status": "error",
+                    "error_code": error_code,
+                    "error": "live execution policy reject: soak_only requires diagnostic approval",
+                }
+            allowed_sources = {
+                str(s).strip().lower()
+                for s in (self._live_execution_policy_cfg.get("diagnostic_allowed_sources") or [])
+                if str(s).strip()
+            }
+            if allowed_sources and intent_source not in allowed_sources:
+                return {
+                    "status": "error",
+                    "error_code": error_code,
+                    "error": f"live execution policy reject: source '{intent_source}' not allowlisted",
+                }
+            allowed_tokens = self._resolve_policy_allowed_token_ids("diagnostic_allowed_token_ids")
+            if allowed_tokens and token_id not in allowed_tokens:
+                return {
+                    "status": "error",
+                    "error_code": error_code,
+                    "error": f"live execution policy reject: token '{token_id}' not diagnostic-allowlisted",
+                }
+            max_notional = float(
+                self._live_execution_policy_cfg.get("diagnostic_max_order_notional_usd", 0.0) or 0.0
+            )
+            if max_notional > 0 and notional > max_notional:
+                return {
+                    "status": "error",
+                    "error_code": error_code,
+                    "error": f"live execution policy reject: diagnostic notional {notional} exceeds {max_notional}",
+                }
+            return None
+
+        allowed_sources = {
+            str(s).strip().lower()
+            for s in (self._live_execution_policy_cfg.get("live_allowed_sources") or [])
+            if str(s).strip()
+        }
+        if allowed_sources and intent_source not in allowed_sources:
+            return {
+                "status": "error",
+                "error_code": error_code,
+                "error": f"live execution policy reject: source '{intent_source}' not live-allowlisted",
+            }
+
+        allowed_tokens = self._resolve_policy_allowed_token_ids("live_allowed_token_ids")
+        if allowed_tokens and token_id not in allowed_tokens:
+            return {
+                "status": "error",
+                "error_code": error_code,
+                "error": f"live execution policy reject: token '{token_id}' not live-allowlisted",
+            }
+
+        if not str(strategy or "").strip():
+            return {
+                "status": "error",
+                "error_code": error_code,
+                "error": "live execution policy reject: strategy is required",
+            }
+        return None
 
     def _resolve_allowed_strategies(self) -> Set[str]:
         configured = self._order_guard_cfg.get("allowed_strategies")
@@ -279,6 +460,7 @@ class PolymarketClientWrapper:
         strategy: str,
         order_id: str,
         client_order_id: str,
+        policy_context: Optional[Dict[str, Any]] = None,
     ) -> None:
         try:
             path = Path(self._order_submission_audit_path)
@@ -294,6 +476,7 @@ class PolymarketClientWrapper:
                 "strategy": strategy,
                 "order_id": order_id,
                 "client_order_id": client_order_id,
+                "policy_context": policy_context or {},
             }
             with path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(entry, sort_keys=True) + "\n")
@@ -507,6 +690,7 @@ class PolymarketClientWrapper:
         client_order_id: Optional[str] = None,
         strategy: Optional[str] = None,
         entry_alert: bool = True,
+        policy_context: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Create and post an order to Polymarket.
@@ -553,6 +737,24 @@ class PolymarketClientWrapper:
         )
         if guard_error:
             return guard_error
+
+        policy_error = self._validate_live_execution_policy(
+            token_id=token_id,
+            strategy=strategy,
+            qty=qty_norm,
+            price=norm_price,
+            policy_context=policy_context,
+        )
+        if policy_error:
+            logger.critical(
+                "LIVE_POLICY_REJECT: token=%s strategy=%s qty=%.6f price=%.6f ctx=%s",
+                token_id,
+                strategy,
+                qty_norm,
+                norm_price,
+                policy_context or {},
+            )
+            return policy_error
 
         # 4. Shadow Mode Bypass
         if self._is_shadow_mode():
@@ -663,6 +865,7 @@ class PolymarketClientWrapper:
                     strategy=strategy_for_audit,
                     order_id=str(order_id),
                     client_order_id=client_order_id,
+                    policy_context=policy_context,
                 )
                 if entry_alert:
                     self._fire_and_forget_entry_alert(

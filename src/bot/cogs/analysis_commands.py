@@ -23,7 +23,7 @@ from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
 from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.bot.utils.safe_task import safe_create_task
-from src.utils.config import get_discord_config
+from src.bot.runtime_routing import get_bot_api_base_url, resolve_channel
 from api.routers.macro import get_btc_regime_widget
 
 logger = get_logger(__name__)
@@ -32,15 +32,12 @@ TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
 DISAMBIGUATION_PATH = PROJECT_ROOT / "data" / "bot" / "token_disambiguation.json"
 def _get_api_base_url() -> str:
     """Resolve API base URL at call time (after load_config)."""
-    return os.getenv("DACLE_API_URL", "http://localhost:8000")
+    return get_bot_api_base_url()
 
 
 def _api_headers() -> Dict[str, str]:
     api_key = os.getenv("DACLE_API_KEY", "").strip()
     return {"X-API-Key": api_key} if api_key else {}
-
-
-DEFAULT_ANALYSIS_CHANNEL_ID = 1470403542253703369
 
 REQUIRED_FIELDS = {
     "price": ("current_price", "price"),
@@ -942,16 +939,7 @@ class AnalysisCommands(commands.Cog):
 
     def _resolve_analysis_channel(self) -> Optional[discord.TextChannel]:
         """Resolve canonical analysis-updates channel."""
-        channel_id = DEFAULT_ANALYSIS_CHANNEL_ID
-        try:
-            discord_cfg = get_discord_config()
-            if discord_cfg.analysis_channel_id:
-                channel_id = discord_cfg.analysis_channel_id
-        except Exception:
-            # Config may be unavailable in certain test contexts; use fallback.
-            pass
-
-        channel = self.bot.get_channel(channel_id)
+        channel = resolve_channel(self.bot, "analysis-updates")
         return channel if isinstance(channel, discord.TextChannel) else None
 
     async def _maybe_disambiguate(
@@ -1129,10 +1117,6 @@ class AnalysisCommands(commands.Cog):
                 name=f"Analysis: {symbol}",
                 auto_archive_duration=60,
             )
-            thread_status = await thread.send(
-                f"🔍 Analyzing **{symbol}**... (this may take up to 2-3m)"
-            )
-            status_msg = thread_status
             target_channel = thread
         except Exception as e:
             logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
@@ -1265,10 +1249,6 @@ class AnalysisCommands(commands.Cog):
                     name=f"Analysis: {symbol}",
                     auto_archive_duration=60,
                 )
-                thread_status = await thread.send(
-                    f"Analyzing **{symbol}**... (this may take up to 2-3m)"
-                )
-                status_msg = thread_status
                 target_channel = thread
             except Exception:
                 pass
