@@ -19,7 +19,11 @@ logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
-TRADES_CHANNEL_ID = get_channel_id("trades")
+
+
+def _get_trades_channel_id() -> int:
+    """Resolve the canonical trades channel ID at call time."""
+    return get_channel_id("trades")
 
 
 def _get_api_base_url() -> str:
@@ -110,7 +114,7 @@ class TACardView(discord.ui.View):
 
         setup_msg = _format_setup_message(self.symbol, self.direction, exec_state)
 
-        trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
+        trades_channel = interaction.client.get_channel(_get_trades_channel_id())
         if not trades_channel:
             await interaction.response.send_message(
                 f"Trade approved but could not find #trades channel. "

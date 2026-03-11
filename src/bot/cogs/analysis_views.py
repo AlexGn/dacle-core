@@ -21,8 +21,16 @@ logger = get_logger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
-TRADES_CHANNEL_ID = get_channel_id("trades")
-API_BASE_URL = get_bot_api_base_url()
+
+
+def _get_trades_channel_id() -> int:
+    """Resolve the canonical trades channel ID at call time."""
+    return get_channel_id("trades")
+
+
+def _get_api_base_url() -> str:
+    """Resolve API base URL at call time."""
+    return get_bot_api_base_url()
 
 
 def _api_headers() -> dict:
@@ -224,7 +232,7 @@ class SetLevelsModal(discord.ui.Modal):
 
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"{API_BASE_URL}/api/execution/levels"
+                url = f"{_get_api_base_url()}/api/execution/levels"
                 async with session.post(url, json=payload, headers=_api_headers()) as response:
                     if response.status == 422:
                         error_data = await response.json()
@@ -418,7 +426,7 @@ class TradeApprovalView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         try:
             async with aiohttp.ClientSession() as session:
-                url = f"{API_BASE_URL}/api/tokens/research/{self.symbol}/refresh"
+                url = f"{_get_api_base_url()}/api/tokens/research/{self.symbol}/refresh"
                 async with session.post(url, headers=_api_headers()) as resp:
                     if resp.status in (200, 202):
                         await interaction.followup.send(
@@ -502,7 +510,8 @@ class AuditExecutionView(discord.ui.View):
             logger.warning(f"Failed to record lifecycle for audit execution: {e}")
 
         # 2. Post to #trades
-        trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
+        trades_channel_id = _get_trades_channel_id()
+        trades_channel = interaction.client.get_channel(trades_channel_id)
         if trades_channel:
             sent_msg = await trades_channel.send(f"🚀 **EXECUTION CONFIRMED** (via Audit)\n{setup_msg}")
             
@@ -512,7 +521,7 @@ class AuditExecutionView(discord.ui.View):
             # 4. Record 'OPEN' feedback automatically to start tracking
             try:
                 async with aiohttp.ClientSession() as session:
-                    url = f"{API_BASE_URL}/api/feedback/simplified-submit"
+                    url = f"{_get_api_base_url()}/api/feedback/simplified-submit"
                     payload = {
                         "token": self.symbol,
                         "result": "WATCHING", # Special status for active trades
@@ -522,7 +531,9 @@ class AuditExecutionView(discord.ui.View):
                         pass
             except: pass
 
-            await interaction.followup.send(f"✅ **Trade Executed!** Setup posted to <#{TRADES_CHANNEL_ID}> and Watcher engaged.")
+            await interaction.followup.send(
+                f"✅ **Trade Executed!** Setup posted to <#{trades_channel_id}> and Watcher engaged."
+            )
         else:
             await interaction.followup.send(f"❌ Failed to find #trades channel.")
 

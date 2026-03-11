@@ -28,8 +28,9 @@ SCORE_CARD_HEADER_PATTERN = re.compile(r"^\s*\$?([A-Z0-9]{2,10})\s+(SHORT|LONG)\
 ENTRY_SCORE_PATTERN = re.compile(r"entry(?:\s*score)?\s*:?\s*([0-9]+(?:\.[0-9]+)?)\s*\/\s*10", re.IGNORECASE | re.MULTILINE)
 RR_SCORE_PATTERN = re.compile(r"r:r\s*([0-9]+(?:\.[0-9]+)?)\s*:\s*1", re.IGNORECASE | re.MULTILINE)
 
-# Default trades channel from Node.js code
-TRADES_CHANNEL_ID = get_channel_id("trades")
+def _get_trades_channel_id() -> int:
+    """Resolve the canonical trades channel ID at call time."""
+    return get_channel_id("trades")
 
 class TradeRouter(commands.Cog):
     """
@@ -355,7 +356,7 @@ class TradeRouter(commands.Cog):
                 ephemeral=True,
             )
             return
-        if channel.parent_id != TRADES_CHANNEL_ID:
+        if channel.parent_id != _get_trades_channel_id():
             await self._send_command_message(
                 interaction,
                 deferred=deferred,
@@ -613,7 +614,7 @@ class TradeRouter(commands.Cog):
         setup_msg = "\n".join(parts)
 
         # Post to #trades
-        trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
+        trades_channel = interaction.client.get_channel(_get_trades_channel_id())
         if not trades_channel:
             await self._send_command_message(
                 interaction,
@@ -820,7 +821,7 @@ class LevelsResultView(discord.ui.View):
 
     @discord.ui.button(label="Post to #trades", style=discord.ButtonStyle.primary, emoji="\U0001f4e8")
     async def post_to_trades(self, interaction: discord.Interaction, button: discord.ui.Button):
-        trades_channel = self._bot.get_channel(TRADES_CHANNEL_ID)
+        trades_channel = self._bot.get_channel(_get_trades_channel_id())
         if not trades_channel:
             await interaction.response.send_message(
                 "Could not find #trades channel.", ephemeral=True
