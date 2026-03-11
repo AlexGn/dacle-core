@@ -25,13 +25,32 @@ from collections import defaultdict
 from typing import Any, Dict, List, Optional, Union, Tuple
 
 import requests
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log
-)
+try:
+    from tenacity import (
+        retry,
+        stop_after_attempt,
+        wait_exponential,
+        retry_if_exception_type,
+        before_sleep_log,
+    )
+except ModuleNotFoundError:  # pragma: no cover - exercised in fallback import test
+    def retry(*args, **kwargs):
+        def decorator(func):
+            return func
+
+        return decorator
+
+    def stop_after_attempt(*args, **kwargs):
+        return None
+
+    def wait_exponential(*args, **kwargs):
+        return None
+
+    def retry_if_exception_type(*args, **kwargs):
+        return None
+
+    def before_sleep_log(*args, **kwargs):
+        return None
 
 logger = logging.getLogger(__name__)
 
