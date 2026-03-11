@@ -914,6 +914,33 @@ class PolymarketClientWrapper:
             logger.error(f"Failed to query order status for {order_id}: {e}")
             return None
 
+    async def get_order_fills(self, order_id: str) -> List[Dict[str, Any]]:
+        """
+        Fetch individual trade records for a specific order ID.
+        Used for reconciliation when WebSocket messages are missed.
+        """
+        if self._is_shadow_mode():
+            return []
+
+        getter = getattr(self.client, "get_trades", None)
+        if not callable(getter):
+            return []
+
+        try:
+            # Query trades by order ID
+            resp = await asyncio.to_thread(getter, order_id=order_id)
+            if isinstance(resp, list):
+                return resp
+            if isinstance(resp, dict):
+                for key in ("data", "trades", "items", "results"):
+                    value = resp.get(key)
+                    if isinstance(value, list):
+                        return value
+            return []
+        except Exception as e:
+            logger.error(f"Failed to query fills for order {order_id}: {e}")
+            return []
+
     async def get_open_orders(self) -> List[Dict[str, Any]]:
         """Fetch open orders when the underlying client supports it."""
         if self._is_shadow_mode():
