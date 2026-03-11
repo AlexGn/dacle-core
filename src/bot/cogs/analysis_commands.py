@@ -1301,7 +1301,7 @@ class AnalysisCommands(commands.Cog):
             safe_create_task(
                 self._run_analysis_task(
                     interaction.user,
-                    status_msg,
+                    None if thread_created else status_msg,
                     resolved_symbol,
                     target_channel,
                     notify_channel=analysis_channel,
