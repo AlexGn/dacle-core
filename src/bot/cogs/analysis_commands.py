@@ -71,6 +71,25 @@ API_KICKOFF_RETRIES = int(os.getenv("DACLE_API_KICKOFF_RETRIES", "2"))
 API_KICKOFF_RETRY_DELAY_SECONDS = float(os.getenv("DACLE_API_KICKOFF_RETRY_DELAY_SECONDS", "2"))
 
 
+async def _delete_message_with_retry(message: discord.Message, *, logger_obj, context: str) -> bool:
+    for delay_seconds in (0.5, 1.0, 2.0):
+        try:
+            if delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+            await message.delete()
+            return True
+        except discord.NotFound:
+            return True
+        except Exception:
+            logger_obj.debug(
+                "Failed to delete message during %s; retrying in %.1fs",
+                context,
+                delay_seconds,
+                exc_info=True,
+            )
+    return False
+
+
 def _iter_exception_chain(exc: BaseException):
     """Yield exception plus nested cause/context chain."""
     seen: set[int] = set()
@@ -1241,11 +1260,17 @@ class AnalysisCommands(commands.Cog):
                 request_id,
                 getattr(thread, "mention", None),
             )
-            try:
-                await status_msg.delete()
-                status_msg = None
-            except Exception:
-                logger.debug("Failed to delete analyze starter message for %s", symbol, exc_info=True)
+            safe_create_task(
+                _delete_message_with_retry(
+                    status_msg,
+                    logger_obj=logger,
+                    context=f"analyze starter cleanup {symbol}",
+                ),
+                logger=logger,
+                error_channel=thread,
+                name=f"analyze-starter-delete-{symbol.lower()}",
+            )
+            status_msg = None
         except Exception as e:
             logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
             target_channel = analysis_channel
