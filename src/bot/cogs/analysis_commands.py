@@ -30,6 +30,9 @@ logger = get_logger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
 DISAMBIGUATION_PATH = PROJECT_ROOT / "data" / "bot" / "token_disambiguation.json"
+ANALYZE_ACTIVE_DEDUPE_WINDOW_SECONDS = 600
+ANALYZE_RECENT_DEDUPE_WINDOW_SECONDS = 120
+
 def _get_api_base_url() -> str:
     """Resolve API base URL at call time (after load_config)."""
     return get_bot_api_base_url()
@@ -385,7 +388,95 @@ class AnalysisCommands(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._analyze_request_state: Dict[Tuple[int, str], Dict[str, Any]] = {}
         logger.info("AnalysisCommands cog initialized")
+
+    def _analyze_state_key(
+        self,
+        user: Optional[discord.abc.User],
+        symbol: str,
+    ) -> Optional[Tuple[int, str]]:
+        user_id = getattr(user, "id", None) if user is not None else None
+        if user_id is None:
+            return None
+        return (int(user_id), symbol.upper())
+
+    def _prune_analyze_request_state(self) -> None:
+        now = time.monotonic()
+        expired = [
+            key
+            for key, entry in self._analyze_request_state.items()
+            if float(entry.get("expires_at", 0.0)) <= now
+        ]
+        for key in expired:
+            self._analyze_request_state.pop(key, None)
+
+    def _duplicate_analyze_notice(
+        self,
+        user: Optional[discord.abc.User],
+        symbol: str,
+    ) -> Optional[str]:
+        self._prune_analyze_request_state()
+        key = self._analyze_state_key(user, symbol)
+        if key is None:
+            return None
+        entry = self._analyze_request_state.get(key)
+        if not entry:
+            return None
+        location = entry.get("location_mention") or "the existing analysis thread"
+        if entry.get("state") == "active":
+            return f"⏳ **{symbol.upper()}** is already being analyzed. Please check {location}."
+        return f"ℹ️ **{symbol.upper()}** was analyzed very recently. Please check {location}."
+
+    def _mark_analyze_request_started(
+        self,
+        user: Optional[discord.abc.User],
+        symbol: str,
+        request_id: str,
+        location_mention: str,
+    ) -> None:
+        key = self._analyze_state_key(user, symbol)
+        if key is None:
+            return
+        self._analyze_request_state[key] = {
+            "request_id": request_id,
+            "state": "active",
+            "location_mention": location_mention,
+            "expires_at": time.monotonic() + ANALYZE_ACTIVE_DEDUPE_WINDOW_SECONDS,
+        }
+
+    def _update_analyze_request_location(
+        self,
+        user: Optional[discord.abc.User],
+        symbol: str,
+        request_id: str,
+        location_mention: Optional[str],
+    ) -> None:
+        key = self._analyze_state_key(user, symbol)
+        if key is None:
+            return
+        entry = self._analyze_request_state.get(key)
+        if not entry or entry.get("request_id") != request_id:
+            return
+        if location_mention:
+            entry["location_mention"] = location_mention
+
+    def _finalize_analyze_request(
+        self,
+        user: Optional[discord.abc.User],
+        symbol: str,
+        request_id: Optional[str],
+    ) -> None:
+        key = self._analyze_state_key(user, symbol)
+        if key is None:
+            return
+        entry = self._analyze_request_state.get(key)
+        if not entry:
+            return
+        if request_id and entry.get("request_id") != request_id:
+            return
+        entry["state"] = "recent"
+        entry["expires_at"] = time.monotonic() + ANALYZE_RECENT_DEDUPE_WINDOW_SECONDS
 
     @staticmethod
     def _allowed_user_ids() -> set[str]:
@@ -1086,12 +1177,29 @@ class AnalysisCommands(commands.Cog):
             )
             return
 
+        duplicate_notice = self._duplicate_analyze_notice(interaction.user, symbol)
+        if duplicate_notice:
+            await safe_send(
+                interaction,
+                command_name="analyze",
+                logger=logger,
+                content=duplicate_notice,
+                ephemeral=True,
+            )
+            return
+
         await safe_send(
             interaction,
             command_name="analyze",
             logger=logger,
             content=f"🔍 Analyzing **{symbol}**. I will post results in {analysis_channel.mention}.",
             ephemeral=True,
+        )
+        self._mark_analyze_request_started(
+            interaction.user,
+            symbol,
+            request_id,
+            analysis_channel.mention,
         )
 
         logger.info(
@@ -1118,6 +1226,12 @@ class AnalysisCommands(commands.Cog):
                 auto_archive_duration=60,
             )
             target_channel = thread
+            self._update_analyze_request_location(
+                interaction.user,
+                symbol,
+                request_id,
+                getattr(thread, "mention", None),
+            )
         except Exception as e:
             logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
             target_channel = analysis_channel
@@ -1494,6 +1608,8 @@ class AnalysisCommands(commands.Cog):
                     await target_channel.send(f"❌ An error occurred: {err_text}")
             except Exception:
                 pass
+        finally:
+            self._finalize_analyze_request(requester, symbol, request_id)
 
 
     async def cog_app_command_error(self, interaction, error):
