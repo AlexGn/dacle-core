@@ -1219,6 +1219,7 @@ class AnalysisCommands(commands.Cog):
             f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
         )
         target_channel: discord.abc.Messageable = analysis_channel
+        thread_created = False
 
         try:
             thread = await status_msg.create_thread(
@@ -1226,6 +1227,7 @@ class AnalysisCommands(commands.Cog):
                 auto_archive_duration=60,
             )
             target_channel = thread
+            thread_created = True
             self._update_analyze_request_location(
                 interaction.user,
                 symbol,
@@ -1242,9 +1244,10 @@ class AnalysisCommands(commands.Cog):
                 await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
                 return
             resolved_symbol, resolved_name = resolved
-            await status_msg.edit(
-                content=f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
-            )
+            if not thread_created:
+                await status_msg.edit(
+                    content=f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
+                )
 
             safe_create_task(
                 self._run_analysis_task(
