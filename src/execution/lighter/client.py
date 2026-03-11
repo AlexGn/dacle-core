@@ -376,9 +376,16 @@ class LighterRealClient:
                     account_index=int(account_index),
                     api_private_keys={api_key_index: api_private_key},
                 )
+                submit_nonce = int(nonce)
+                submit_api_key_index = int(api_key_index)
+                submit_client_order_index = int(nonce)
+                if submit_nonce < 0:
+                    submit_nonce = int(getattr(SignerClient, "DEFAULT_NONCE", -1))
+                    submit_api_key_index = int(getattr(SignerClient, "DEFAULT_API_KEY_INDEX", 255))
+                    submit_client_order_index = max(1, int(time.time() * 1000) & 0x7FFFFFFF)
                 _tx, resp, err = await signer_client.create_order(
                     market_index=int(self.market_id),
-                    client_order_index=int(nonce),
+                    client_order_index=int(submit_client_order_index),
                     base_amount=int(size_int),
                     price=int(price_int),
                     is_ask=bool(is_ask),
@@ -386,8 +393,8 @@ class LighterRealClient:
                     time_in_force=int(sdk_tif),
                     reduce_only=bool(is_reduce_only),
                     order_expiry=int(sdk_expiry),
-                    nonce=int(nonce),
-                    api_key_index=int(api_key_index),
+                    nonce=int(submit_nonce),
+                    api_key_index=int(submit_api_key_index),
                 )
                 if err:
                     last_error = str(err)
