@@ -1294,7 +1294,11 @@ class AnalysisCommands(commands.Cog):
                     await target_channel.send("❌ Analysis cancelled. No token selected.")
                 return
             resolved_symbol, resolved_name = resolved
-            if not thread_created:
+            if thread_created:
+                status_msg = await target_channel.send(
+                    f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
+                )
+            else:
                 await status_msg.edit(
                     content=f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
                 )
@@ -1302,7 +1306,7 @@ class AnalysisCommands(commands.Cog):
             safe_create_task(
                 self._run_analysis_task(
                     interaction.user,
-                    None if thread_created else status_msg,
+                    status_msg,
                     resolved_symbol,
                     target_channel,
                     notify_channel=analysis_channel,
@@ -1654,12 +1658,18 @@ class AnalysisCommands(commands.Cog):
                 )
             await target_channel.send(embed=embed, view=view)
 
-            # Delete status only after successful delivery
+            # Keep thread status message as the first visible item in-thread.
             if status_msg is not None:
-                try:
-                    await status_msg.delete()
-                except discord.NotFound:
-                    pass  # Message already deleted or not found
+                if isinstance(target_channel, discord.Thread):
+                    try:
+                        await status_msg.edit(content=f"✅ Analysis complete for **{symbol}**")
+                    except discord.NotFound:
+                        pass
+                else:
+                    try:
+                        await status_msg.delete()
+                    except discord.NotFound:
+                        pass  # Message already deleted or not found
             
             logger.info(
                 "ANALYZE_SLASH_SUCCESS "
