@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # Errors that warrant failover to a secondary API URL.
 _FAILOVER_ERRORS = (asyncio.TimeoutError, aiohttp.ClientConnectionError, aiohttp.ServerDisconnectedError)
 _FAILOVER_HTTP_STATUS_CODES = {502, 503, 504, 520, 522, 524}
+_QUOTE_BALANCE_ASSET = "USDC"
 
 # Valid order types and their Lighter API timeInForce mapping.
 _ORDER_TYPE_TO_TIF = {
@@ -161,6 +162,12 @@ class LighterRealClient:
         if idx > 0:
             return url[:idx]
         return url
+
+    def _explorer_root_url(self) -> str:
+        root = self._api_root_url(self.api_url)
+        if "mainnet.zklighter.elliot.ai" in root:
+            return "https://explorer.elliot.ai/api"
+        return root.rstrip("/") + "/explorer/api"
 
     async def _resolve_runtime_account_index(self) -> Tuple[Optional[int], Optional[str]]:
         cached = self._to_int(self._resolved_account_index)
@@ -1471,6 +1478,46 @@ class LighterRealClient:
                 result[key] = self._safe_float(value)
         return result
 
+    def _extract_account_metadata_entry(
+        self,
+        payload: Any,
+        account_index: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return None
+        sub_accounts = payload.get("sub_accounts")
+        if not isinstance(sub_accounts, list):
+            return None
+
+        target_index = self._to_int(account_index, default=self._to_int(self._resolved_account_index))
+        if target_index is not None:
+            for account in sub_accounts:
+                if not isinstance(account, dict):
+                    continue
+                if self._to_int(account.get("index")) == int(target_index):
+                    return account
+
+        for account in sub_accounts:
+            if isinstance(account, dict):
+                return account
+        return None
+
+    def _balance_fallback_from_account_metadata(
+        self,
+        payload: Any,
+        account_index: Optional[int],
+    ) -> dict:
+        account = self._extract_account_metadata_entry(payload, account_index)
+        if not isinstance(account, dict):
+            return {}
+
+        available = self._safe_float(account.get("available_balance"))
+        collateral = self._safe_float(account.get("collateral"))
+        quote_balance = available if available > 0.0 else collateral
+        if quote_balance <= 0.0:
+            return {}
+        return {_QUOTE_BALANCE_ASSET: quote_balance}
+
     def _safe_float(self, value: Any) -> float:
         """Convert to float safely, return 0.0 on failure."""
         try:
@@ -1543,7 +1590,115 @@ class LighterRealClient:
                     logger.error(f"get_balance_checked error: {e}")
                     return (False, {})
 
+            # Fallback: some upstream environments now block /balances but still expose
+            # collateral/account metadata via accountsByL1Address.
+            try:
+                async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
+                    account_index, idx_err = await self._resolve_account_index(session, api_url=api_url)
+                    if idx_err or account_index is None or not self.signer:
+                        continue
+                    status, payload, _ = await self._get_json(
+                        session,
+                        f"{str(api_url).rstrip('/')}/accountsByL1Address",
+                        params={"l1_address": self.signer.address},
+                    )
+                    if status != 200:
+                        continue
+                    fallback_balances = self._balance_fallback_from_account_metadata(payload, account_index)
+                    if fallback_balances:
+                        if self.cache:
+                            existing = await self.cache.get_account_info(self.signer.address) or {}
+                            existing["balances"] = fallback_balances
+                            await self.cache.set_account_info(self.signer.address, existing)
+                        logger.info(
+                            "get_balance_checked fallback: using accountsByL1Address collateral metadata for %s",
+                            account_index,
+                        )
+                        return (True, fallback_balances)
+            except Exception as e:
+                logger.warning("get_balance_checked metadata fallback failed: %s", e)
+
         return (False, {})
+
+    async def fetch_account_positions(self, timeout_sec: Optional[float] = None) -> dict:
+        """Fetch current account positions from the public explorer API."""
+        if self._is_shadow_mode():
+            return {"status": "success", "positions": {}, "source": "shadow"}
+
+        account_index, idx_err = await self._resolve_runtime_account_index()
+        if idx_err or account_index is None:
+            return {"status": "error", "error": f"account_index_unavailable: {idx_err}"}
+
+        effective_timeout = aiohttp.ClientTimeout(total=timeout_sec) if timeout_sec else self.timeout
+        url = f"{self._explorer_root_url().rstrip('/')}/accounts/{int(account_index)}/positions"
+        try:
+            async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
+                status, payload, err_text = await self._get_json(session, url)
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+        if status != 200 or not isinstance(payload, dict):
+            return {"status": "error", "error": err_text or f"HTTP {status}"}
+
+        positions = payload.get("positions")
+        if not isinstance(positions, dict):
+            return {"status": "error", "error": "positions payload missing"}
+
+        return {
+            "status": "success",
+            "positions": positions,
+            "source": "explorer_positions",
+            "account_index": int(account_index),
+        }
+
+    async def fetch_order_history(
+        self,
+        *,
+        limit: int = 50,
+        cursor: Optional[str] = None,
+        timeout_sec: Optional[float] = None,
+    ) -> dict:
+        """Fetch inactive order history for this account."""
+        if self._is_shadow_mode():
+            return {"status": "success", "orders": [], "source": "shadow"}
+        if not self.signer:
+            return {"status": "error", "error": "No signer available for order history."}
+
+        effective_timeout = aiohttp.ClientTimeout(total=timeout_sec) if timeout_sec else self.timeout
+        for api_url in self.api_urls:
+            try:
+                async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
+                    account_index, idx_err = await self._resolve_account_index(session, api_url=api_url)
+                    if idx_err or account_index is None:
+                        return {"status": "error", "error": idx_err or "account_index_unavailable"}
+                    params: Dict[str, Any] = {"account_index": int(account_index), "limit": int(limit)}
+                    if cursor:
+                        params["cursor"] = cursor
+                    token = str(self.auth_token or "").strip()
+                    if token:
+                        params["auth"] = token
+                    status, payload, err_text = await self._get_json(
+                        session,
+                        f"{str(api_url).rstrip('/')}/accountInactiveOrders",
+                        params=params,
+                    )
+                    if status == 200 and isinstance(payload, dict):
+                        orders = payload.get("orders")
+                        if isinstance(orders, list):
+                            return {
+                                "status": "success",
+                                "orders": orders,
+                                "next_cursor": payload.get("next_cursor"),
+                                "source": "accountInactiveOrders",
+                                "account_index": int(account_index),
+                            }
+                    if status in (401, 403):
+                        await self._handle_auth_failure(status, f"{str(api_url).rstrip('/')}/accountInactiveOrders")
+            except _FAILOVER_ERRORS:
+                continue
+            except Exception as e:
+                return {"status": "error", "error": str(e)}
+        return {"status": "error", "error": "order_history_unavailable"}
 
     async def fetch_nonce(self) -> dict:
         """Fetch the current nonce for this account from the Lighter API.
