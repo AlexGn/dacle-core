@@ -1215,9 +1215,7 @@ class AnalysisCommands(commands.Cog):
             f"target channel #{analysis_channel.name} ({analysis_channel.id})"
         )
 
-        status_msg = await analysis_channel.send(
-            f"🧵 Analysis thread opened for **{symbol}** (requested by {interaction.user.mention})"
-        )
+        status_msg = await analysis_channel.send(f"🧵 **{symbol}**")
         target_channel: discord.abc.Messageable = analysis_channel
         thread_created = False
 
