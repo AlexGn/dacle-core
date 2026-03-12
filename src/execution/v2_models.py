@@ -130,6 +130,7 @@ class PreTradeCheckResponseV2(BaseModel):
     reason_codes: List[str] = []
     score_card: Optional[Dict[str, Any]] = None
     score_lineage: Optional[Dict[str, Any]] = None
+    formatted_response: Optional[str] = None
 
 class ApproveAndExecuteRequestV2(BaseModel):
     """Request to approve and execute setup."""
