@@ -41,8 +41,8 @@ class AnalysisFormatter:
         title = f"📋 {result.symbol} — {getattr(result, 'direction', 'UNKNOWN')} {result.conviction_score or 0}/10"
         
         # Conviction Breakdown: Conviction: SHORT 0.0/10 | LONG 3.2/10
-        long_s = getattr(result, 'long_score', 0) or 0
-        short_s = getattr(result, 'short_score', 0) or 0
+        long_s = float(getattr(result, 'long_score', 0) or 0.0)
+        short_s = float(getattr(result, 'short_score', 0) or 0.0)
         description = f"**Conviction**: SHORT {short_s:.1f}/10 | LONG {long_s:.1f}/10\n"
         
         # Decision: Decision: ❌ SKIP (Low conviction)
@@ -80,6 +80,31 @@ class AnalysisFormatter:
         mc = fmt_m(getattr(result, 'market_cap', None))
         ratio = f"{result.fdv_mc_ratio:.1f}x" if isinstance(getattr(result, 'fdv_mc_ratio', None), (int, float)) else "Unknown"
         float_pct = f"{result.float_pct:.0f}%" if isinstance(getattr(result, 'float_pct', None), (int, float)) else "Unknown"
+
+        # Explicitly call out missing data (Session 495 clarity fix)
+        short_reasons = getattr(result, "short_reasons", None) or []
+        long_reasons = getattr(result, "long_reasons", None) or []
+        all_reasons = short_reasons + long_reasons
+        
+        missing_data_warnings = []
+        for reason in all_reasons:
+            reason_lower = str(reason).lower()
+            if "missing" in reason_lower and "data" in reason_lower:
+                missing_data_warnings.append(str(reason))
+            elif "missing float % data" in reason_lower or float_pct == "Unknown":
+                missing_data_warnings.append("Missing float % data (circulating supply unavailable)")
+                
+        # Deduplicate warnings
+        missing_data_warnings = list(dict.fromkeys(missing_data_warnings))
+        
+        if missing_data_warnings:
+            warning_text = "\n".join([f"• {w}" for w in missing_data_warnings])
+            warning_text += f"\n\n💡 **Tip:** Primary sources are incomplete. Run `/audit {result.symbol}` to dispatch an AI specialist."
+            embed.add_field(
+                name="⚠️ Critical Data Gaps",
+                value=warning_text,
+                inline=False
+            )
 
         # VC formatting
         investor_tier = getattr(result, 'investor_tier', None) or getattr(result, 'vc_tier_classification', None)
