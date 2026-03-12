@@ -71,6 +71,35 @@ API_KICKOFF_RETRIES = int(os.getenv("DACLE_API_KICKOFF_RETRIES", "2"))
 API_KICKOFF_RETRY_DELAY_SECONDS = float(os.getenv("DACLE_API_KICKOFF_RETRY_DELAY_SECONDS", "2"))
 
 
+def _is_supported_analysis_channel(channel: Optional[Any]) -> bool:
+    return isinstance(channel, (discord.TextChannel, discord.ForumChannel))
+
+
+def _resolve_forum_channel_from_env(bot: Any, env_key: str) -> Optional[Any]:
+    raw = str(os.getenv(env_key, "") or "").strip()
+    if not raw:
+        return None
+    try:
+        channel_id = int(raw)
+    except ValueError:
+        return None
+    return bot.get_channel(channel_id)
+
+
+def _extract_forum_thread_result(created: Any) -> Tuple[Optional[discord.Thread], Optional[discord.Message]]:
+    thread = getattr(created, "thread", None)
+    message = getattr(created, "message", None)
+    if thread is not None:
+        return thread, message
+    if isinstance(created, tuple) and len(created) >= 2:
+        maybe_thread, maybe_message = created[0], created[1]
+        if isinstance(maybe_thread, discord.Thread):
+            return maybe_thread, maybe_message
+    if isinstance(created, discord.Thread):
+        return created, None
+    return None, None
+
+
 async def _delete_message_with_retry(message: discord.Message, *, logger_obj, context: str) -> bool:
     for delay_seconds in (0.5, 1.0, 2.0):
         try:
@@ -1075,10 +1104,14 @@ class AnalysisCommands(commands.Cog):
                 missing.append(label)
         return (len(missing) == 0), missing
 
-    def _resolve_analysis_channel(self) -> Optional[discord.TextChannel]:
-        """Resolve canonical analysis-updates channel."""
+    def _resolve_analysis_channel(self) -> Optional[Any]:
+        """Resolve /analyze destination, preferring a dedicated forum channel when configured."""
+        forum_channel = _resolve_forum_channel_from_env(self.bot, "DISCORD_ANALYZE_FORUM_CHANNEL_ID")
+        if isinstance(forum_channel, discord.ForumChannel):
+            return forum_channel
+
         channel = resolve_channel(self.bot, "analysis-updates")
-        return channel if isinstance(channel, discord.TextChannel) else None
+        return channel if _is_supported_analysis_channel(channel) else None
 
     async def _maybe_disambiguate(
         self,
@@ -1212,7 +1245,7 @@ class AnalysisCommands(commands.Cog):
         invoke_channel = interaction.channel
         analysis_channel = self._resolve_analysis_channel()
         if analysis_channel is None:
-            analysis_channel = invoke_channel if isinstance(invoke_channel, discord.TextChannel) else None
+            analysis_channel = invoke_channel if _is_supported_analysis_channel(invoke_channel) else None
 
         if analysis_channel is None:
             await safe_send(
@@ -1262,19 +1295,35 @@ class AnalysisCommands(commands.Cog):
             f"target channel #{analysis_channel.name} ({analysis_channel.id})"
         )
 
-        status_msg = await analysis_channel.send(
-            f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
-        )
         target_channel: discord.abc.Messageable = analysis_channel
         thread_created = False
+        created_via_forum = False
+        status_msg: Optional[discord.Message] = None
 
         try:
-            thread = await status_msg.create_thread(
-                name=f"Analysis: {symbol}",
-                auto_archive_duration=60,
-            )
-            target_channel = thread
-            thread_created = True
+            if isinstance(analysis_channel, discord.ForumChannel):
+                created = await analysis_channel.create_thread(
+                    name=f"Analysis: {symbol}",
+                    content=f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})",
+                    auto_archive_duration=60,
+                )
+                thread, status_msg = _extract_forum_thread_result(created)
+                if thread is None:
+                    raise RuntimeError("Forum analysis creation did not return a thread")
+                target_channel = thread
+                thread_created = True
+                created_via_forum = True
+            else:
+                status_msg = await analysis_channel.send(
+                    f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
+                )
+                thread = await status_msg.create_thread(
+                    name=f"Analysis: {symbol}",
+                    auto_archive_duration=60,
+                )
+                target_channel = thread
+                thread_created = True
+
             self._update_analyze_request_location(
                 interaction.user,
                 symbol,
@@ -1294,7 +1343,11 @@ class AnalysisCommands(commands.Cog):
                     await target_channel.send("❌ Analysis cancelled. No token selected.")
                 return
             resolved_symbol, resolved_name = resolved
-            if thread_created:
+            if created_via_forum and status_msg is not None:
+                await status_msg.edit(
+                    content=f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
+                )
+            elif thread_created:
                 status_msg = await target_channel.send(
                     f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
                 )
@@ -1357,7 +1410,7 @@ class AnalysisCommands(commands.Cog):
         analysis_channel = self._resolve_analysis_channel()
         invoke_channel = interaction.channel
         if analysis_channel is None:
-            analysis_channel = invoke_channel if isinstance(invoke_channel, discord.TextChannel) else None
+            analysis_channel = invoke_channel if _is_supported_analysis_channel(invoke_channel) else None
 
         if analysis_channel is None:
             await safe_send(
@@ -1405,34 +1458,60 @@ class AnalysisCommands(commands.Cog):
     async def _analyze_one(
         self,
         symbol: str,
-        analysis_channel: discord.TextChannel,
+        analysis_channel: Any,
         requester: discord.abc.User,
         semaphore: asyncio.Semaphore,
     ) -> tuple[str, bool]:
         """Analyze a single token with semaphore-controlled concurrency."""
         async with semaphore:
-            status_msg = await analysis_channel.send(
-                f"Analyzing **{symbol}**... (batch request by {requester.mention})"
-            )
             target_channel: discord.abc.Messageable = analysis_channel
+            status_msg: Optional[discord.Message] = None
+            created_via_forum = False
             try:
-                thread = await status_msg.create_thread(
-                    name=f"Analysis: {symbol}",
-                    auto_archive_duration=60,
-                )
-                target_channel = thread
+                if isinstance(analysis_channel, discord.ForumChannel):
+                    created = await analysis_channel.create_thread(
+                        name=f"Analysis: {symbol}",
+                        content=f"Analyzing **{symbol}**... (batch request by {requester.mention})",
+                        auto_archive_duration=60,
+                    )
+                    thread, status_msg = _extract_forum_thread_result(created)
+                    if thread is None:
+                        raise RuntimeError("Forum analysis batch creation did not return a thread")
+                    target_channel = thread
+                    created_via_forum = True
+                else:
+                    status_msg = await analysis_channel.send(
+                        f"Analyzing **{symbol}**... (batch request by {requester.mention})"
+                    )
+                    thread = await status_msg.create_thread(
+                        name=f"Analysis: {symbol}",
+                        auto_archive_duration=60,
+                    )
+                    target_channel = thread
             except Exception:
                 pass
 
             try:
                 resolved = await self._maybe_disambiguate(symbol, requester, target_channel)
                 if not resolved:
-                    await status_msg.edit(content=f"Skipped {symbol} -- disambiguation cancelled.")
+                    if status_msg is not None:
+                        await status_msg.edit(content=f"Skipped {symbol} -- disambiguation cancelled.")
+                    else:
+                        await target_channel.send(f"Skipped {symbol} -- disambiguation cancelled.")
                     return symbol, False
                 resolved_symbol, resolved_name = resolved
-                await status_msg.edit(
-                    content=f"Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
-                )
+                if created_via_forum and status_msg is not None:
+                    await status_msg.edit(
+                        content=f"Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
+                    )
+                elif status_msg is not None:
+                    await status_msg.edit(
+                        content=f"Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
+                    )
+                else:
+                    status_msg = await target_channel.send(
+                        f"Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
+                    )
 
                 await self._run_analysis_task(
                     requester,
