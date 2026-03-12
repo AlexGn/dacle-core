@@ -72,32 +72,7 @@ API_KICKOFF_RETRY_DELAY_SECONDS = float(os.getenv("DACLE_API_KICKOFF_RETRY_DELAY
 
 
 def _is_supported_analysis_channel(channel: Optional[Any]) -> bool:
-    return isinstance(channel, (discord.TextChannel, discord.ForumChannel))
-
-
-def _resolve_forum_channel_from_env(bot: Any, env_key: str) -> Optional[Any]:
-    raw = str(os.getenv(env_key, "") or "").strip()
-    if not raw:
-        return None
-    try:
-        channel_id = int(raw)
-    except ValueError:
-        return None
-    return bot.get_channel(channel_id)
-
-
-def _extract_forum_thread_result(created: Any) -> Tuple[Optional[discord.Thread], Optional[discord.Message]]:
-    thread = getattr(created, "thread", None)
-    message = getattr(created, "message", None)
-    if thread is not None:
-        return thread, message
-    if isinstance(created, tuple) and len(created) >= 2:
-        maybe_thread, maybe_message = created[0], created[1]
-        if isinstance(maybe_thread, discord.Thread):
-            return maybe_thread, maybe_message
-    if isinstance(created, discord.Thread):
-        return created, None
-    return None, None
+    return isinstance(channel, discord.TextChannel)
 
 
 async def _delete_message_with_retry(message: discord.Message, *, logger_obj, context: str) -> bool:
@@ -510,16 +485,26 @@ class AnalysisCommands(commands.Cog):
         symbol: str,
         request_id: str,
         location_mention: str,
-    ) -> None:
+    ) -> bool:
+        """Mark a request as started. Returns False if already active/recent for this user/symbol."""
+        self._prune_analyze_request_state()
         key = self._analyze_state_key(user, symbol)
         if key is None:
-            return
+            return True # Not trackable, allow it
+
+        entry = self._analyze_request_state.get(key)
+        if entry and entry.get("state") == "active":
+            if entry.get("request_id") == request_id:
+                return True # Allow update for same interaction
+            return False # Block concurrent for different interaction/retry
+
         self._analyze_request_state[key] = {
             "request_id": request_id,
             "state": "active",
             "location_mention": location_mention,
             "expires_at": time.monotonic() + ANALYZE_ACTIVE_DEDUPE_WINDOW_SECONDS,
         }
+        return True
 
     def _update_analyze_request_location(
         self,
@@ -1105,11 +1090,7 @@ class AnalysisCommands(commands.Cog):
         return (len(missing) == 0), missing
 
     def _resolve_analysis_channel(self) -> Optional[Any]:
-        """Resolve /analyze destination, preferring a dedicated forum channel when configured."""
-        forum_channel = _resolve_forum_channel_from_env(self.bot, "DISCORD_ANALYZE_FORUM_CHANNEL_ID")
-        if isinstance(forum_channel, discord.ForumChannel):
-            return forum_channel
-
+        """Resolve /analyze destination, preferring the #analysis-updates text channel."""
         channel = resolve_channel(self.bot, "analysis-updates")
         return channel if _is_supported_analysis_channel(channel) else None
 
@@ -1188,6 +1169,20 @@ class AnalysisCommands(commands.Cog):
             await ctx.reply("⛔ Not authorized.", mention_author=False)
             return
 
+        duplicate_notice = self._duplicate_analyze_notice(ctx.author, symbol)
+        if duplicate_notice:
+            await ctx.reply(duplicate_notice, mention_author=False)
+            return
+
+        # Mark as started
+        request_id = f"analyze-prefix-{ctx.message.id}"
+        self._mark_analyze_request_started(
+            ctx.author,
+            symbol,
+            request_id,
+            "starting...",
+        )
+
         # Check if we are in a text channel (not a thread/DM)
         if isinstance(ctx.channel, discord.TextChannel):
             try:
@@ -1257,104 +1252,75 @@ class AnalysisCommands(commands.Cog):
             )
             return
 
-        duplicate_notice = self._duplicate_analyze_notice(interaction.user, symbol)
-        if duplicate_notice:
-            await safe_send(
-                interaction,
-                command_name="analyze",
-                logger=logger,
-                content=duplicate_notice,
-                ephemeral=True,
-            )
+        # 1. Quietly acknowledge the interaction
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception as e:
+            logger.error(f"Failed to defer interaction: {e}")
             return
 
-        await safe_send(
-            interaction,
-            command_name="analyze",
-            logger=logger,
-            content=f"🔍 Analyzing **{symbol}**. I will post results in {analysis_channel.mention}.",
-            ephemeral=True,
-        )
-        self._mark_analyze_request_started(
-            interaction.user,
-            symbol,
-            request_id,
-            analysis_channel.mention,
-        )
+        # 2. Pre-flight De-confliction: Check if another bot already started this in the last 60s
+        try:
+            now = datetime.now(timezone.utc)
+            async for msg in analysis_channel.history(limit=20):
+                if msg.author.bot and f"**{symbol}** Analysis" in msg.content:
+                    age = (now - msg.created_at).total_seconds()
+                    if age < 60:
+                        await interaction.followup.send(
+                            content=f"⏳ Analysis for **{symbol}** is already in progress.",
+                            ephemeral=True
+                        )
+                        return
+        except Exception as e:
+            logger.warning(f"De-confliction check failed: {e}")
 
-        logger.info(
-            "ANALYZE_SLASH_START "
-            f"request_id={request_id} "
-            f"symbol={symbol} "
-            f"user_id={interaction.user.id} "
-            f"channel_id={analysis_channel.id}"
-        )
+        # 3. Minimal Parent Header
+        try:
+            parent_msg = await analysis_channel.send(
+                content=f"📂 **{symbol} Analysis** (requested by {interaction.user.mention})"
+            )
+        except Exception as e:
 
-        logger.info(
-            f"🔍 /analyze requested by {interaction.user} for {symbol}; "
-            f"target channel #{analysis_channel.name} ({analysis_channel.id})"
-        )
+            await interaction.followup.send(content=f"❌ Failed to post in analysis channel: {e}", ephemeral=True)
+            return
 
+        # 4. Create Thread and first Status Message
         target_channel: discord.abc.Messageable = analysis_channel
         thread_created = False
-        created_via_forum = False
         status_msg: Optional[discord.Message] = None
 
         try:
-            if isinstance(analysis_channel, discord.ForumChannel):
-                created = await analysis_channel.create_thread(
-                    name=f"Analysis: {symbol}",
-                    content=f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})",
-                    auto_archive_duration=60,
-                )
-                thread, status_msg = _extract_forum_thread_result(created)
-                if thread is None:
-                    raise RuntimeError("Forum analysis creation did not return a thread")
-                target_channel = thread
-                thread_created = True
-                created_via_forum = True
-            else:
-                status_msg = await analysis_channel.send(
-                    f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
-                )
-                thread = await status_msg.create_thread(
-                    name=f"Analysis: {symbol}",
-                    auto_archive_duration=60,
-                )
-                target_channel = thread
-                thread_created = True
+            thread = await parent_msg.create_thread(
+                name=f"Analysis: {symbol}",
+                auto_archive_duration=60,
+            )
+            target_channel = thread
+            thread_created = True
+            
+            # This is the ONE AND ONLY status message
+            status_msg = await thread.send(f"🔍 Analyzing **{symbol}**... (this may take up to 2-3m)")
 
-            self._update_analyze_request_location(
+            # Mark for deduplication
+            self._mark_analyze_request_started(
                 interaction.user,
                 symbol,
                 request_id,
-                getattr(thread, "mention", None),
+                thread.mention,
             )
         except Exception as e:
-            logger.warning(f"Failed to create thread for slash analyze ({symbol}): {e}")
+            logger.warning(f"Failed to create thread: {e}")
             target_channel = analysis_channel
+            status_msg = parent_msg # Fallback to editing parent if thread fails
 
+        # 5. Start the task
         try:
             resolved = await self._maybe_disambiguate(symbol, interaction.user, target_channel)
             if not resolved:
-                if status_msg is not None:
-                    await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
-                else:
-                    await target_channel.send("❌ Analysis cancelled. No token selected.")
+                await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
                 return
+            
             resolved_symbol, resolved_name = resolved
-            if created_via_forum and status_msg is not None:
-                await status_msg.edit(
-                    content=f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
-                )
-            elif thread_created:
-                status_msg = await target_channel.send(
-                    f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
-                )
-            else:
-                await status_msg.edit(
-                    content=f"🔍 Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
-                )
+            await status_msg.edit(content=f"🔍 Analyzing **{resolved_symbol}**...")
 
             safe_create_task(
                 self._run_analysis_task(
@@ -1370,6 +1336,9 @@ class AnalysisCommands(commands.Cog):
                 error_channel=target_channel,
                 name=f"analyze-slash-{resolved_symbol}",
             )
+            
+            # Final quiet confirmation
+            await interaction.followup.send(content=f"Started! Check {target_channel.mention}", ephemeral=True)
         except Exception as e:
             logger.error(
                 "ANALYZE_SLASH_ERROR "
@@ -1466,28 +1435,15 @@ class AnalysisCommands(commands.Cog):
         async with semaphore:
             target_channel: discord.abc.Messageable = analysis_channel
             status_msg: Optional[discord.Message] = None
-            created_via_forum = False
             try:
-                if isinstance(analysis_channel, discord.ForumChannel):
-                    created = await analysis_channel.create_thread(
-                        name=f"Analysis: {symbol}",
-                        content=f"Analyzing **{symbol}**... (batch request by {requester.mention})",
-                        auto_archive_duration=60,
-                    )
-                    thread, status_msg = _extract_forum_thread_result(created)
-                    if thread is None:
-                        raise RuntimeError("Forum analysis batch creation did not return a thread")
-                    target_channel = thread
-                    created_via_forum = True
-                else:
-                    status_msg = await analysis_channel.send(
-                        f"Analyzing **{symbol}**... (batch request by {requester.mention})"
-                    )
-                    thread = await status_msg.create_thread(
-                        name=f"Analysis: {symbol}",
-                        auto_archive_duration=60,
-                    )
-                    target_channel = thread
+                status_msg = await analysis_channel.send(
+                    f"Analyzing **{symbol}**... (batch request by {requester.mention})"
+                )
+                thread = await status_msg.create_thread(
+                    name=f"Analysis: {symbol}",
+                    auto_archive_duration=60,
+                )
+                target_channel = thread
             except Exception:
                 pass
 
@@ -1500,11 +1456,7 @@ class AnalysisCommands(commands.Cog):
                         await target_channel.send(f"Skipped {symbol} -- disambiguation cancelled.")
                     return symbol, False
                 resolved_symbol, resolved_name = resolved
-                if created_via_forum and status_msg is not None:
-                    await status_msg.edit(
-                        content=f"Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
-                    )
-                elif status_msg is not None:
+                if status_msg is not None:
                     await status_msg.edit(
                         content=f"Analyzing **{resolved_symbol}**... (this may take up to 2-3m)"
                     )
