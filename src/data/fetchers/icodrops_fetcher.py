@@ -180,6 +180,26 @@ def _parse_icodrops_data(soup: BeautifulSoup, symbol: str, url: str) -> Dict[str
         # Extract token allocation - Session 86A: Enhanced with multiple strategies
         result["token_allocation"] = _extract_token_allocation(soup)
 
+        # Extract float_percent (Session 495 clarity fix)
+        # Look for "Tokens for sale" or "TGE unlock"
+        tokens_for_sale = soup.find(text=re.compile("tokens for sale", re.IGNORECASE))
+        if tokens_for_sale:
+            parent = tokens_for_sale.parent
+            if parent:
+                # Look for percentage in same or next element
+                text = parent.get_text()
+                pct_match = re.search(r'(\d+(?:\.\d+)?)\s*%', text)
+                if pct_match:
+                    result["float_percent"] = float(pct_match.group(1))
+        
+        if not result.get("float_percent") and result.get("token_allocation"):
+            # Check allocation for 'Public Sale', 'Seed', etc.
+            sale_keys = ["Public Sale", "Token Sale", "Ieo", "Ido", "Launchpad"]
+            for k, v in result["token_allocation"].items():
+                if any(sk in k for sk in sale_keys):
+                    result["float_percent"] = v
+                    break
+
         # Extract total supply
         supply_text = soup.find(text=re.compile("total.*supply", re.IGNORECASE))
         if supply_text:
@@ -199,8 +219,9 @@ def _parse_icodrops_data(soup: BeautifulSoup, symbol: str, url: str) -> Dict[str
             1 if len(result["farming_sources"]) > 0 else 0,
             1 if result["total_supply"] else 0,
             1 if len(result["token_allocation"]) > 0 else 0,
+            1 if result.get("float_percent") else 0,
         ])
-        result["_data_confidence"] = int((fields_found / 6) * 100)
+        result["_data_confidence"] = int((fields_found / 7) * 100)
 
         logger.info(f"✓ ICODrops data extracted for {symbol}: {result['_data_confidence']}% confidence")
         if result["whitepaper_url"]:

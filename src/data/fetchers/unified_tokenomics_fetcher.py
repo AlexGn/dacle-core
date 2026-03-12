@@ -6,15 +6,20 @@ Replaces CoinGecko with: CryptoRank → Binance → DexScreener.
 
 Priority order:
 1. CryptoRank (most comprehensive)
-2. Binance (price + basic tokenomics)
-3. DexScreener (DEX-listed tokens)
-4. Manual overrides (user-provided data)
+2. CoinMarketCap (excellent supply data)
+3. Binance (price + basic tokenomics)
+4. DexScreener (DEX-listed tokens)
+5. ICODrops (specialized TGE float data)
+6. Manual overrides (user-provided data)
 """
 
 import logging
 from typing import Dict, List, Optional, Any
 from pathlib import Path
 import json
+
+from src.integrations.coinmarketcap.cmc_client import CoinMarketCapClient
+from src.integrations.icodrops.tokenomics_scanner import ICODropsScanner
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +76,10 @@ class UnifiedTokenomicsFetcher:
         sources = [
             ("manual", self._fetch_manual_overrides, 0, 0),  # Always first if exists
             ("cryptorank", self._fetch_cryptorank, 1, 15),
-            ("binance", self._fetch_binance, 2, 10),
-            ("dexscreener", self._fetch_dexscreener, 3, 20),
+            ("coinmarketcap", self._fetch_coinmarketcap, 2, 10),
+            ("binance", self._fetch_binance, 3, 10),
+            ("dexscreener", self._fetch_dexscreener, 4, 20),
+            ("icodrops", self._fetch_icodrops, 5, 15),
         ]
 
         results = []
@@ -80,6 +87,13 @@ class UnifiedTokenomicsFetcher:
             try:
                 data = fetcher_func(symbol, timeout=source_timeout or timeout)
                 if data:  # Skip None results
+                    # Auto-calculate float_pct if possible (Session 495 improvement)
+                    if not data.get("float_pct"):
+                        circ = data.get("circulating_supply")
+                        total = data.get("total_supply")
+                        if circ and total and total > 0:
+                            data["float_pct"] = (circ / total) * 100
+
                     quality = self.calculate_quality_score(data)
                     results.append({
                         "source": name,
@@ -100,12 +114,67 @@ class UnifiedTokenomicsFetcher:
         # Merge missing fields from other sources
         merged = self.merge_sources(results, strategy="fill_gaps")
 
+        # Final pass: Ensure float_pct is calculated on the merged result
+        if not merged.get("float_pct"):
+            circ = merged.get("circulating_supply")
+            total = merged.get("total_supply")
+            if circ and total and total > 0:
+                merged["float_pct"] = (circ / total) * 100
+
         return {
             "data": merged,
             "primary_source": best["source"],
             "quality_score": self.calculate_quality_score(merged),
             "sources_used": [r["source"] for r in results],
         }
+
+    def _fetch_coinmarketcap(self, symbol: str, timeout: int = 10) -> Optional[Dict]:
+        """Fetch data from CoinMarketCap."""
+        try:
+            client = CoinMarketCapClient()
+            if not client.enabled:
+                return None
+            data = client.get_token_data(symbol)
+            if not data:
+                return None
+            
+            # Map CMC fields to our internal format
+            return {
+                "symbol": symbol,
+                "circulating_supply": data.get("circulating_supply"),
+                "total_supply": data.get("total_supply"),
+                "float_pct": data.get("float_percent"),
+                "price": data.get("price_usd"),
+                "market_cap": data.get("market_cap"),
+                "fdv": data.get("fdv"),
+                "last_updated": data.get("last_updated"),
+            }
+        except Exception as e:
+            logger.debug(f"CMC fetch error for {symbol}: {e}")
+            return None
+
+    def _fetch_icodrops(self, symbol: str, timeout: int = 15) -> Optional[Dict]:
+        """Fetch data from ICODrops scraper."""
+        try:
+            scanner = ICODropsScanner()
+            # Search requires project name, but we can try with symbol first
+            url = scanner.search_project(symbol, symbol)
+            if not url:
+                return None
+            
+            data = scanner.extract_tokenomics(url)
+            if not data:
+                return None
+            
+            return {
+                "float_pct": data.get("float_percent"),
+                "total_supply": data.get("total_supply"),
+                "circulating_supply": data.get("initial_circulating"),
+                "vesting_schedule": data.get("vesting_schedule"),
+            }
+        except Exception as e:
+            logger.debug(f"ICODrops fetch error for {symbol}: {e}")
+            return None
 
     def calculate_quality_score(self, data: Dict[str, Any]) -> int:
         """

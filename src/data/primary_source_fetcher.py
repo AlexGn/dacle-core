@@ -593,7 +593,8 @@ DROPSTAB_FIELDS = {
 ICODROPS_FIELDS = {
     # Session 85 Phase 2: High-quality source for key fields
     "whitepaper_url", "vesting_schedule", "farming_sources",
-    "token_allocation", "total_supply", "investors", "funding_rounds"
+    "token_allocation", "total_supply", "investors", "funding_rounds",
+    "float_percent"
 }
 
 COINGECKO_FIELDS = {
@@ -1911,10 +1912,10 @@ def fetch_from_primary_sources(
             sources_tried.append("dropstab")
 
         if "icodrops" not in skip_sources and needs_source(missing_fields, ICODROPS_FIELDS):
-            def _fetch_icodrops(t):
+            def _fetch_icodrops(t, token_name=None):
                 try:
                     from src.data.fetchers.icodrops_fetcher import fetch_icodrops_data
-                    return fetch_icodrops_data(t)
+                    return fetch_icodrops_data(t, name=token_name)
                 except ImportError:
                     logger.warning("icodrops_fetcher not available")
                     return None
@@ -1925,10 +1926,15 @@ def fetch_from_primary_sources(
             parallel_tasks.append(("coingecko", fetch_coingecko, "coingecko.json"))
             sources_tried.append("coingecko")
 
+        # Session 495: Always include CMC Full in parallel if key is present
+        if "coinmarketcap" not in skip_sources and os.getenv("COINMARKETCAP_API_KEY"):
+            parallel_tasks.append(("coinmarketcap_full", fetch_coinmarketcap_full, "coinmarketcap_full.json"))
+            sources_tried.append("coinmarketcap_full")
+
         # Execute parallel fetches
         if parallel_tasks:
-            # Use max 4 workers to respect rate limits
-            with ThreadPoolExecutor(max_workers=4) as executor:
+            # Use max 5 workers to accommodate CMC
+            with ThreadPoolExecutor(max_workers=5) as executor:
                 futures = {}
                 for source_name, fetch_func, filename in parallel_tasks:
                     future = executor.submit(
@@ -1951,6 +1957,22 @@ def fetch_from_primary_sources(
                                 continue
                             save_to_sources(token, filename, data)
                             results.update(data)
+                            
+                            # Session 495: Auto-calculate float_percent if missing
+                            if not results.get("float_percent"):
+                                circ = results.get("circulating_supply") or results.get("circulating_supply_at_tge")
+                                total = results.get("total_supply")
+                                if circ and total and total > 0:
+                                    try:
+                                        # Handle string numeric values
+                                        c_val = float(circ) if isinstance(circ, (str, int, float)) else 0
+                                        t_val = float(total) if isinstance(total, (str, int, float)) else 0
+                                        if t_val > 0:
+                                            results["float_percent"] = round((c_val / t_val) * 100, 2)
+                                            logger.info(f"Auto-calculated float_percent: {results['float_percent']}%")
+                                    except (ValueError, TypeError):
+                                        pass
+
                             sources_succeeded.append(source_name)
                             if source_name == "icodrops":
                                 logger.info(f"ICODrops: {data.get('_data_confidence', 0)}% confidence")
@@ -2022,7 +2044,7 @@ def fetch_from_primary_sources(
             sources_tried.append("icodrops")
             try:
                 from src.data.fetchers.icodrops_fetcher import fetch_icodrops_data
-                ico_data = fetch_icodrops_data(token)
+                ico_data = fetch_icodrops_data(token, name=token_name)
                 if ico_data and ico_data.get("_data_confidence", 0) > 0:
                     save_to_sources(token, "icodrops.json", ico_data)
                     results.update(ico_data)
@@ -2041,6 +2063,20 @@ def fetch_from_primary_sources(
                 save_to_sources(token, "coingecko.json", cg_data)
                 results.update(cg_data)
                 sources_succeeded.append("coingecko")
+
+    # Session 495: Global auto-calculate float_percent if still missing after all primary sources
+    if not results.get("float_percent"):
+        circ = results.get("circulating_supply") or results.get("circulating_supply_at_tge")
+        total = results.get("total_supply")
+        if circ and total and total > 0:
+            try:
+                c_val = float(circ) if isinstance(circ, (str, int, float)) else 0
+                t_val = float(total) if isinstance(total, (str, int, float)) else 0
+                if t_val > 0:
+                    results["float_percent"] = round((c_val / t_val) * 100, 2)
+                    logger.info(f"Global auto-calculate float_percent: {results['float_percent']}%")
+            except (ValueError, TypeError):
+                pass
 
     # =====================================================================
     # PHASE 3: Conditional CMC fetch (always sequential - rate limited)

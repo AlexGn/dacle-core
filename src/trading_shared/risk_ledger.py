@@ -6,7 +6,7 @@ Redis-backed atomic exposure ledger using integer cents.
 import logging
 from typing import Optional
 import redis.asyncio as aioredis
-from src.scalping.contracts import KEY_GLOBAL_EXPOSURE_CENTS_V1, GateRejectCode
+from src.lighter.contracts import KEY_GLOBAL_EXPOSURE_CENTS_V1, GateRejectCode
 from src.utils.logger import get_logger
 
 _LEASE_TTL_SEC = 900  # 15 minutes
