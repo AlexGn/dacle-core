@@ -24,6 +24,7 @@ from src.bot.cogs.analysis_views import TradeApprovalView
 from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.bot.utils.safe_task import safe_create_task
 from src.bot.runtime_routing import get_bot_api_base_url, resolve_channel
+from src.bot.utils.api_client import api_request
 from api.routers.macro import get_btc_regime_widget
 
 logger = get_logger(__name__)
@@ -960,105 +961,89 @@ class AnalysisCommands(commands.Cog):
         payload = resp.json() or {}
         return payload.get("matches") or []
 
-    def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
-        api_base = _get_api_base_url()
-        url = f"{api_base}/api/tokens/research"
-        resp = _request_with_retry(
-            "POST",
-            url,
-            json={"symbol": symbol.upper(), "name": name},
-            headers=_api_headers(),
-            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_RESEARCH_KICKOFF_READ_TIMEOUT_SECONDS),
-            retries=API_KICKOFF_RETRIES,
-            retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
+    async def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
+        """Trigger NEW token research and wait for completion (async)."""
+        payload = await api_request(
+            "POST", 
+            "/api/tokens/research/run",
+            json={"symbol": symbol.upper(), "name": name}
         )
-        resp.raise_for_status()
-        payload = resp.json()
+        
+        if not payload or "_status" in payload:
+            raise RuntimeError(f"Research kickoff failed (status={payload.get('_status') if payload else 'None'})")
+            
         task_id = payload.get("task_id")
         if not task_id:
             raise RuntimeError("Research did not return a task_id")
 
-        status_url = f"{api_base}/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            status_resp = _request_with_retry(
-                "GET",
-                status_url,
-                headers=_api_headers(),
-                timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
-                retries=1,
-                retry_delay_seconds=1.0,
-            )
-            if status_resp.status_code == 404:
-                time.sleep(2)
-                continue
-            status_resp.raise_for_status()
-            status_payload = status_resp.json()
+            status_payload = await api_request("GET", f"/api/tokens/research/{task_id}")
+            
+            if not status_payload or "_status" in status_payload:
+                if status_payload and status_payload.get("_status") == 404:
+                    await asyncio.sleep(2)
+                    continue
+                raise RuntimeError(f"Poll failed (status={status_payload.get('_status') if status_payload else 'None'})")
+
             status = status_payload.get("status")
             if status in {"completed", "completed_with_warnings"}:
                 return status_payload
             if status in {"failed", "skipped"}:
                 raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
+            
             if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
                 raise TimeoutError(f"Research timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
-            time.sleep(2)
 
-    def _refresh_or_research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
-        """Prefer refetch for existing tokens; fallback to research for missing tokens."""
+            await asyncio.sleep(2)
+
+    async def _refresh_or_research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
+        """Prefer refetch for existing tokens; fallback to research for missing tokens (async)."""
         try:
-            return self._refresh_token_data(symbol)
-        except requests.HTTPError as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            if status == 404:
+            return await self._refresh_token_data(symbol)
+        except RuntimeError as e:
+            if "status=404" in str(e):
                 logger.info(
                     f"[{symbol}] Refetch returned 404, falling back to research with name='{name}'"
                 )
-                return self._research_token_data(symbol, name)
+                return await self._research_token_data(symbol, name)
             raise
 
-    def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
-        """Trigger token refetch and wait for completion."""
-        api_base = _get_api_base_url()
-        url = f"{api_base}/api/tokens/{symbol}/refetch"
-        resp = _request_with_retry(
-            "POST",
-            url,
-            params={"force": "true", "auto_analyze": "false"},
-            headers=_api_headers(),
-            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_REFRESH_KICKOFF_READ_TIMEOUT_SECONDS),
-            retries=API_KICKOFF_RETRIES,
-            retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
+    async def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
+        """Trigger token refetch and wait for completion (async)."""
+        payload = await api_request(
+            "POST", 
+            f"/api/tokens/{symbol}/refetch",
+            params={"force": "true", "auto_analyze": "false"}
         )
-        resp.raise_for_status()
-        payload = resp.json()
+        
+        if not payload or "_status" in payload:
+            raise RuntimeError(f"Refetch kickoff failed (status={payload.get('_status') if payload else 'None'})")
+            
         task_id = payload.get("task_id")
         if not task_id:
             raise RuntimeError("Refetch did not return a task_id")
 
-        status_url = f"{api_base}/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            status_resp = _request_with_retry(
-                "GET",
-                status_url,
-                headers=_api_headers(),
-                timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
-                retries=1,
-                retry_delay_seconds=1.0,
-            )
-            if status_resp.status_code == 404:
-                time.sleep(2)
-                continue
-            status_resp.raise_for_status()
-            status_payload = status_resp.json()
+            status_payload = await api_request("GET", f"/api/tokens/research/{task_id}")
+            
+            if not status_payload or "_status" in status_payload:
+                if status_payload and status_payload.get("_status") == 404:
+                    await asyncio.sleep(2)
+                    continue
+                raise RuntimeError(f"Poll failed (status={status_payload.get('_status') if status_payload else 'None'})")
+
             status = status_payload.get("status")
             if status in {"completed", "completed_with_warnings"}:
                 return status_payload
             if status in {"failed", "skipped"}:
                 raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Refetch failed")
+            
             if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
                 raise TimeoutError(f"Refetch timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
-            time.sleep(2)
+
+            await asyncio.sleep(2)
 
     def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
         consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
@@ -1515,40 +1500,23 @@ class AnalysisCommands(commands.Cog):
 
             try:
                 if resolved_name:
-                    await asyncio.wait_for(
-                        loop.run_in_executor(
-                            None,
-                            lambda: self._refresh_or_research_token_data(symbol, resolved_name),
-                        ),
-                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
-                    )
+                    await self._refresh_or_research_token_data(symbol, resolved_name)
                 else:
-                    await asyncio.wait_for(
-                        loop.run_in_executor(None, lambda: self._refresh_token_data(symbol)),
-                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
-                    )
+                    await self._refresh_token_data(symbol)
+                
                 consolidated = await asyncio.wait_for(
                     loop.run_in_executor(None, lambda: self._load_consolidated(symbol)),
                     timeout=30,
                 )
-            except requests.Timeout:
+            except RuntimeError as e:
+                # Map RuntimeError (from api_request failure) to cached loader
+                reason = "api_error_during_refresh"
+                if "status=404" in str(e): reason = "token_not_found"
+                
                 consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
                     loop=loop,
                     symbol=symbol,
-                    reason="api_timeout_during_refresh",
-                    request_id=request_id,
-                    status_msg=status_msg,
-                    target_channel=target_channel,
-                    load_cached_fn=lambda: self._load_consolidated(symbol),
-                )
-                if consolidated is None:
-                    return
-                used_refresh_fallback = True
-            except requests.ConnectionError:
-                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
-                    loop=loop,
-                    symbol=symbol,
-                    reason="api_unavailable_during_refresh",
+                    reason=reason,
                     request_id=request_id,
                     status_msg=status_msg,
                     target_channel=target_channel,

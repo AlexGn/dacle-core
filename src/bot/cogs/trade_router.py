@@ -13,6 +13,7 @@ from src.utils.redis_lms import get_current_price
 from src.utils.lifecycle_id import generate_lifecycle_id
 from src.utils.lifecycle_store import record_setup
 from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id
+from src.bot.utils.api_client import api_request
 
 logger = get_logger(__name__)
 
@@ -305,18 +306,13 @@ class TradeRouter(commands.Cog):
             return None
 
     async def call_pre_trade_check(self, setup: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        url = f"{self.api_url}/api/execution/v2/full-analysis"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=setup, headers=self._build_api_headers()) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"API error: {response.status}")
-                        return None
-        except Exception as e:
-            logger.error(f"Failed to call API: {e}")
-            return None
+        api_result = await api_request("POST", "/api/execution/v2/full-analysis", json=setup)
+        if api_result:
+            if "_status" in api_result:
+                logger.error(f"API error: {api_result['_status']}")
+                return None
+            return api_result
+        return None
 
     def format_score_decision(self, card: Dict[str, Any]) -> str:
         threshold = 8.0 if card["direction"] == "SHORT" else 8.5
@@ -380,14 +376,10 @@ class TradeRouter(commands.Cog):
         proximity_note = await self._check_price_proximity(setup)
 
         setup["is_rerun"] = True
-        try:
-            api_res = await self.call_pre_trade_check(setup)
-        except Exception as e:
-            logger.error(f"Rerun API call failed: {e}")
-            api_res = None
+        api_res = await self.call_pre_trade_check(setup)
 
         if api_res and api_res.get("data", {}).get("formatted_response"):
-            header = f"🔄 **RERUN** — {setup['token']} {setup['direction']}\n"
+            header = f"🔄 **RERUN** \u2014 {setup['token']} {setup['direction']}\n"
             if proximity_note:
                 header += f"{proximity_note}\n"
             header += f"_Original setup: Entry ${setup['entry']}, SL ${setup['sl']}"
@@ -396,7 +388,7 @@ class TradeRouter(commands.Cog):
             header += "_\n\n"
             response_text = header + api_res["data"]["formatted_response"]
         else:
-            response_text = "❌ Trade rerun failed — DACLE API unavailable."
+            response_text = "❌ Trade rerun failed \u2014 DACLE API unavailable."
 
         await self._send_command_message(interaction, deferred=deferred, content=response_text)
 
@@ -432,15 +424,9 @@ class TradeRouter(commands.Cog):
 
             # Fallback: API live-price (Blofin → Binance → DexScreener)
             if current is None:
-                try:
-                    url = f"{self.api_url}/api/tokens/{setup['token']}/live-price"
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(url, headers=self._build_api_headers()) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                current = data.get("price")
-                except Exception as e:
-                    logger.debug(f"Live-price API fallback failed for {setup['token']}: {e}")
+                api_result = await api_request("GET", f"/api/tokens/{setup['token']}/live-price")
+                if api_result and "_status" not in api_result:
+                    current = api_result.get("price")
 
             if current is None:
                 return "⚠️ Could not fetch current price — proximity check skipped."
@@ -689,34 +675,30 @@ class TradeRouter(commands.Cog):
         if tp is not None:
             payload["tp"] = tp
 
-        try:
-            url = f"{self.api_url}/api/execution/levels"
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=self._build_api_headers()) as response:
-                    if response.status == 422:
-                        error_data = await response.json()
-                        detail = error_data.get("detail", "Validation error")
-                        await self._send_command_message(
-                            interaction,
-                            deferred=deferred,
-                            content=f"\u274c {detail}",
-                        )
-                        return
-                    if response.status != 200:
-                        await self._send_command_message(
-                            interaction,
-                            deferred=deferred,
-                            content=f"API error ({response.status}). Check DACLE API logs.",
-                        )
-                        return
-                    api_result = await response.json()
-        except Exception as e:
-            logger.error(f"/levels API call failed: {e}")
+        api_result = await api_request("POST", "/api/execution/levels", json=payload)
+        
+        if api_result is None:
             await self._send_command_message(
                 interaction,
                 deferred=deferred,
                 content="DACLE API unavailable.",
             )
+            return
+            
+        if "_status" in api_result:
+            if api_result["_status"] == 422:
+                detail = api_result["_data"].get("detail", "Validation error")
+                await self._send_command_message(
+                    interaction,
+                    deferred=deferred,
+                    content=f"\u274c {detail}",
+                )
+            else:
+                await self._send_command_message(
+                    interaction,
+                    deferred=deferred,
+                    content=f"API error ({api_result['_status']}). Check DACLE API logs.",
+                )
             return
 
         # Extract results

@@ -16,6 +16,7 @@ from src.utils.logger import get_logger
 from src.utils.lifecycle_id import generate_lifecycle_id
 from src.utils.lifecycle_store import record_setup
 from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id
+from src.bot.utils.api_client import api_request
 
 logger = get_logger(__name__)
 
@@ -230,24 +231,20 @@ class SetLevelsModal(discord.ui.Modal):
         if tp is not None:
             payload["tp"] = tp
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{_get_api_base_url()}/api/execution/levels"
-                async with session.post(url, json=payload, headers=_api_headers()) as response:
-                    if response.status == 422:
-                        error_data = await response.json()
-                        detail = error_data.get("detail", "Validation error")
-                        await interaction.followup.send(f"{detail}")
-                        return
-                    if response.status != 200:
-                        await interaction.followup.send(
-                            f"API error ({response.status}). Check DACLE API logs."
-                        )
-                        return
-                    api_result = await response.json()
-        except Exception as e:
-            logger.error(f"Set Levels API call failed: {e}")
+        api_result = await api_request("POST", "/api/execution/levels", json=payload)
+        
+        if api_result is None:
             await interaction.followup.send("DACLE API unavailable.")
+            return
+            
+        if "_status" in api_result:
+            if api_result["_status"] == 422:
+                detail = api_result["_data"].get("detail", "Validation error")
+                await interaction.followup.send(f"{detail}")
+            else:
+                await interaction.followup.send(
+                    f"API error ({api_result['_status']}). Check DACLE API logs."
+                )
             return
 
         ptc = api_result.get("pre_trade_check") or {}
@@ -302,6 +299,96 @@ class SetLevelsModal(discord.ui.Modal):
             )
         except Exception:
             pass
+
+
+class ManualOverrideModal(discord.ui.Modal):
+    """
+    Modal for entering a manual override value for a specific field.
+    Session 495: Interactive 'Click to Fix' workflow.
+    """
+    def __init__(self, symbol: str, field_name: str, display_name: str):
+        super().__init__(title=f"Set {display_name} - {symbol}")
+        self.symbol = symbol.upper()
+        self.field_name = field_name
+        self.display_name = display_name
+
+        self.value_input = discord.ui.TextInput(
+            label=f"New {display_name} Value",
+            placeholder=f"Enter numerical value for {display_name}...",
+            required=True,
+            style=discord.TextStyle.short,
+        )
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        value = self.value_input.value.strip()
+        
+        # Immediate visual feedback
+        await interaction.response.defer(ephemeral=True)
+        
+        # Convert to numeric if possible (Backend handles normalization)
+        try:
+            parsed_value = float(value) if '.' in value else int(value)
+        except ValueError:
+            parsed_value = value
+
+        payload = {
+            "field_name": self.field_name,
+            "value": parsed_value,
+            "source": "discord_ui_modal",
+            "notes": f"Set by {interaction.user.name} via UI Modal",
+            "cascade_conviction": True,
+            "sync_supabase": True
+        }
+
+        api_result = await api_request("PATCH", f"/api/tokens/{self.symbol}/consolidated", json=payload)
+        if api_result:
+            if "_status" in api_result:
+                await interaction.followup.send(f"❌ API Error ({api_result['_status']})", ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    f"✅ **{self.symbol}** `{self.display_name}` set to `{value}`.\n"
+                    f"🔄 Deterministic re-analysis triggered. Watch this thread for results!",
+                    ephemeral=True
+                )
+        else:
+            await interaction.followup.send(f"❌ Failed to reach API.", ephemeral=True)
+
+
+class GapFixView(discord.ui.View):
+    """
+    View containing buttons to fix specific missing data gaps.
+    """
+    def __init__(self, symbol: str, gaps: list[str]):
+        super().__init__(timeout=3600) # 1 hour
+        self.symbol = symbol.upper()
+        
+        # Mapping of internal field names to pretty display names
+        FIELD_MAP = {
+            "float_percent": "Float %",
+            "market_cap": "Market Cap",
+            "fdv": "FDV",
+            "total_supply": "Total Supply",
+            "circulating_supply": "Circulating Supply",
+            "tge_date": "TGE Date"
+        }
+
+        for field in gaps[:5]: # Max 5 buttons
+            display = FIELD_MAP.get(field, field.replace("_", " ").title())
+            btn = discord.ui.Button(
+                label=f"Fix {display}",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"fix_{field}_{self.symbol}",
+                emoji="🔧"
+            )
+            btn.callback = self._create_callback(field, display)
+            self.add_item(btn)
+
+    def _create_callback(self, field: str, display: str):
+        async def callback(interaction: discord.Interaction):
+            modal = ManualOverrideModal(self.symbol, field, display)
+            await interaction.response.send_modal(modal)
+        return callback
 
 
 class TradeApprovalView(discord.ui.View):
@@ -424,33 +511,30 @@ class TradeApprovalView(discord.ui.View):
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.grey, emoji="🔄")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{_get_api_base_url()}/api/tokens/research/{self.symbol}/refresh"
-                async with session.post(url, headers=_api_headers()) as resp:
-                    if resp.status in (200, 202):
-                        await interaction.followup.send(
-                            f"🔄 Data refresh triggered for **{self.symbol}**. "
-                            f"Re-run `/analyze {self.symbol}` in ~30s for updated results.",
-                            ephemeral=True
-                        )
-                    elif resp.status == 423:
-                        await interaction.followup.send(
-                            f"🔒 Refresh already in progress for **{self.symbol}**. "
-                            f"Try `/analyze {self.symbol}` in ~30s.",
-                            ephemeral=True
-                        )
-                    else:
-                        await interaction.followup.send(
-                            f"❌ Refresh failed ({resp.status}). Try `/analyze {self.symbol}` manually.",
-                            ephemeral=True
-                        )
-        except Exception as e:
-            logger.error(f"Refresh failed for {self.symbol}: {e}")
-            await interaction.followup.send(
-                f"❌ Refresh failed: {e}",
-                ephemeral=True
-            )
+        api_result = await api_request("POST", f"/api/tokens/research/{self.symbol}/refresh")
+        
+        if api_result:
+            if "_status" in api_result:
+                status = api_result["_status"]
+                if status == 423:
+                    await interaction.followup.send(
+                        f"🔒 Refresh already in progress for **{self.symbol}**. "
+                        f"Try `/analyze {self.symbol}` in ~30s.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        f"❌ Refresh failed ({status}). Try `/analyze {self.symbol}` manually.",
+                        ephemeral=True
+                    )
+            else:
+                await interaction.followup.send(
+                    f"🔄 Data refresh triggered for **{self.symbol}**. "
+                    f"Re-run `/analyze {self.symbol}` in ~30s for updated results.",
+                    ephemeral=True
+                )
+        else:
+            await interaction.followup.send(f"❌ Refresh failed: DACLE API unavailable.", ephemeral=True)
 
     @discord.ui.button(label="Veto", style=discord.ButtonStyle.red, emoji="❌")
     async def veto(self, interaction: discord.Interaction, button: discord.ui.Button):
