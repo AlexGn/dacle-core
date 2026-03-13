@@ -305,20 +305,20 @@ class AppConfig:
         if os.getenv("OPENAI_API_KEY"):
             openai_config = OpenAIConfig.from_env()
 
-        # Load scalper yaml if exists (Session 456 fix)
+        # Load scalper config from the canonical lighter.yaml file.
         scalper_cfg = {}
         try:
             # Find project root for config path
             current = Path(__file__).resolve().parent
             root = None
             while current != current.parent:
-                if (current / "config" / "scalper.yaml").exists():
+                if (current / "config" / "lighter.yaml").exists():
                     root = current
                     break
                 current = current.parent
             
             if root:
-                scalper_yaml = root / "config" / "scalper.yaml"
+                scalper_yaml = root / "config" / "lighter.yaml"
                 import yaml
                 with open(scalper_yaml) as f:
                     data = yaml.safe_load(f)
