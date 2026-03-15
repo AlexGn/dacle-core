@@ -1244,11 +1244,14 @@ class AnalysisCommands(commands.Cog):
             )
             return
 
-        # 1. Quietly acknowledge the interaction
+        # 1. Immediately acknowledge the slash command with an ephemeral status ping.
         try:
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(
+                content=f"🔍 Starting analysis for **{symbol}**...",
+                ephemeral=True,
+            )
         except Exception as e:
-            logger.error(f"Failed to defer interaction: {e}")
+            logger.error(f"Failed to acknowledge interaction: {e}")
             return
 
         # 2. Pre-flight De-confliction: Check if another bot already started this in the last 60s
@@ -1329,8 +1332,6 @@ class AnalysisCommands(commands.Cog):
                 name=f"analyze-slash-{resolved_symbol}",
             )
             
-            # Final quiet confirmation
-            await interaction.followup.send(content=f"Started! Check {target_channel.mention}", ephemeral=True)
         except Exception as e:
             logger.error(
                 "ANALYZE_SLASH_ERROR "
