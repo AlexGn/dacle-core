@@ -2538,6 +2538,37 @@ def build_computed_ta(
         bb_squeeze_data = None
         cvd_data = None
 
+    # ------------------------------------------------------------------
+    # Dacle Cipher indicators (WaveTrend + MFI + Heikin Ashi)
+    # ------------------------------------------------------------------
+    opens = [candle[1] for candle in ohlcv]
+    try:
+        from src.ta.indicators.wavetrend import calculate_wavetrend
+        from src.ta.indicators.mfi import calculate_dacle_mfi
+        from src.ta.indicators.heikin_ashi import to_heikin_ashi
+
+        wavetrend_data = calculate_wavetrend(highs, lows, closes)
+        dacle_mfi_data = calculate_dacle_mfi(highs, lows, closes)
+        # Strip full series from the result to keep the TAExtractionResult lean
+        ha_full = to_heikin_ashi(opens, highs, lows, closes)
+        heikin_ashi_data = {
+            "latest_is_bullish": ha_full["latest_is_bullish"],
+            "bullish_streak": ha_full["bullish_streak"],
+            # last 3 candles for trend-smoothness signal
+            "recent_ha_open": ha_full["ha_open"][-3:],
+            "recent_ha_close": ha_full["ha_close"][-3:],
+        }
+        # Omit full series from wavetrend/mfi to keep payload compact
+        wavetrend_data = {k: v for k, v in wavetrend_data.items()
+                         if k not in ("wt1_series", "wt2_series")}
+        dacle_mfi_data = {k: v for k, v in dacle_mfi_data.items()
+                         if k != "mfi_series"}
+    except Exception as e:
+        logger.warning(f"Dacle Cipher indicator computation failed: {e}")
+        wavetrend_data = None
+        dacle_mfi_data = None
+        heikin_ashi_data = None
+
     # Build pattern_names after merging candlestick + chart patterns
     pattern_names = [p.get("pattern_name", "") for p in patterns]
 
@@ -2757,6 +2788,10 @@ def build_computed_ta(
         ema_cross=ema_cross_data,
         bb_squeeze=bb_squeeze_data,
         cvd_divergence=cvd_data,
+        # Dacle Cipher indicators
+        wavetrend=wavetrend_data,
+        dacle_mfi=dacle_mfi_data,
+        heikin_ashi=heikin_ashi_data,
     )
 
     logger.info(
