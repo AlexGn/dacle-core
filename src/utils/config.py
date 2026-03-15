@@ -9,7 +9,7 @@ This avoids import-time side effects and makes the config loading predictable.
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any, Tuple
 
 from dotenv import load_dotenv
 
@@ -38,7 +38,7 @@ class TimeoutConfig:
 
     # === API Timeouts (External Services) ===
     # Standard API calls - most common, used for price/market data
-    api_standard: float = 10.0  # CoinGecko, Binance, most REST APIs
+    api_standard: float = 10.0  # Binance, most REST APIs
     api_fast: float = 5.0       # Quick lookups, health checks
     api_extended: float = 15.0  # Slower APIs, search endpoints
     api_slow: float = 30.0      # Heavy operations (backfill, bulk fetch)
@@ -290,6 +290,7 @@ class AppConfig:
     redis: RedisConfig
     perplexity: Optional[PerplexityConfig]
     openai: Optional[OpenAIConfig]
+    runtime_dir: Path = Path("data/runtime")
     scalper: dict = field(default_factory=dict)
 
     @classmethod
@@ -298,12 +299,21 @@ class AppConfig:
         # Make Perplexity optional (Session 79C)
         perplexity_config = None
         if os.getenv("PERPLEXITY_API_KEY"):
-            perplexity_config = PerplexityConfig.from_env()
+            try:
+                perplexity_config = PerplexityConfig.from_env()
+            except ValueError:
+                pass
 
         # Make OpenAI optional (Session 79D)
         openai_config = None
         if os.getenv("OPENAI_API_KEY"):
-            openai_config = OpenAIConfig.from_env()
+            try:
+                openai_config = OpenAIConfig.from_env()
+            except ValueError:
+                pass
+
+        # Session 495: Path resolution for runtime dir
+        runtime_dir = Path(os.getenv("DACLE_RUNTIME_DIR", "data/runtime"))
 
         # Load scalper config from the canonical lighter.yaml file.
         scalper_cfg = {}
@@ -328,13 +338,14 @@ class AppConfig:
             pass
 
         return cls(
-            env=os.getenv("ENV", "development"),
+            env=os.getenv("DACLE_ENV", "development"),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
             supabase=SupabaseConfig.from_env(),
             discord=DiscordConfig.from_env(),
             redis=RedisConfig.from_env(),
             perplexity=perplexity_config,
             openai=openai_config,
+            runtime_dir=runtime_dir,
             scalper=scalper_cfg,
         )
 
@@ -353,29 +364,26 @@ class AppConfig:
 _config: Optional[AppConfig] = None
 
 
-def load_config(root_path: Optional[Path] = None) -> AppConfig:
+def load_config(root_path: Optional[Path] = None, force_reload: bool = False) -> AppConfig:
     """
-    Explicitly load configuration from .env file at application startup.
+    Explicitly load configuration from environment files at application startup.
 
-    This function should be called once at the beginning of each application entrypoint
-    (e.g., run_bot.py, run_tge_analysis.py) before any other imports that depend on config.
+    Implements the canonical environment hierarchy (Session 495):
+    1. .env.shared (Base defaults)
+    2. .env (Local environment overrides)
+    3. .env.secret (Sensitive credentials - highest priority)
 
     Args:
         root_path: Path to project root directory. If None, auto-detects using __file__.
+        force_reload: If True, reloads the configuration even if already loaded.
 
     Returns:
         AppConfig: The loaded application configuration
-
-    Raises:
-        ValueError: If required environment variables are not set
-        RuntimeError: If config is already loaded (prevents double-loading)
     """
     global _config
 
-    if _config is not None:
-        raise RuntimeError(
-            "Configuration already loaded. load_config() should only be called once at startup."
-        )
+    if _config is not None and not force_reload:
+        return _config
 
     # Auto-detect root path if not provided
     if root_path is None:
@@ -391,11 +399,19 @@ def load_config(root_path: Optional[Path] = None) -> AppConfig:
             # Fallback to parent.parent.parent if auto-detection fails
             root_path = Path(__file__).parent.parent.parent
 
-    # Load .env file
-    env_file = root_path / ".env"
-    load_dotenv(env_file)
+    # Load in specific order (Session 495)
+    # 1. Base defaults (.env.shared)
+    if (root_path / ".env.shared").exists():
+        load_dotenv(root_path / ".env.shared", override=True)
 
-    # Create config singleton
+    # 2. Local overrides (.env)
+    if (root_path / ".env").exists():
+        load_dotenv(root_path / ".env", override=True)
+
+    # 3. Sensitive secrets (.env.secret)
+    if (root_path / ".env.secret").exists():
+        load_dotenv(root_path / ".env.secret", override=True)
+
     _config = AppConfig.from_env()
     return _config
 
@@ -409,14 +425,22 @@ def get_config() -> AppConfig:
 
     Raises:
         RuntimeError: If configuration has not been loaded via load_config()
-        ValueError: If required environment variables are not set
     """
     global _config
     if _config is None:
-        raise RuntimeError(
-            "Configuration has not been loaded. Call load_config() at application startup first."
-        )
+        return load_config()
     return _config
+
+
+def get_runtime_dir() -> Path:
+    """Return canonical path for runtime state storage (Session 495)."""
+    return Path(get_config().runtime_dir)
+
+
+def get_polymarket_runtime_dir() -> Path:
+    """Return canonical path for Polymarket runtime artifacts (Session 522)."""
+    path = Path(get_runtime_dir() / "polymarket")
+    return path
 
 
 # Convenience functions for common configs
