@@ -1269,10 +1269,10 @@ class AnalysisCommands(commands.Cog):
         except Exception as e:
             logger.warning(f"De-confliction check failed: {e}")
 
-        # 3. Minimal Parent Header
+        # 3. Post the classic analyze opener in the analysis channel.
         try:
             parent_msg = await analysis_channel.send(
-                content=f"📂 **{symbol} Analysis** (requested by {interaction.user.mention})"
+                content=f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
             )
         except Exception as e:
 
@@ -1291,9 +1291,7 @@ class AnalysisCommands(commands.Cog):
             )
             target_channel = thread
             thread_created = True
-            
-            # This is the ONE AND ONLY status message
-            status_msg = await thread.send(f"🔍 Analyzing **{symbol}**... (this may take up to 2-3m)")
+            status_msg = parent_msg
 
             # Mark for deduplication
             self._mark_analyze_request_started(
@@ -1315,7 +1313,8 @@ class AnalysisCommands(commands.Cog):
                 return
             
             resolved_symbol, resolved_name = resolved
-            await status_msg.edit(content=f"🔍 Analyzing **{resolved_symbol}**...")
+            if resolved_symbol != symbol and status_msg is not None:
+                await status_msg.edit(content=f"🔍 Analyzing **{resolved_symbol}**...")
 
             safe_create_task(
                 self._run_analysis_task(
