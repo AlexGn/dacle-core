@@ -1238,6 +1238,13 @@ class AnalysisCommands(commands.Cog):
         symbol = symbol.upper()
         request_id = f"analyze-{interaction.id}"
         invoke_channel = interaction.channel
+        logger.info(
+            "ANALYZE_SLASH_START "
+            f"request_id={request_id} "
+            f"symbol={symbol} "
+            f"user_id={interaction.user.id} "
+            f"channel_id={getattr(invoke_channel, 'id', 'unknown')}"
+        )
         analysis_channel = self._resolve_analysis_channel()
         if analysis_channel is None:
             analysis_channel = invoke_channel if _is_supported_analysis_channel(invoke_channel) else None
