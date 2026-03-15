@@ -290,6 +290,7 @@ class AppConfig:
     redis: RedisConfig
     perplexity: Optional[PerplexityConfig]
     openai: Optional[OpenAIConfig]
+    runtime_dir: Path = Path("data/runtime")
     scalper: dict = field(default_factory=dict)
 
     @classmethod
@@ -304,6 +305,8 @@ class AppConfig:
         openai_config = None
         if os.getenv("OPENAI_API_KEY"):
             openai_config = OpenAIConfig.from_env()
+
+        runtime_dir = Path(os.getenv("DACLE_RUNTIME_DIR", "data/runtime"))
 
         # Load scalper config from the canonical lighter.yaml file.
         scalper_cfg = {}
@@ -335,6 +338,7 @@ class AppConfig:
             redis=RedisConfig.from_env(),
             perplexity=perplexity_config,
             openai=openai_config,
+            runtime_dir=runtime_dir,
             scalper=scalper_cfg,
         )
 
@@ -353,7 +357,7 @@ class AppConfig:
 _config: Optional[AppConfig] = None
 
 
-def load_config(root_path: Optional[Path] = None) -> AppConfig:
+def load_config(root_path: Optional[Path] = None, force_reload: bool = False) -> AppConfig:
     """
     Explicitly load configuration from .env file at application startup.
 
@@ -366,16 +370,11 @@ def load_config(root_path: Optional[Path] = None) -> AppConfig:
     Returns:
         AppConfig: The loaded application configuration
 
-    Raises:
-        ValueError: If required environment variables are not set
-        RuntimeError: If config is already loaded (prevents double-loading)
     """
     global _config
 
-    if _config is not None:
-        raise RuntimeError(
-            "Configuration already loaded. load_config() should only be called once at startup."
-        )
+    if _config is not None and not force_reload:
+        return _config
 
     # Auto-detect root path if not provided
     if root_path is None:
@@ -391,9 +390,12 @@ def load_config(root_path: Optional[Path] = None) -> AppConfig:
             # Fallback to parent.parent.parent if auto-detection fails
             root_path = Path(__file__).parent.parent.parent
 
-    # Load .env file
-    env_file = root_path / ".env"
-    load_dotenv(env_file)
+    if (root_path / ".env.shared").exists():
+        load_dotenv(root_path / ".env.shared", override=True)
+    if (root_path / ".env").exists():
+        load_dotenv(root_path / ".env", override=True)
+    if (root_path / ".env.secret").exists():
+        load_dotenv(root_path / ".env.secret", override=True)
 
     # Create config singleton
     _config = AppConfig.from_env()
@@ -407,19 +409,29 @@ def get_config() -> AppConfig:
     Returns:
         AppConfig: The application configuration
 
-    Raises:
-        RuntimeError: If configuration has not been loaded via load_config()
-        ValueError: If required environment variables are not set
     """
     global _config
     if _config is None:
-        raise RuntimeError(
-            "Configuration has not been loaded. Call load_config() at application startup first."
-        )
+        return load_config()
     return _config
 
 
 # Convenience functions for common configs
+def get_runtime_dir() -> Path:
+    """Return canonical path for runtime state storage."""
+    raw = getattr(get_config(), "runtime_dir", None)
+    if isinstance(raw, Path):
+        return raw
+    if isinstance(raw, (str, os.PathLike)):
+        return Path(raw)
+    return Path(os.getenv("DACLE_RUNTIME_DIR", "data/runtime"))
+
+
+def get_polymarket_runtime_dir() -> Path:
+    """Return canonical path for Polymarket runtime artifacts."""
+    return Path(get_runtime_dir() / "polymarket")
+
+
 def get_supabase_config() -> SupabaseConfig:
     """Get Supabase configuration"""
     return get_config().supabase
