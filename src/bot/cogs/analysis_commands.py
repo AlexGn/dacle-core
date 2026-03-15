@@ -1258,7 +1258,7 @@ class AnalysisCommands(commands.Cog):
         # 1. Immediately acknowledge the slash command with an ephemeral status ping.
         try:
             await interaction.response.send_message(
-                content=f"🔍 Starting analysis for **{symbol}**...",
+                content=f"🔍 Analyzing **{symbol}**...",
                 ephemeral=True,
             )
         except Exception as e:
