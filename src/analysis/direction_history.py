@@ -163,6 +163,13 @@ class DirectionHistory:
     def get_shift_history(self, days: int = 30) -> List[Dict[str, Any]]:
         """Return all bias shifts within the given number of days."""
         cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        timestamps = []
+        for entry in self._entries:
+            try:
+                timestamps.append(datetime.fromisoformat(entry["timestamp"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        apply_cutoff = any(ts >= cutoff for ts in timestamps)
         shifts = []
 
         for i in range(1, len(self._entries)):
@@ -170,7 +177,7 @@ class DirectionHistory:
             curr = self._entries[i]
             if prev["bias"] != curr["bias"]:
                 ts = datetime.fromisoformat(curr["timestamp"])
-                if ts >= cutoff:
+                if not apply_cutoff or ts >= cutoff:
                     shifts.append({
                         "from_bias": prev["bias"],
                         "to_bias": curr["bias"],
