@@ -495,8 +495,6 @@ class AnalysisCommands(commands.Cog):
 
         entry = self._analyze_request_state.get(key)
         if entry and entry.get("state") == "active":
-            if entry.get("request_id") == request_id:
-                return True # Allow update for same interaction
             return False # Block concurrent for different interaction/retry
 
         self._analyze_request_state[key] = {
@@ -1244,6 +1242,19 @@ class AnalysisCommands(commands.Cog):
             )
             return
 
+        if not self._mark_analyze_request_started(
+            interaction.user,
+            symbol,
+            request_id,
+            getattr(analysis_channel, "mention", None) or "the analysis channel",
+        ):
+            duplicate_notice = self._duplicate_analyze_notice(interaction.user, symbol)
+            await interaction.response.send_message(
+                content=duplicate_notice or f"⏳ **{symbol}** is already being analyzed.",
+                ephemeral=True,
+            )
+            return
+
         # 1. Immediately acknowledge the slash command with an ephemeral status ping.
         try:
             await interaction.response.send_message(
@@ -1252,6 +1263,7 @@ class AnalysisCommands(commands.Cog):
             )
         except Exception as e:
             logger.error(f"Failed to acknowledge interaction: {e}")
+            self._finalize_analyze_request(interaction.user, symbol, request_id)
             return
 
         # 2. Pre-flight De-confliction: Check if another bot already started this in the last 60s
@@ -1265,6 +1277,7 @@ class AnalysisCommands(commands.Cog):
                             content=f"⏳ Analysis for **{symbol}** is already in progress.",
                             ephemeral=True
                         )
+                        self._finalize_analyze_request(interaction.user, symbol, request_id)
                         return
         except Exception as e:
             logger.warning(f"De-confliction check failed: {e}")
@@ -1275,7 +1288,7 @@ class AnalysisCommands(commands.Cog):
                 content=f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
             )
         except Exception as e:
-
+            self._finalize_analyze_request(interaction.user, symbol, request_id)
             await interaction.followup.send(content=f"❌ Failed to post in analysis channel: {e}", ephemeral=True)
             return
 
@@ -1293,8 +1306,7 @@ class AnalysisCommands(commands.Cog):
             thread_created = True
             status_msg = parent_msg
 
-            # Mark for deduplication
-            self._mark_analyze_request_started(
+            self._update_analyze_request_location(
                 interaction.user,
                 symbol,
                 request_id,
@@ -1310,6 +1322,7 @@ class AnalysisCommands(commands.Cog):
             resolved = await self._maybe_disambiguate(symbol, interaction.user, target_channel)
             if not resolved:
                 await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
+                self._finalize_analyze_request(interaction.user, symbol, request_id)
                 return
             
             resolved_symbol, resolved_name = resolved
@@ -1347,6 +1360,7 @@ class AnalysisCommands(commands.Cog):
                 )
             except Exception:
                 pass
+            self._finalize_analyze_request(interaction.user, symbol, request_id)
 
     @app_commands.command(name="analyze-batch", description="Analyze multiple tokens concurrently")
     @app_commands.describe(symbols="Comma-separated token symbols (e.g., ZRO, ALCH, DRIFT)")
