@@ -1500,23 +1500,40 @@ class AnalysisCommands(commands.Cog):
 
             try:
                 if resolved_name:
-                    await self._refresh_or_research_token_data(symbol, resolved_name)
+                    await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: self._refresh_or_research_token_data(symbol, resolved_name),
+                        ),
+                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
+                    )
                 else:
-                    await self._refresh_token_data(symbol)
-                
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: self._refresh_token_data(symbol)),
+                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
+                    )
                 consolidated = await asyncio.wait_for(
                     loop.run_in_executor(None, lambda: self._load_consolidated(symbol)),
                     timeout=30,
                 )
-            except RuntimeError as e:
-                # Map RuntimeError (from api_request failure) to cached loader
-                reason = "api_error_during_refresh"
-                if "status=404" in str(e): reason = "token_not_found"
-                
+            except requests.Timeout:
                 consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
                     loop=loop,
                     symbol=symbol,
-                    reason=reason,
+                    reason="api_timeout_during_refresh",
+                    request_id=request_id,
+                    status_msg=status_msg,
+                    target_channel=target_channel,
+                    load_cached_fn=lambda: self._load_consolidated(symbol),
+                )
+                if consolidated is None:
+                    return
+                used_refresh_fallback = True
+            except requests.ConnectionError:
+                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
+                    loop=loop,
+                    symbol=symbol,
+                    reason="api_unavailable_during_refresh",
                     request_id=request_id,
                     status_msg=status_msg,
                     target_channel=target_channel,
