@@ -849,8 +849,9 @@ class LevelsResultView(discord.ui.View):
             button.style = discord.ButtonStyle.secondary
             await interaction.response.edit_message(view=self)
 
-            # Create thread and post PTC summary
-            await self._post_thread_summary(setup_message)
+            # Trade router (Node.js) handles pre-trade-check when it detects
+            # the setup in #trades — no need to run it here (avoids duplicates).
+            # await self._post_thread_summary(setup_message)
         except Exception as e:
             logger.error(f"[levels] Failed to post to #trades: {e}")
             await interaction.response.send_message(

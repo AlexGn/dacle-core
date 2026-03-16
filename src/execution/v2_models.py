@@ -101,7 +101,7 @@ class PreTradeCheckRequestV2(BaseModel):
     take_profit: float
     size_usd: Optional[float] = None
     qty: Optional[float] = None
-    conviction: float = 8.0
+    conviction: Optional[float] = None
     max_slippage_bps: int = 120
     allow_auto_scale_down: bool = True
     min_trade_size_usd: float = 100.0
