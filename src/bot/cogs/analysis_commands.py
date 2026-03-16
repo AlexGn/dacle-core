@@ -43,11 +43,9 @@ def _api_headers() -> Dict[str, str]:
     return {"X-API-Key": api_key} if api_key else {}
 
 REQUIRED_FIELDS = {
-    "price": ("current_price", "price"),
-    "fdv": ("fdv", "fully_diluted_valuation"),
-    "market_cap": ("market_cap",),
-    # float_percent: scorer handles missing gracefully (0/5 score + "MISSING DATA" flag).
-    # Hard-gating here blocks established tokens (e.g. TAO) where sources lack supply data.
+    "price": ("current_price", "price", "listing_price_low"),
+    "fdv": ("fdv", "fully_diluted_valuation", "fdv_low", "total_supply"),
+    "market_cap": ("market_cap", "circulating_supply", "total_supply"),
 }
 ANALYSIS_REFRESH_TIMEOUT_SECONDS = 420
 ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240

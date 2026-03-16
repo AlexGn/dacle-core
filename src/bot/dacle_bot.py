@@ -272,15 +272,15 @@ class DACLEBot(commands.Bot):
                 last_pulse = getattr(self, "_last_pulse_time", 0)
                 if (now - last_pulse) >= 3600:
                     try:
-                        # Use analysis channel from config
+                        # Use logs channel from config (Session 522 Hardening)
                         config = getattr(self, "config", None)
-                        analysis_channel_id = getattr(config, 'analysis_channel_id', None) if config else None
-                        if analysis_channel_id:
-                            channel = self.get_channel(int(analysis_channel_id))
+                        logs_channel_id = getattr(config, 'logs_channel_id', None) if config else None
+                        if logs_channel_id:
+                            channel = self.get_channel(int(logs_channel_id))
                             if channel:
-                                await channel.send(".")
+                                await channel.send("🟢")
                                 self._last_pulse_time = now
-                                logger.info("💓 SENTINEL: Pulse dot sent to Discord.")
+                                logger.info("💓 SENTINEL: Heartbeat pulse (🟢) sent to logs channel.")
                     except Exception as pulse_err:
                         logger.warning(f"⚠️ Pulse dot failed: {pulse_err}")
 
