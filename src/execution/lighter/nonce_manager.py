@@ -45,13 +45,16 @@ class NonceManager:
             self._set_locked(nonce + 1)
             return nonce
 
-    async def resync(self, current_onchain_nonce: int):
+    async def resync(self, current_onchain_nonce: int, *, force: bool = False):
         """Re-align local counter with exchange truth."""
         current_onchain_nonce = int(current_onchain_nonce)
         async with self._lock:
             local_next = self._peek_locked()
             if current_onchain_nonce > local_next:
                 logger.info(f"NonceManager resync: {local_next} -> {current_onchain_nonce}")
+                self._set_locked(current_onchain_nonce)
+            elif force and current_onchain_nonce < local_next:
+                logger.warning(f"[NONCE_FORCE_REWIND] Local {local_next} -> Onchain {current_onchain_nonce}")
                 self._set_locked(current_onchain_nonce)
             elif current_onchain_nonce < local_next:
                 logger.debug(
