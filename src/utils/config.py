@@ -193,6 +193,7 @@ class DiscordConfig:
     trades_channel_id: Optional[int] = None
     macro_channel_id: Optional[int] = None
     focus_channel_id: Optional[int] = None
+    logs_channel_id: Optional[int] = None
 
     @classmethod
     def from_env(cls) -> "DiscordConfig":
@@ -212,6 +213,7 @@ class DiscordConfig:
         trades_id = _to_int("DISCORD_TRADES_CHANNEL_ID", 1468948950412431598)
         macro_id = _to_int("DISCORD_MACRO_CHANNEL_ID", 1470361576237306058)
         focus_id = _to_int("DISCORD_FOCUS_CHANNEL_ID", 1470789144736174326)
+        logs_id = _to_int("DISCORD_LOGS_CHANNEL_ID", 1468187517147939068)
 
         # Discord is optional - allow None values if not configured
         # Raises error only if partially configured (one but not both)
@@ -227,6 +229,7 @@ class DiscordConfig:
             trades_channel_id=trades_id,
             macro_channel_id=macro_id,
             focus_channel_id=focus_id,
+            logs_channel_id=logs_id,
         )
 
 
