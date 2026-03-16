@@ -31,7 +31,6 @@ dependencies = [
     "twikit>=2.3.3",  # Mercury Twitter/X source integration
     "python-telegram-bot>=20.0",  # Telegram Entry Timer Bot
     "ccxt>=4.0.0",  # Exchange integration for TA data
-    "pycoingecko>=3.1.0",  # 7-Index tracking (USDT.D, BTC.D, etc.)
     "beautifulsoup4>=4.12.0",  # Web scraping for data collection
     "lxml>=4.9.0",  # XML/HTML parser for BeautifulSoup
     "openai>=2.8.0",  # GPT-4o-mini for TGE research fallback + FDV validation (Session 263: Vision deprecated)
