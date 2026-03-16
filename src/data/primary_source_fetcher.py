@@ -636,6 +636,7 @@ COINGECKO_FIELDS = {
 # Use when CoinGecko lists a token under a different symbol than we track
 COINGECKO_SYMBOL_ALIASES = {
     "H": ("HSK", "hashkey-ecopoints", "HashKey Platform Token"),
+    "REZ": ("REZ", "renzo", "Renzo"),
     # Add more aliases as needed:
     # "DACLE_SYMBOL": ("CG_SYMBOL", "coingecko-id", "name"),
 }
