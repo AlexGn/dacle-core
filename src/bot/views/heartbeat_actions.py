@@ -10,15 +10,20 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from src.utils.logger import get_logger
+from src.bot.runtime_routing import get_channel_id
 from src.bot.cogs.analysis_views import (
     _load_execution_state,
     _format_setup_message,
-    TRADES_CHANNEL_ID,
 )
 
 logger = get_logger(__name__)
 
 FOCUS_CHANNEL_ID = 1470789144736174326
+
+
+def _get_trades_channel_id() -> int:
+    """Resolve the canonical trades channel ID at call time."""
+    return get_channel_id("trades")
 
 
 def render_action_card_embed(card: dict) -> discord.Embed:
@@ -116,7 +121,7 @@ class HeartbeatDiscoveryView(discord.ui.View):
 
             setup_msg = _format_setup_message(self.symbol, self.direction, exec_state)
 
-            trades_channel = interaction.client.get_channel(TRADES_CHANNEL_ID)
+            trades_channel = interaction.client.get_channel(_get_trades_channel_id())
             if not trades_channel:
                 await interaction.response.send_message(
                     f"\u2705 **Approved** but could not find #trades channel. "
