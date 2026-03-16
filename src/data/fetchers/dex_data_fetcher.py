@@ -32,6 +32,23 @@ import requests
 logger = logging.getLogger(__name__)
 
 
+def normalize_token_symbol(symbol: str) -> str:
+    """
+    Session 397: Normalize token symbol by removing common multiplier prefixes.
+    e.g. 1000BONK -> BONK, 1BONK -> BONK
+    """
+    if not symbol:
+        return symbol
+    s = str(symbol).upper()
+    if s.startswith("1000") and len(s) > 4 and s[4].isalpha():
+        return s[4:]
+    if s.startswith("100") and len(s) > 3 and s[3].isalpha():
+        return s[3:]
+    if s.startswith("1") and len(s) > 1 and s[1].isalpha():
+        return s[1:]
+    return s
+
+
 @dataclass
 class DEXPairData:
     """Data from a DEX pair."""
@@ -231,8 +248,24 @@ class DEXDataFetcher:
             # Fallback to search by symbol
             url = f"{self.DEXSCREENER_SEARCH}?q={symbol}"
             response = self.session.get(url, timeout=self.timeout)
+            
+            # Session 397: Retry with normalized symbol if no pairs found
             if response.status_code == 200:
                 data = response.json()
+                pairs = data.get("pairs", [])
+                
+                if not pairs:
+                    norm_symbol = normalize_token_symbol(symbol)
+                    if norm_symbol != symbol.upper():
+                        logger.info(f"DexScreener: No pairs for {symbol}, retrying with {norm_symbol}")
+                        url = f"{self.DEXSCREENER_SEARCH}?q={norm_symbol}"
+                        response = self.session.get(url, timeout=self.timeout)
+                        if response.status_code == 200:
+                            data = response.json()
+                            pairs = data.get("pairs", [])
+
+            if response.status_code == 200:
+                # data and pairs are already set from above logic
                 pairs = data.get("pairs", [])
 
                 # Filter by chain if specified
