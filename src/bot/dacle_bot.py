@@ -275,12 +275,13 @@ class DACLEBot(commands.Bot):
                         # Use logs channel from config (Session 522 Hardening)
                         config = getattr(self, "config", None)
                         logs_channel_id = getattr(config, 'logs_channel_id', None) if config else None
+                        pulse_symbol = getattr(config, 'heartbeat_pulse_symbol', '🟢') if config else '🟢'
                         if logs_channel_id:
                             channel = self.get_channel(int(logs_channel_id))
                             if channel:
-                                await channel.send("🟢")
+                                await channel.send(pulse_symbol)
                                 self._last_pulse_time = now
-                                logger.info("💓 SENTINEL: Heartbeat pulse (🟢) sent to logs channel.")
+                                logger.info(f"💓 SENTINEL: Heartbeat pulse ({pulse_symbol}) sent to logs channel.")
                     except Exception as pulse_err:
                         logger.warning(f"⚠️ Pulse dot failed: {pulse_err}")
 
