@@ -13,12 +13,12 @@ from src.utils.logger import get_logger
 from src.bot.cogs.analysis_views import (
     _load_execution_state,
     _format_setup_message,
-    TRADES_CHANNEL_ID,
 )
 
 logger = get_logger(__name__)
 
 FOCUS_CHANNEL_ID = 1470789144736174326
+TRADES_CHANNEL_ID = 1468948950412431598
 
 
 def render_action_card_embed(card: dict) -> discord.Embed:
