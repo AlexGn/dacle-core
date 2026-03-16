@@ -114,10 +114,29 @@ def verify_token_identity(
     # Verify symbol matches
     fetched_symbol = result.get("token_symbol", "").upper()
     if fetched_symbol and fetched_symbol != searched_token.upper():
-        logger.warning(f"Symbol mismatch: searched {searched_token}, got {fetched_symbol}")
-        return False
+        # Session 397: Allow match if searched token has a multiplier prefix (e.g. 1000BONK -> BONK)
+        normalized_searched = normalize_token_symbol(searched_token)
+        if fetched_symbol != normalized_searched:
+            logger.warning(f"Symbol mismatch: searched {searched_token}, got {fetched_symbol}")
+            return False
 
     return True
+
+def normalize_token_symbol(symbol: str) -> str:
+    """
+    Session 397: Normalize token symbol by removing common multiplier prefixes.
+    e.g. 1000BONK -> BONK, 1BONK -> BONK
+    """
+    if not symbol:
+        return symbol
+    s = symbol.upper()
+    if s.startswith("1000") and len(s) > 4 and s[4].isalpha():
+        return s[4:]
+    if s.startswith("100") and len(s) > 3 and s[3].isalpha():
+        return s[3:]
+    if s.startswith("1") and len(s) > 1 and s[1].isalpha():
+        return s[1:]
+    return s
 
 # Project root for saving files
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -160,8 +179,11 @@ def check_token_live_status_fast(
         Dict with is_live, status, current_price, fdv, etc.
     """
     try:
+        # Session 397: Normalize symbol for lookup
+        normalized_symbol = normalize_token_symbol(token_symbol)
+        
         # Search DexScreener (no rate limits)
-        search_url = f"{DEXSCREENER_SEARCH_URL}?q={token_symbol}"
+        search_url = f"{DEXSCREENER_SEARCH_URL}?q={normalized_symbol}"
         response = requests.get(search_url, timeout=10)
 
         if response.status_code != 200:
@@ -178,7 +200,7 @@ def check_token_live_status_fast(
 
         if not pairs:
             # Token not found on DEX - could be pre-TGE or CEX-only
-            logger.info(f"Live check: {token_symbol} not found on DexScreener")
+            logger.info(f"Live check: {normalized_symbol} (original: {token_symbol}) not found on DexScreener")
             return {
                 "is_live": None,  # Unknown - might be CEX-only
                 "status": "Unknown",
@@ -190,7 +212,8 @@ def check_token_live_status_fast(
         best_pair = None
         for pair in pairs:
             base_token = pair.get("baseToken", {})
-            if base_token.get("symbol", "").upper() == token_symbol.upper():
+            pair_symbol = base_token.get("symbol", "").upper()
+            if pair_symbol == normalized_symbol.upper() or pair_symbol == token_symbol.upper():
                 # Prefer pairs with higher liquidity
                 if best_pair is None or (pair.get("liquidity", {}).get("usd", 0) or 0) > \
                    (best_pair.get("liquidity", {}).get("usd", 0) or 0):
@@ -294,8 +317,11 @@ def check_token_live_status(
         ...     print(f"Detected at: {status['tge_detected_at']}")
     """
     try:
+        # Session 397: Normalize symbol for lookup
+        normalized_symbol = normalize_token_symbol(token_symbol)
+        
         # Search for token on CoinGecko
-        search_query = token_name if token_name else token_symbol
+        search_query = token_name if token_name else normalized_symbol
         search_url = f"https://api.coingecko.com/api/v3/search?query={search_query}"
         headers = {"accept": "application/json"}
 
@@ -327,7 +353,8 @@ def check_token_live_status(
         coin_id = None
         matched_name = None
         for coin in coins:
-            symbol_match = coin.get("symbol", "").upper() == token_symbol.upper()
+            coin_symbol = coin.get("symbol", "").upper()
+            symbol_match = (coin_symbol == normalized_symbol.upper() or coin_symbol == token_symbol.upper())
             if token_name:
                 name_match = token_name.lower() in coin.get("name", "").lower()
                 if symbol_match and name_match:
@@ -1840,11 +1867,21 @@ def _fetch_source_wrapper(
         # This ensures we don't exceed API rate limits even with parallel threads
         GLOBAL_RATE_LIMITER.acquire(source_name)
 
-        if source_name in ["cryptorank", "coingecko", "coinmarketcap_full"]:
-            # These functions accept token_name
+        # Session 397: Implement retry with normalized symbol if original fails
+        normalized_symbol = normalize_token_symbol(token)
+        
+        if source_name in ["cryptorank", "coingecko", "coinmarketcap_full", "icodrops"]:
             data = fetch_func(token, token_name=token_name)
+            # If original fails and we have a different normalized symbol, retry
+            if not data and normalized_symbol != token:
+                logger.info(f"Retrying {source_name} with normalized symbol: {normalized_symbol}")
+                data = fetch_func(normalized_symbol, token_name=token_name)
         else:
             data = fetch_func(token)
+            if not data and normalized_symbol != token:
+                logger.info(f"Retrying {source_name} with normalized symbol: {normalized_symbol}")
+                data = fetch_func(normalized_symbol)
+                
         return (source_name, data)
     except Exception as e:
         logger.warning(f"{source_name} fetch failed: {e}")

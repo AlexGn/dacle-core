@@ -76,6 +76,7 @@ class DACLEBot(commands.Bot):
         try:
             self.config = get_discord_config()
             self.private_server_id = int(self.config.private_server_id)
+            self._last_pulse_time = 0  # Session 470: Pulse Dot Heartbeat
         except ValueError as e:
             logger.error(f"❌ Failed to load Discord config: {e}")
             logger.error("Ensure DISCORD_BOT_TOKEN and DISCORD_PRIVATE_SERVER_ID are set in .env")
@@ -266,6 +267,23 @@ class DACLEBot(commands.Bot):
         
         while not self.is_closed():
             try:
+                # 0. Heartbeat "Pulse Dot" (Every 60 minutes)
+                now = time.time()
+                last_pulse = getattr(self, "_last_pulse_time", 0)
+                if (now - last_pulse) >= 3600:
+                    try:
+                        # Use analysis channel from config
+                        config = getattr(self, "config", None)
+                        analysis_channel_id = getattr(config, 'analysis_channel_id', None) if config else None
+                        if analysis_channel_id:
+                            channel = self.get_channel(int(analysis_channel_id))
+                            if channel:
+                                await channel.send(".")
+                                self._last_pulse_time = now
+                                logger.info("💓 SENTINEL: Pulse dot sent to Discord.")
+                    except Exception as pulse_err:
+                        logger.warning(f"⚠️ Pulse dot failed: {pulse_err}")
+
                 # A. Watcher: Sweep positions (Every cycle)
                 await watcher.watch_cycle()
                 

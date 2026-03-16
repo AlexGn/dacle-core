@@ -1508,6 +1508,28 @@ class DataConsolidator:
             derived_fields.append(f"circulating_supply={circ_supply}")
             logger.info(f"   📐 Mapped circulating_supply: {circ_supply:,.0f} (from circulating_supply_at_tge)")
 
+        # Session 397: Calculate market_cap and fdv from current_price if missing
+        curr_price = consolidated.get("current_price") or consolidated.get("price")
+        if curr_price:
+            # 1. Calculate market_cap from current_price * circulating_supply
+            if not consolidated.get("market_cap"):
+                circ = consolidated.get("circulating_supply") or consolidated.get("circulating_supply_at_tge")
+                if circ:
+                    mc = circ * curr_price
+                    consolidated["market_cap"] = mc
+                    derived_fields.append(f"market_cap={mc} (from price * circ)")
+                    logger.info(f"   📐 Derived market_cap: ${mc:,.0f} (from price * circulating_supply)")
+
+            # 2. Calculate fdv from current_price * total_supply
+            if not (consolidated.get("fdv") or consolidated.get("fdv_low")):
+                total = consolidated.get("total_supply")
+                if total:
+                    fdv = total * curr_price
+                    consolidated["fdv"] = fdv
+                    consolidated["fdv_low"] = fdv
+                    derived_fields.append(f"fdv={fdv} (from price * total)")
+                    logger.info(f"   📐 Derived fdv: ${fdv:,.0f} (from price * total_supply)")
+
         # Calculate FDV/MC ratio (PRIMARY SHORT SIGNAL)
         # Formula: fdv_mc_ratio = fdv / market_cap
         fdv_low = consolidated.get("fdv_low")
