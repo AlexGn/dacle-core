@@ -36,6 +36,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, asdict
 import uuid
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +67,7 @@ class SupplySnapshot:
     days_since_tge: Optional[int]
 
     # Source tracking
-    data_source: str  # coingecko, coinmarketcap, exchange_api, manual
+    data_source: str  # tradingview, coinmarketcap, exchange_api, local
     data_confidence: float  # 0.0-1.0
 
     # Comparison vs TGE
@@ -121,7 +122,7 @@ class TGESnapshotArchiver:
     def capture_snapshot(
         self,
         symbol: str,
-        data_source: str = "coingecko",
+        data_source: str = "tradingview",
         force_fetch: bool = False
     ) -> str:
         """
@@ -129,7 +130,7 @@ class TGESnapshotArchiver:
 
         Args:
             symbol: Token symbol (e.g., "POWER")
-            data_source: Where data was fetched from
+            data_source: Where data was fetched from (tradingview, local, etc)
             force_fetch: Force fetch even if recent snapshot exists
 
         Returns:
@@ -165,8 +166,15 @@ class TGESnapshotArchiver:
         # Calculate days since TGE
         days_since_tge = None
         if tge_data and tge_data.get("tge_date"):
-            tge_date = datetime.fromisoformat(tge_data["tge_date"].replace('Z', '+00:00'))
-            days_since_tge = (datetime.now(timezone.utc) - tge_date).days
+            try:
+                tge_date_str = tge_data["tge_date"].replace('Z', '+00:00')
+                if 'T' in tge_date_str:
+                    tge_date = datetime.fromisoformat(tge_date_str)
+                else:
+                    tge_date = datetime.strptime(tge_date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                days_since_tge = (datetime.now(timezone.utc) - tge_date).days
+            except Exception as e:
+                logger.debug(f"Could not calculate days since TGE: {e}")
 
         # Create snapshot
         snapshot = SupplySnapshot(
@@ -204,18 +212,18 @@ class TGESnapshotArchiver:
 
     def _fetch_supply_data(self, symbol: str, source: str) -> Optional[Dict[str, Any]]:
         """
-        Fetch current supply data from various sources.
+        Fetch current market data from various sources.
 
         Args:
             symbol: Token symbol
-            source: Data source (coingecko, coinmarketcap, etc.)
+            source: Data source (tradingview, coinmarketcap, etc.)
 
         Returns:
-            Supply data dict or None
+            Data dict or None
         """
         try:
-            if source == "coingecko":
-                return self._fetch_from_coingecko(symbol)
+            if source == "tradingview":
+                return self._fetch_from_tradingview(symbol)
             elif source == "coinmarketcap":
                 return self._fetch_from_coinmarketcap(symbol)
             elif source == "local":
@@ -230,7 +238,7 @@ class TGESnapshotArchiver:
 
     def _fetch_from_local(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch from local tokens directory (fallback)."""
-        token_file = self.TOKENS_DIR / symbol / "consolidated.json"
+        token_file = self.TOKENS_DIR / symbol.upper() / "consolidated.json"
         if not token_file.exists():
             return None
 
@@ -246,47 +254,51 @@ class TGESnapshotArchiver:
             "confidence": 0.5  # Low confidence - this is TGE data, not current
         }
 
-    def _fetch_from_coingecko(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Fetch from CoinGecko API."""
+    def _fetch_from_tradingview(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Fetch current price and data from TradingView Scan API."""
         try:
-            from pycoingecko import CoinGeckoAPI
-            cg = CoinGeckoAPI()
+            exchanges = ["BINANCE", "MEXC", "BYBIT"]
+            tickers = [f"{ex}:{symbol.upper()}USDT" for ex in exchanges]
+            
+            response = requests.post(
+                "https://scanner.tradingview.com/crypto/scan",
+                headers={"Content-Type": "application/json"},
+                json={
+                    "symbols": {"tickers": tickers},
+                    "columns": ["close", "change", "volume"]
+                },
+                timeout=10
+            )
+            response.raise_for_status()
 
-            # Search for coin ID
-            search = cg.search(query=symbol)
-            if not search or 'coins' not in search or not search['coins']:
-                logger.warning(f"Token {symbol} not found on CoinGecko")
-                return None
+            data = response.json()
+            if "data" in data and len(data["data"]) > 0:
+                # Find the first one that has data
+                valid_item = None
+                for item in data["data"]:
+                    if item.get("d") and item["d"][0] is not None:
+                        valid_item = item
+                        break
+                
+                if valid_item:
+                    d = valid_item["d"]
+                    current_price = d[0]
+                    change_24h_pct = d[1] or 0.0
 
-            coin_id = search['coins'][0]['id']
-
-            # Get market data
-            coin_data = cg.get_coin_by_id(coin_id)
-
-            market = coin_data.get('market_data', {})
-            total_supply = market.get('total_supply')
-            circulating_supply = market.get('circulating_supply')
-            current_price = market.get('current_price', {}).get('usd')
-            market_cap = market.get('market_cap', {}).get('usd')
-            fdv = market.get('fully_diluted_valuation', {}).get('usd')
-
-            float_pct = None
-            if total_supply and circulating_supply:
-                float_pct = (circulating_supply / total_supply) * 100
-
-            return {
-                "total_supply": total_supply,
-                "circulating_supply": circulating_supply,
-                "float_percent": float_pct,
-                "current_price": current_price,
-                "market_cap": market_cap,
-                "fdv": fdv,
-                "confidence": 0.9  # CoinGecko is reliable
-            }
+                    return {
+                        "total_supply": None,
+                        "circulating_supply": None,
+                        "float_percent": None,
+                        "current_price": current_price,
+                        "change_24h_pct": change_24h_pct,
+                        "confidence": 0.8 # Price is reliable, supply unknown from this source
+                    }
 
         except Exception as e:
-            logger.error(f"CoinGecko fetch error for {symbol}: {e}")
+            logger.error(f"TradingView fetch error for {symbol}: {e}")
             return None
+
+        return None
 
     def _fetch_from_coinmarketcap(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Fetch from CoinMarketCap API (requires API key)."""
@@ -296,7 +308,7 @@ class TGESnapshotArchiver:
 
     def _load_tge_data(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Load original TGE data for comparison."""
-        token_file = self.TOKENS_DIR / symbol / "consolidated.json"
+        token_file = self.TOKENS_DIR / symbol.upper() / "consolidated.json"
         if not token_file.exists():
             return None
 
@@ -331,13 +343,18 @@ class TGESnapshotArchiver:
         if not snapshots:
             return None
 
-        with open(snapshots[0], 'r') as f:
-            data = json.load(f)
-
-        return SupplySnapshot(**data)
+        try:
+            with open(snapshots[0], 'r') as f:
+                data = json.load(f)
+            return SupplySnapshot(**data)
+        except Exception:
+            return None
 
     def _log_unlock_event(self, before: SupplySnapshot, after: SupplySnapshot):
         """Log detected unlock event."""
+        if not before.circulating_supply or not after.circulating_supply:
+            return
+            
         unlock_amount = after.circulating_supply - before.circulating_supply
         unlock_pct = (unlock_amount / after.total_supply) * 100 if after.total_supply else 0
 
@@ -351,7 +368,7 @@ class TGESnapshotArchiver:
             circulating_supply_after=after.circulating_supply,
             unlock_amount=unlock_amount,
             unlock_pct=unlock_pct,
-            days_since_tge=after.days_since_tge,
+            days_since_tge=after.days_since_tge or 0,
             expected_unlock=False,  # TODO: Check against schedule
             notes=f"Unlock detected: +{unlock_amount:,.0f} tokens (+{unlock_pct:.1f}%)"
         )
@@ -391,18 +408,22 @@ class TGESnapshotArchiver:
         cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
         snapshots = []
 
-        for filepath in sorted(symbol_dir.glob(f"{symbol}_*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        files = sorted(symbol_dir.glob(f"{symbol}_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for filepath in files:
             if limit and len(snapshots) >= limit:
                 break
 
-            with open(filepath, 'r') as f:
-                data = json.load(f)
+            try:
+                with open(filepath, 'r') as f:
+                    data = json.load(f)
 
-            snapshot = SupplySnapshot(**data)
-            snapshot_time = datetime.fromisoformat(snapshot.timestamp.replace('Z', '+00:00'))
+                snapshot = SupplySnapshot(**data)
+                snapshot_time = datetime.fromisoformat(snapshot.timestamp.replace('Z', '+00:00'))
 
-            if snapshot_time >= cutoff_date:
-                snapshots.append(snapshot)
+                if snapshot_time >= cutoff_date:
+                    snapshots.append(snapshot)
+            except Exception:
+                continue
 
         return snapshots
 
