@@ -43,8 +43,8 @@ def _api_headers() -> Dict[str, str]:
     return {"X-API-Key": api_key} if api_key else {}
 
 REQUIRED_FIELDS = {
-    "price": ("current_price", "price", "listing_price_low"),
-    "fdv": ("fdv", "fully_diluted_valuation", "fdv_low", "total_supply"),
+    "price": ("current_price", "price", "price_usd", "listing_price_low"),
+    "fdv": ("fdv", "fully_diluted_valuation", "fdv_low", "fdv_at_tge_low", "total_supply"),
     "market_cap": ("market_cap", "circulating_supply", "total_supply"),
 }
 ANALYSIS_REFRESH_TIMEOUT_SECONDS = 420
