@@ -140,6 +140,25 @@ def build_ta_card_embed(data: dict[str, Any]) -> dict[str, Any]:
         _format_signal_line("CVD", indicators.get("cvd_divergence"))
     )
 
+    # Session 440: Dacle Cipher Indicators
+    wt = indicators.get("wavetrend")
+    mfi = indicators.get("dacle_mfi")
+    ha = indicators.get("heikin_ashi")
+    if wt or mfi or ha:
+        dacle_parts = []
+        if wt:
+            zone = wt.get("zone", "neutral")
+            dacle_parts.append(f"WT: {zone}")
+        if mfi:
+            bias = "BULL" if mfi.get("is_bullish") else "BEAR"
+            dacle_parts.append(f"MFI: {bias}")
+        if ha:
+            ha_streak = ha.get("bullish_streak", 0)
+            ha_bias = "BULL" if ha.get("latest_is_bullish") else "BEAR"
+            dacle_parts.append(f"HA: {ha_bias}({ha_streak})")
+        if dacle_parts:
+            signal_lines.append(f"Dacle: {' | '.join(dacle_parts)}")
+
     signals_text = "\n".join(signal_lines)
 
     # --- Field 2: Confluences ---
