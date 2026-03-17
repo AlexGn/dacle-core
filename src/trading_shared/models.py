@@ -15,6 +15,7 @@ class TerminalReason(str, Enum):
     INTENT_TIMEOUT = "INTENT_TIMEOUT"
     HALT_INTERRUPT = "HALT_INTERRUPT"
     CONTROL_BLOCK = "CONTROL_BLOCK"
+    STRATEGY_VETO = "STRATEGY_VETO"
 
 class DecisionSnapshot(BaseModel):
     """Snapshot of inputs used to make the trade decision."""
