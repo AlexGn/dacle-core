@@ -12,6 +12,7 @@ import json
 from typing import Any, Dict, Optional, List
 from datetime import datetime, timezone
 from web3 import Web3
+from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
 from decimal import Decimal
 from src.execution.polymarket.nonce_registry import NonceRegistry
@@ -122,6 +123,7 @@ class PolymarketCTFExecutor:
         
         self.current_rpc_index = 0
         self.w3 = Web3(Web3.HTTPProvider(self.rpc_urls[0]))
+        self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         
         self.account = None
         self.address = None
@@ -153,6 +155,7 @@ class PolymarketCTFExecutor:
         new_rpc = self.rpc_urls[self.current_rpc_index]
         logger.warning(f"RPC failure detected. Rotating to fallback provider: {new_rpc}")
         self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+        self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         self._init_contracts()
 
     async def _call_with_rpc_retry(self, func, *args, **kwargs):
