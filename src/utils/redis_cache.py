@@ -171,7 +171,8 @@ class RedisCache:
         key: str,
         value: Any,
         ttl_seconds: Optional[int] = None,
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
+        ttl: Optional[int] = None
     ) -> bool:
         """
         Set value in cache with optional TTL.
@@ -181,6 +182,7 @@ class RedisCache:
             value: Value to cache (must be JSON-serializable)
             ttl_seconds: Time-to-live in seconds (None = no expiry)
             namespace: Optional namespace
+            ttl: Alias for ttl_seconds (Session 341 compatibility)
 
         Returns:
             True if successful, False otherwise
@@ -188,14 +190,17 @@ class RedisCache:
         if not self.enabled or not self.client:
             return False
 
+        # Session 341: Support both ttl and ttl_seconds
+        expiry = ttl_seconds if ttl_seconds is not None else ttl
+
         try:
             full_key = self._make_key(key, namespace)
 
             # Serialize to JSON
             json_value = json.dumps(value, default=self._json_default)
 
-            if ttl_seconds:
-                self.client.setex(full_key, ttl_seconds, json_value)
+            if expiry:
+                self.client.setex(full_key, expiry, json_value)
             else:
                 self.client.set(full_key, json_value)
 
@@ -394,7 +399,8 @@ def get_redis_cache() -> RedisCache:
 def with_redis_cache(
     ttl_seconds: int = 300,
     key_prefix: str = "",
-    namespace: Optional[str] = None
+    namespace: Optional[str] = None,
+    ttl: Optional[int] = None
 ):
     """
     Decorator to cache function results in Redis.
@@ -403,19 +409,17 @@ def with_redis_cache(
         ttl_seconds: Cache TTL in seconds (default: 5 minutes)
         key_prefix: Prefix for cache key (default: function name)
         namespace: Optional namespace for grouping related keys
+        ttl: Alias for ttl_seconds (Session 341 compatibility)
 
     Usage:
         @with_redis_cache(ttl_seconds=3600, namespace="conviction")
         def calculate_conviction(token_symbol: str) -> float:
             # Expensive calculation
             return score
-
-        # First call: Executes function and caches result
-        score = calculate_conviction("MONAD")  # Takes 500ms
-
-        # Second call: Returns cached result
-        score = calculate_conviction("MONAD")  # Takes <1ms
     """
+    # Session 341: Support both ttl and ttl_seconds
+    expiry = ttl_seconds if ttl is None or ttl_seconds != 300 else ttl
+
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -444,7 +448,7 @@ def with_redis_cache(
             result = func(*args, **kwargs)
 
             # Store in cache
-            cache.set(cache_key, result, ttl_seconds=ttl_seconds, namespace=namespace)
+            cache.set(cache_key, result, ttl_seconds=expiry, namespace=namespace)
 
             return result
 
