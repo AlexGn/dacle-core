@@ -507,6 +507,7 @@ def check_token_live_status(
         return {
             "is_live": False,
             "status": "Unknown",
+            "token_symbol": token_symbol.upper(),
             "error": str(e),
             "source": "coingecko"
         }

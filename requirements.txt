@@ -52,10 +52,7 @@ idna==3.11
 iniconfig==2.3.0
 jiter==0.13.0
 joblib==1.5.3
-lance-namespace==0.5.2
-lance-namespace-urllib3-client==0.5.2
 lancedb==0.25.3
-lighter-sdk==1.0.3
 lxml==6.0.2
 markdown-it-py==4.0.0
 mdurl==0.1.2
@@ -69,7 +66,6 @@ orjson==3.11.7
 packaging==26.0
 pandas==3.0.1
 parsimonious==0.10.0
-peewee==4.0.0
 pgvector==0.4.2
 pip-tools==7.5.3
 platformdirs==4.9.2
