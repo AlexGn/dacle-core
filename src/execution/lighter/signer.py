@@ -75,23 +75,28 @@ class LighterSigner:
         Signs an order using EIP-712.
         Domain is strict-validated at init for fail-fast safety.
 
-        If order_data contains a ``deadline`` key, the Order EIP-712 type is
-        extended with an optional ``deadline`` field (uint256).  This keeps
-        backward compatibility: orders without deadline use the 5-field type.
+        Lighter V2 Order Struct:
+        - subAccountIndex (uint64)
+        - marketId (uint32)
+        - side (uint8)
+        - price (uint256)
+        - size (uint256)
+        - orderType (uint8)
+        - nonce (uint32)
+        - orderExpiry (uint64)
         """
         from eth_account.messages import encode_typed_data
 
         order_fields = [
+            {"name": "subAccountIndex", "type": "uint64"},
             {"name": "marketId", "type": "uint32"},
             {"name": "side", "type": "uint8"},
             {"name": "price", "type": "uint256"},
             {"name": "size", "type": "uint256"},
+            {"name": "orderType", "type": "uint8"},
             {"name": "nonce", "type": "uint32"},
+            {"name": "orderExpiry", "type": "uint64"},
         ]
-
-        # 5.10: Extend type with deadline when present in order_data.
-        if "deadline" in order_data:
-            order_fields.append({"name": "deadline", "type": "uint256"})
 
         types = {
             "EIP712Domain": [

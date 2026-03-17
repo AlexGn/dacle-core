@@ -34,6 +34,9 @@ class VirtualLighter:
         self.auth_token = "virtual-auth-token"
         self.force_create_order_http_status: Optional[int] = None
         self.force_fetch_fills_http_status: Optional[int] = None
+        self.force_auth_expiry: bool = False
+        self.force_partial_fill_ratio: Optional[float] = None
+        self.force_ws_disconnect: bool = False
         
         self.orders: Dict[str, VirtualOrder] = {}
         self.positions: Dict[str, float] = {}
@@ -95,7 +98,7 @@ class VirtualLighter:
         """
         Simulates the Lighter Standard Tier order creation.
         """
-        if not str(self.auth_token or "").strip():
+        if not str(self.auth_token or "").strip() or self.force_auth_expiry:
             return self._error_payload(401, "Unauthorized")
 
         if self.force_create_order_http_status:
@@ -118,17 +121,24 @@ class VirtualLighter:
         await asyncio.sleep(self.latency_penalty_ms / 1000.0)
         
         order_id = f"v_ord_{int(time.time() * 1000)}"
+        
+        # Apply partial fill logic if flag is set
+        final_qty = float(qty)
+        if self.force_partial_fill_ratio is not None:
+            final_qty = round(float(qty) * self.force_partial_fill_ratio, 8)
+            logger.info(f"VirtualOrder Partial Fill Applied: ratio={self.force_partial_fill_ratio} target={qty} final={final_qty}")
+
         order = VirtualOrder(
             order_id=order_id,
             symbol=symbol,
             side=side,
             price=price,
-            qty=qty,
+            qty=final_qty,
             created_at=time.time()
         )
         self.orders[order_id] = order
         
-        logger.info(f"VirtualOrder Placed: {side} {qty} {symbol} @ {price} (Delayed {self.latency_penalty_ms}ms)")
+        logger.info(f"VirtualOrder Placed: {side} {final_qty} {symbol} @ {price} (Delayed {self.latency_penalty_ms}ms)")
         
         response = {
             "status": "success",
@@ -141,14 +151,14 @@ class VirtualLighter:
         # so daemon fill-truth logic does not need to infer fills from missing data.
         normalized_order_type = str(order_type or "IOC").upper()
         if normalized_order_type == "IOC":
-            response["filled_qty"] = float(qty)
+            response["filled_qty"] = float(final_qty)
             response["filled_price"] = float(price)
             self._append_fill(
                 order_id=order_id,
                 symbol=symbol,
                 side=side,
                 price=price,
-                qty=qty,
+                qty=final_qty,
                 role="taker",
                 order_type=normalized_order_type,
             )

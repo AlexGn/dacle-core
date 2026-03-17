@@ -169,36 +169,97 @@ class LighterRealClient:
             return "https://explorer.elliot.ai/api"
         return root.rstrip("/") + "/explorer/api"
 
-    async def _resolve_runtime_account_index(self) -> Tuple[Optional[int], Optional[str]]:
-        cached = self._to_int(self._resolved_account_index)
-        if cached is not None:
-            return cached, None
+    async def resolve_account_index(self, session: Optional[aiohttp.ClientSession] = None, api_url: Optional[str] = None) -> Tuple[Optional[int], Optional[str]]:
+        """
+        Deterministic resolver for account index.
+        1. Check memory cache (self._resolved_account_index).
+        2. Check configured property (self.account_index).
+        3. Check environment variable (SCALPER_ACCOUNT_INDEX).
+        4. Check persistent cache (Phase 2 AccountCache).
+        5. Fetch from network (/accountsByL1Address).
+        """
+        # 1. Memory cache
+        if self._resolved_account_index is not None:
+            return self._resolved_account_index, None
 
+        # 2. Configured property
         explicit = self._to_int(self.account_index)
         if explicit is not None:
             self._resolved_account_index = explicit
-            self._resolved_account_type = None
-            self._account_tier_mismatch = False
             return explicit, None
 
+        # 3. Environment variable
         env_idx = self._to_int(os.getenv("SCALPER_ACCOUNT_INDEX"))
         if env_idx is not None:
             self._resolved_account_index = env_idx
-            self._resolved_account_type = None
-            self._account_tier_mismatch = False
             return env_idx, None
 
-        if not self.signer:
-            return None, "missing signer"
+        if not self.signer or not self.signer.address:
+            return None, "missing_signer_address"
 
+        # 4. Persistent cache (Redis)
+        if self.cache:
+            cached = await self.cache.get_account_info(self.signer.address)
+            if cached and "index" in cached:
+                idx = int(cached["index"])
+                self._resolved_account_index = idx
+                self._set_account_tier_resolution(
+                    account_index=idx,
+                    account_type=self._to_int(cached.get("account_type")),
+                )
+                logger.debug(f"Resolved account index {idx} from cache.")
+                return idx, None
+
+        # 5. Network fetch
         try:
-            async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-                account_index, err = await self._resolve_account_index(session)
-                if err:
-                    return None, err
-                return account_index, None
+            if session:
+                return await self._fetch_account_index_network(session, api_url=api_url)
+            else:
+                async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as new_session:
+                    return await self._fetch_account_index_network(new_session, api_url=api_url)
         except Exception as exc:
             return None, str(exc)
+
+    async def _fetch_account_index_network(self, session: aiohttp.ClientSession, api_url: Optional[str] = None) -> Tuple[Optional[int], Optional[str]]:
+        """Internal network fetch for /accountsByL1Address."""
+        base_url = str(api_url or self.api_url).rstrip("/")
+        url = f"{base_url}/accountsByL1Address"
+        status, payload, err_text = await self._get_json(
+            session,
+            url,
+            params={"l1_address": self.signer.address},
+        )
+        if status != 200:
+            msg = self._extract_error_message(payload) or err_text
+            return None, f"HTTP {status} account lookup failed: {msg}"
+
+        if not isinstance(payload, dict):
+            return None, "Invalid account lookup payload."
+        
+        sub_accounts = payload.get("sub_accounts")
+        if not isinstance(sub_accounts, list) or not sub_accounts:
+            return None, "No sub_accounts returned for signer address."
+
+        chosen = self._choose_account_index(sub_accounts)
+        if chosen is None:
+            return None, "Unable to resolve account index from sub_accounts."
+
+        self._resolved_account_index = chosen
+        acc_type = self._lookup_account_type(sub_accounts, chosen)
+        self._set_account_tier_resolution(account_index=chosen, account_type=acc_type)
+        
+        # Phase 2: Persist to cache
+        if self.cache:
+            cache_payload: Dict[str, Any] = {"index": chosen}
+            if acc_type is not None:
+                cache_payload["account_type"] = acc_type
+            await self.cache.set_account_info(self.signer.address, cache_payload)
+            
+        return chosen, None
+
+    async def _resolve_runtime_account_index(self) -> Tuple[Optional[int], Optional[str]]:
+        """Deprecated: Use resolve_account_index instead."""
+        return await self.resolve_account_index()
 
     async def refresh_auth_token_runtime(self, reason: str = "runtime_refresh") -> dict:
         """Regenerate auth token in-process without writing .env."""
@@ -512,17 +573,39 @@ class LighterRealClient:
                 logger.warning(f"Order blocked by Risk Ledger: {reason}")
                 return {"status": "error", "error": f"BLOCKED_BY_RISK_LEDGER: {reason}", "error_code": "RISK_BLOCK"}
         
+        # Resolve V2 fields for EIP-712 signing
+        account_index = self._resolved_account_index
+        if account_index is None:
+            # Fallback to resolving it now if needed
+            logger.info("Resolving account index for V2 signing...")
+            try:
+                # We use a short-lived session here if none provided
+                async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
+                    account_index, _ = await self.resolve_account_index(session)
+            except Exception as e:
+                logger.warning(f"Failed to resolve account index for V2 signing: {e}")
+                account_index = 0
+
+        # Resolve SDK-specific order type values for signing
+        # Matches logic in _create_order_via_signer_client
+        sdk_order_type = 0 # LIMIT
+        sdk_expiry = int(time.time()) + 3600 * 24 * 28 # 28 days
+        if order_type == "IOC":
+            sdk_order_type = 1 # MARKET/IOC
+            sdk_expiry = int(time.time()) + 300 # 5 min
+        elif order_type == "POST_ONLY":
+            sdk_order_type = 0 # LIMIT
+        
         order_data = {
+            "subAccountIndex": int(account_index or 0),
             "marketId": self.market_id,
             "side": 0 if side == "BUY" else 1,
             "price": price_int,
             "size": size_int,
+            "orderType": sdk_order_type,
             "nonce": nonce,
+            "orderExpiry": sdk_expiry,
         }
-
-        # 5.10: Optional deadline in signed order data.
-        if self.enable_order_deadline:
-            order_data["deadline"] = int(time.time()) + self.order_deadline_sec
 
         signature = self.signer.sign_order(order_data)
 
@@ -535,11 +618,10 @@ class LighterRealClient:
             "nonce": nonce,
             "signature": signature,
             "timeInForce": tif,
+            "subAccountIndex": int(account_index or 0),
+            "orderType": sdk_order_type,
+            "orderExpiry": sdk_expiry,
         }
-
-        # 5.10: Include deadline in REST payload when enabled.
-        if self.enable_order_deadline:
-            payload["deadline"] = order_data["deadline"]
 
         # 5.11: Try each API URL in order; failover on transient errors.
         last_error: Optional[Exception] = None
@@ -685,7 +767,7 @@ class LighterRealClient:
         """Inner fetch_fills logic; may raise _FAILOVER_ERRORS for URL failover."""
         base_api_url = str(api_url or self.api_url).rstrip("/")
         async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-            account_index, idx_err = await self._resolve_account_index(session, api_url=base_api_url)
+            account_index, idx_err = await self.resolve_account_index(session, api_url=base_api_url)
             if idx_err:
                 return {"status": "error", "error": idx_err}
 
@@ -746,68 +828,6 @@ class LighterRealClient:
                 "warning": trades_result.get("error"),
             }
 
-    async def _resolve_account_index(
-        self,
-        session: aiohttp.ClientSession,
-        api_url: Optional[str] = None,
-    ) -> Tuple[Optional[int], Optional[str]]:
-        if self._resolved_account_index is not None:
-            return self._resolved_account_index, None
-        if not self.signer or not self.signer.address:
-            return None, "No signer address available for account lookup."
-
-        # Phase 2: Check cache first
-        if self.cache:
-            cached = await self.cache.get_account_info(self.signer.address)
-            if cached and "index" in cached:
-                self._resolved_account_index = int(cached["index"])
-                self._set_account_tier_resolution(
-                    account_index=self._resolved_account_index,
-                    account_type=self._to_int(cached.get("account_type")),
-                )
-                logger.debug(f"Resolved account index {self._resolved_account_index} from cache.")
-                return self._resolved_account_index, None
-
-        base_api_url = str(api_url or self.api_url).rstrip("/")
-        url = f"{base_api_url}/accountsByL1Address"
-        status, payload, err_text = await self._get_json(
-            session,
-            url,
-            params={"l1_address": self.signer.address},
-        )
-        if status != 200:
-            msg = self._extract_error_message(payload) or err_text
-            return None, f"HTTP {status} account lookup failed: {msg}"
-
-        if not isinstance(payload, dict):
-            return None, "Invalid account lookup payload."
-        code = self._to_int(payload.get("code"))
-        if code is not None and code != 200:
-            msg = str(payload.get("message") or "account lookup failed")
-            return None, f"Account lookup error {code}: {msg}"
-
-        sub_accounts = payload.get("sub_accounts")
-        if not isinstance(sub_accounts, list) or not sub_accounts:
-            return None, "No sub_accounts returned for signer address."
-
-        chosen = self._choose_account_index(sub_accounts)
-        if chosen is None:
-            return None, "Unable to resolve account index from sub_accounts."
-
-        self._resolved_account_index = chosen
-        self._set_account_tier_resolution(
-            account_index=chosen,
-            account_type=self._lookup_account_type(sub_accounts, chosen),
-        )
-        
-        # Phase 2: Persist to cache
-        if self.cache:
-            cache_payload: Dict[str, Any] = {"index": chosen}
-            if self._resolved_account_type is not None:
-                cache_payload["account_type"] = self._resolved_account_type
-            await self.cache.set_account_info(self.signer.address, cache_payload)
-            
-        return chosen, None
 
     def _choose_account_index(self, sub_accounts: List[Dict[str, Any]]) -> Optional[int]:
         if self.account_index is not None:
@@ -1623,7 +1643,7 @@ class LighterRealClient:
             # collateral/account metadata via accountsByL1Address.
             try:
                 async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
-                    account_index, idx_err = await self._resolve_account_index(session, api_url=api_url)
+                    account_index, idx_err = await self.resolve_account_index(session, api_url=api_url)
                     if idx_err or account_index is None or not self.signer:
                         continue
                     status, payload, _ = await self._get_json(
@@ -1697,7 +1717,7 @@ class LighterRealClient:
         for api_url in self.api_urls:
             try:
                 async with aiohttp.ClientSession(timeout=effective_timeout, headers=get_standard_headers()) as session:
-                    account_index, idx_err = await self._resolve_account_index(session, api_url=api_url)
+                    account_index, idx_err = await self.resolve_account_index(session, api_url=api_url)
                     if idx_err or account_index is None:
                         return {"status": "error", "error": idx_err or "account_index_unavailable"}
                     params: Dict[str, Any] = {"account_index": int(account_index), "limit": int(limit)}
@@ -1749,7 +1769,7 @@ class LighterRealClient:
             # Attempt to resolve account index first
             try:
                 async with aiohttp.ClientSession() as session:
-                    account_index, idx_err = await self._resolve_account_index(session)
+                    account_index, idx_err = await self.resolve_account_index(session)
                     if idx_err:
                         return {"status": "error", "error": f"Account resolution failed: {idx_err}"}
             except Exception as e:
@@ -1880,7 +1900,7 @@ class LighterRealClient:
 
         try:
             async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-                account_index, idx_err = await self._resolve_account_index(session)
+                account_index, idx_err = await self.resolve_account_index(session)
                 if idx_err:
                     return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": idx_err})
 
@@ -2176,14 +2196,19 @@ class LighterRealClient:
         }
 
         if self.signer:
-            cancel_data = {"orderId": str(order_id), "nonce": nonce}
             try:
+                # V2: Even cancellations currently reuse the Order struct with dummy values
+                # or require specific CancelOrder struct. Given the existing code reuses
+                # sign_order, we provide the V2 fields to avoid 400 Bad Request.
                 payload["signature"] = self.signer.sign_order({
+                    "subAccountIndex": int(self._resolved_account_index or 0),
                     "marketId": self.market_id,
                     "side": 0,
                     "price": 0,
                     "size": 0,
+                    "orderType": 0,
                     "nonce": nonce,
+                    "orderExpiry": 0,
                 })
             except Exception as e:
                 logger.warning(f"Failed to sign cancel for order {order_id}: {e}")
