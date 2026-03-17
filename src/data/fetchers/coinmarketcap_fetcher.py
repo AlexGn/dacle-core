@@ -92,6 +92,68 @@ class CoinMarketCapFetcher:
             logger.error(f"CoinMarketCap get_trending failed: {e}")
             return []
 
+    def get_top_market_cap(self, limit: int = 100) -> List[Dict]:
+        """
+        Get top cryptocurrencies by market capitalization.
+
+        Args:
+            limit: Number of top tokens to return (max 200 per request)
+
+        Returns:
+            List of token dicts sorted by market cap descending
+        """
+        try:
+            url = f"{self.BASE_URL}/data-api/v3/cryptocurrency/listing"
+            params = {
+                "start": 1,
+                "limit": limit,
+                "sortBy": "market_cap",
+                "sortType": "desc",
+                "convert": "USD",
+                "cryptoType": "all",
+                "tagType": "all",
+                "audited": "false",
+            }
+
+            response = self.session.get(url, params=params, timeout=self.TIMEOUT)
+            response.raise_for_status()
+
+            data = response.json()
+
+            if data.get("status", {}).get("error_code") != "0":
+                logger.warning(f"CMC market cap API returned error: {data.get('status')}")
+                return []
+
+            crypto_list = data.get("data", {}).get("cryptoCurrencyList", [])
+
+            results = []
+            for item in crypto_list:
+                quotes = item.get("quotes", [])
+                usd_quote = next((q for q in quotes if q.get("name") == "USD"), {})
+
+                results.append({
+                    "symbol": item.get("symbol", "").upper(),
+                    "name": item.get("name"),
+                    "cmc_id": item.get("id"),
+                    "cmc_slug": item.get("slug"),
+                    "cmc_rank": item.get("cmcRank"),
+                    "price_usd": usd_quote.get("price"),
+                    "volume_24h": usd_quote.get("volume24h"),
+                    "market_cap": usd_quote.get("marketCap"),
+                    "percent_change_1h": usd_quote.get("percentChange1h"),
+                    "percent_change_24h": usd_quote.get("percentChange24h"),
+                    "percent_change_7d": usd_quote.get("percentChange7d"),
+                    "data_source": "coinmarketcap_top_cap",
+                    "fetched_at": datetime.utcnow().isoformat()
+                })
+
+            logger.info(f"CoinMarketCap: Found top {len(results)} tokens by market cap")
+            return results
+
+        except Exception as e:
+            logger.error(f"CoinMarketCap get_top_market_cap failed: {e}")
+            return []
+
     def get_top_gainers(self, limit: int = 50, min_market_cap: float = 1_000_000) -> List[Dict]:
         """
         Get top gaining tokens by 24h price change.

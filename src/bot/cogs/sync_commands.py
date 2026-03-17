@@ -21,6 +21,7 @@ class SyncCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.audit_channel_id = 1474325144913838232
+        self.prop_firm_channel_id = self._resolve_prop_channel_id()
         self.discovery_channel_id = self._resolve_discovery_channel_id()
 
     @staticmethod
@@ -29,6 +30,13 @@ class SyncCommands(commands.Cog):
             return int(get_discord_channel_contract().id_for("discovery"))
         except Exception:
             return None
+
+    @staticmethod
+    def _resolve_prop_channel_id() -> Optional[int]:
+        cid = os.getenv("DISCORD_PROP_FIRM_CHANNEL_ID")
+        if cid and cid.isdigit():
+            return int(cid)
+        return None
 
     def _get_owner_id(self) -> Optional[int]:
         owner_id = os.getenv("DISCORD_OWNER_ID")
@@ -45,20 +53,24 @@ class SyncCommands(commands.Cog):
 
     @app_commands.command(name="sync", description="Total Command Purge & Fresh Re-sync (Fixes all /command issues)")
     async def sync_commands(self, interaction: discord.Interaction):
-        # Allow owner ALWAYS, or allow in #audit-token / #discovery
+        # Allow owner ALWAYS, or allow in #audit-token / #discovery / #prop-firm
         is_owner = self._is_owner(interaction.user.id)
         is_audit_channel = interaction.channel_id == self.audit_channel_id
+        is_prop_channel = (
+            self.prop_firm_channel_id is not None
+            and interaction.channel_id == self.prop_firm_channel_id
+        )
         is_discovery_channel = (
             self.discovery_channel_id is not None
             and interaction.channel_id == self.discovery_channel_id
         )
 
-        if not (is_owner or is_audit_channel or is_discovery_channel):
+        if not (is_owner or is_audit_channel or is_discovery_channel or is_prop_channel):
             await safe_send(
                 interaction,
                 command_name="sync",
                 logger=logger,
-                content="❌ You are not authorized to run /sync outside of #audit-token or #discovery.",
+                content="❌ You are not authorized to run /sync outside of #audit-token, #discovery, or #prop-firm.",
                 ephemeral=True,
             )
             return
