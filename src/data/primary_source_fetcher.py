@@ -129,7 +129,7 @@ def normalize_token_symbol(symbol: str) -> str:
     """
     if not symbol:
         return symbol
-    s = symbol.upper()
+    s = str(symbol).upper()
     if s.startswith("1000") and len(s) > 4 and s[4].isalpha():
         return s[4:]
     if s.startswith("100") and len(s) > 3 and s[3].isalpha():
@@ -137,6 +137,26 @@ def normalize_token_symbol(symbol: str) -> str:
     if s.startswith("1") and len(s) > 1 and s[1].isalpha():
         return s[1:]
     return s
+
+def get_symbol_multiplier(symbol: str) -> float:
+    """
+    Session 397: Extract numeric multiplier from symbol prefix.
+    e.g. 1000BONK -> 1000.0, 1BONK -> 1.0, BONK -> 1.0
+    """
+    if not symbol:
+        return 1.0
+    s = str(symbol).upper()
+    import re
+    match = re.match(r'^(\d+)', s)
+    if match:
+        prefix = match.group(1)
+        # Verify it's a multiplier (followed by alpha)
+        if len(s) > len(prefix) and s[len(prefix)].isalpha():
+            try:
+                return float(prefix)
+            except ValueError:
+                pass
+    return 1.0
 
 # Project root for saving files
 PROJECT_ROOT = Path(__file__).parent.parent.parent
@@ -191,6 +211,7 @@ def check_token_live_status_fast(
             return {
                 "is_live": None,
                 "status": "Unknown",
+                "token_symbol": token_symbol.upper(),
                 "error": f"DexScreener error: {response.status_code}",
                 "source": "dexscreener"
             }
@@ -204,6 +225,7 @@ def check_token_live_status_fast(
             return {
                 "is_live": None,  # Unknown - might be CEX-only
                 "status": "Unknown",
+                "token_symbol": token_symbol.upper(),
                 "reason": "Token not found on DexScreener (may be CEX-only or pre-TGE)",
                 "source": "dexscreener"
             }
@@ -224,6 +246,7 @@ def check_token_live_status_fast(
             return {
                 "is_live": None,
                 "status": "Unknown",
+                "token_symbol": token_symbol.upper(),
                 "reason": "No matching pair found",
                 "source": "dexscreener"
             }
@@ -234,12 +257,19 @@ def check_token_live_status_fast(
         market_cap = float(best_pair.get("marketCap") or 0)
         liquidity = best_pair.get("liquidity", {}).get("usd", 0)
 
+        # Session 397: Scale price by symbol multiplier (e.g. 1000BONK = 1000 * BONK price)
+        multiplier = get_symbol_multiplier(token_symbol)
+        if multiplier > 1.0 and price_usd > 0:
+            logger.info(f"📐 Scaling DexScreener price by {multiplier}x for {token_symbol}")
+            price_usd *= multiplier
+
         if price_usd > 0:
             # Token is LIVE!
             logger.info(f"🟢 LIVE CHECK: {token_symbol} is LIVE! Price: ${price_usd}, FDV: ${fdv:,.0f}")
             return {
                 "is_live": True,
                 "status": "Live",
+                "token_symbol": token_symbol.upper(),
                 "current_price": price_usd,
                 "fdv": fdv,
                 "market_cap": market_cap,
@@ -254,6 +284,7 @@ def check_token_live_status_fast(
             return {
                 "is_live": False,
                 "status": "Pre-TGE",
+                "token_symbol": token_symbol.upper(),
                 "reason": "Token found but no price data",
                 "source": "dexscreener"
             }
@@ -263,6 +294,7 @@ def check_token_live_status_fast(
         return {
             "is_live": None,
             "status": "Unknown",
+            "token_symbol": token_symbol.upper(),
             "error": "DexScreener timeout",
             "source": "dexscreener"
         }
@@ -271,6 +303,7 @@ def check_token_live_status_fast(
         return {
             "is_live": None,
             "status": "Unknown",
+            "token_symbol": token_symbol.upper(),
             "error": str(e),
             "source": "dexscreener"
         }
@@ -371,6 +404,7 @@ def check_token_live_status(
             return {
                 "is_live": False,
                 "status": "Pre-TGE",
+                "token_symbol": token_symbol.upper(),
                 "reason": "Token not found on CoinGecko",
                 "source": "coingecko"
             }
@@ -395,6 +429,7 @@ def check_token_live_status(
             logger.warning(f"CoinGecko coin data failed after retries: {e}")
             return {
                 "is_live": False,
+                "token_symbol": token_symbol.upper(),
                 "error": f"API error after retries: {str(e)}",
             }
 
@@ -402,6 +437,7 @@ def check_token_live_status(
             return {
                 "is_live": False,
                 "status": "Unknown",
+                "token_symbol": token_symbol.upper(),
                 "coingecko_id": coin_id,
                 "error": f"Coin data error: {response.status_code}",
                 "source": "coingecko"
@@ -416,6 +452,12 @@ def check_token_live_status(
         market_cap = market_data.get("market_cap", {}).get("usd")
         total_supply = market_data.get("total_supply")
         circulating_supply = market_data.get("circulating_supply")
+
+        # Session 397: Scale price by symbol multiplier (e.g. 1000BONK = 1000 * BONK price)
+        multiplier = get_symbol_multiplier(token_symbol)
+        if multiplier > 1.0 and current_price:
+            logger.info(f"📐 Scaling CoinGecko price by {multiplier}x for {token_symbol}")
+            current_price *= multiplier
 
         # Extract contract address
         platforms = coin_data.get("platforms", {})
@@ -1870,6 +1912,7 @@ def _fetch_source_wrapper(
 
         # Session 397: Implement retry with normalized symbol if original fails
         normalized_symbol = normalize_token_symbol(token)
+        retried = False
         
         if source_name in ["cryptorank", "coingecko", "coinmarketcap_full", "icodrops"]:
             data = fetch_func(token, token_name=token_name)
@@ -1877,12 +1920,28 @@ def _fetch_source_wrapper(
             if not data and normalized_symbol != token:
                 logger.info(f"Retrying {source_name} with normalized symbol: {normalized_symbol}")
                 data = fetch_func(normalized_symbol, token_name=token_name)
+                retried = True
         else:
             data = fetch_func(token)
             if not data and normalized_symbol != token:
                 logger.info(f"Retrying {source_name} with normalized symbol: {normalized_symbol}")
                 data = fetch_func(normalized_symbol)
+                retried = True
                 
+        if data:
+            # Session 397: Ensure original token_symbol is preserved in merged results
+            data["token_symbol"] = token.upper()
+            
+            # Session 397: Scale price fields if retried with normalized symbol (e.g. 1000BONK)
+            if retried:
+                multiplier = get_symbol_multiplier(token)
+                if multiplier > 1.0:
+                    logger.info(f"📐 Scaling {source_name} price fields by {multiplier}x for {token}")
+                    for price_field in ["current_price", "listing_price_low", "listing_price_high", "ath_price", "otc_price"]:
+                        val = data.get(price_field)
+                        if val and isinstance(val, (int, float)):
+                            data[price_field] = val * multiplier
+                            
         return (source_name, data)
     except Exception as e:
         logger.warning(f"{source_name} fetch failed: {e}")
@@ -2187,6 +2246,7 @@ def fetch_from_primary_sources(
     logger.info(f"Primary sources: tried={sources_tried}, succeeded={sources_succeeded}, elapsed={elapsed:.1f}s")
 
     # Add metadata
+    results["token_symbol"] = token.upper()
     results["_primary_fetch_metadata"] = {
         "token": token,
         "missing_fields_requested": missing_fields,
