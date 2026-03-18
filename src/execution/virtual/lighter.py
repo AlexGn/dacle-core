@@ -168,6 +168,11 @@ class VirtualLighter:
     async def get_balance(self) -> dict:
         return {"USDC": 10000.0, "BTC": 0.0}
 
+    async def get_balance_checked(self, timeout_sec: Optional[float] = None) -> tuple:
+        """Simulator balance fetch with its own error handling."""
+        balances = await self.get_balance()
+        return (True, balances)
+
     async def cancel_all_orders(self, symbol: Optional[str] = None):
         """Simulator: Wipes all pending orders."""
         count = len(self.orders)
