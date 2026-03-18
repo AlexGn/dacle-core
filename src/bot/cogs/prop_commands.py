@@ -57,9 +57,10 @@ class PropCommands(commands.Cog):
             
             logger.info("Executing top_50_dacle_scanner.py from /show command")
             
-            # Execute the scanner
+            # Execute the scanner using the virtual environment's python to ensure ccxt is available
+            venv_python = os.path.join(os.getcwd(), "venv/bin/python3")
             process = await asyncio.create_subprocess_exec(
-                "python3", "scripts/scanners/top_50_dacle_scanner.py",
+                venv_python, "scripts/scanners/top_50_dacle_scanner.py",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
