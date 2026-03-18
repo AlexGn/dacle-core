@@ -204,17 +204,17 @@ data/memory/
 data/.dashboard_prefs.json
 data/alerts_cache.json
 data/alpha_callers.json
-data/conviction_signals.json
+# data/conviction_signals.json
 data/dead_letter_queue.json
-data/enriched_projects.json
-data/exchange_tiers.json
-data/fundraising_tracker.json
-data/historical_tges.csv
+# data/enriched_projects.json
+# data/exchange_tiers.json (Un-ignored Session 457)
+# data/fundraising_tracker.json (Un-ignored Session 457)
+# data/historical_tges.csv (Un-ignored Session 457)
 data/learning_effectiveness.json
 data/shadow_journal.json
 data/validation_artifact.json
-data/vc_comprehensive_database.json
-# data/vc_tier_classification.json (Un-ignored in Session 457 - required for analysis)
+# data/vc_comprehensive_database.json (Un-ignored Session 457)
+# data/vc_tier_classification.json (Un-ignored Session 457)
 
 # News and Polymarket Runtime State (Session 527 Cleanup)
 data/seen_headlines.json
