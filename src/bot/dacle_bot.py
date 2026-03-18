@@ -274,24 +274,6 @@ class DACLEBot(commands.Bot):
         
         while not self.is_closed():
             try:
-                # 0. Heartbeat "Pulse Dot" (Every 60 minutes)
-                now = time.time()
-                last_pulse = getattr(self, "_last_pulse_time", 0)
-                if (now - last_pulse) >= 3600:
-                    try:
-                        # Use logs channel from config (Session 522 Hardening)
-                        config = getattr(self, "config", None)
-                        logs_channel_id = getattr(config, 'logs_channel_id', None) if config else None
-                        pulse_symbol = getattr(config, 'heartbeat_pulse_symbol', '🟢') if config else '🟢'
-                        if logs_channel_id:
-                            channel = self.get_channel(int(logs_channel_id))
-                            if channel:
-                                await channel.send(pulse_symbol)
-                                self._last_pulse_time = now
-                                logger.info(f"💓 SENTINEL: Heartbeat pulse ({pulse_symbol}) sent to logs channel.")
-                    except Exception as pulse_err:
-                        logger.warning(f"⚠️ Pulse dot failed: {pulse_err}")
-
                 # A. Watcher: Sweep positions (Every cycle)
                 await watcher.watch_cycle()
                 
