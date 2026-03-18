@@ -256,8 +256,8 @@ class SetLevelsModal(discord.ui.Modal):
         approved = ptc.get("approved", False) if isinstance(ptc, dict) else False
         formatted = api_result.get("formatted_response") or ""
 
-        status_emoji = "\u2705" if approved else "\U0001f6d1"
-        status_word = "APPROVED" if approved else "BLOCKED"
+        status_emoji = "\u2705" if approved else "⛔"
+        status_word = "ENTER — APPROVED" if approved else "SKIP — BLOCKED"
         color = discord.Color.green() if approved else discord.Color.red()
 
         embed = discord.Embed(

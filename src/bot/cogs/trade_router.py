@@ -320,25 +320,44 @@ class TradeRouter(commands.Cog):
 
     def format_score_decision(self, card: Dict[str, Any]) -> str:
         threshold = 8.0 if card["direction"] == "SHORT" else 8.5
-        approved = card["entry_score"] >= threshold
-        status_emoji = "✅" if approved else "❌"
-        status_word = "EXECUTE" if approved else "SKIP"
-        
-        rr_line = f"• R:R: {card['rr_ratio']:.1f}:1" if card["rr_ratio"] else "• R:R: N/A"
-        if card["rr_ratio"]:
-             rr_line += " ✅" if card["rr_ratio"] >= 2.0 else " ⚠️ (below 2.0)"
+        score = card.get("entry_score", 0.0)
+        approved = score >= threshold
+
+        rr = card.get("rr_ratio")
+        rr_line = f"• R:R: {rr:.1f}:1" if rr else "• R:R: N/A"
+        if rr:
+             rr_line += " ✅" if rr >= 2.0 else " ⚠️ (below 2.0)"
+
+        # Infer setup quality based on R:R (if present) and score
+        if not approved:
+            status_emoji = "⛔"
+            status_word = "SKIP — BLOCKED"
+            david = "NO"
+        else:
+            status_emoji = "✅"
+            if score >= 8.0 and (rr is None or rr >= 3.0):
+                status_word = "ENTER — STRONG SETUP"
+                david = "YES"
+            elif score >= 7.0 and (rr is None or rr >= 2.0):
+                status_word = "ENTER — GOOD SETUP"
+                david = "YES"
+            elif score >= 5.0 and (rr is None or rr >= 2.0):
+                status_word = "ENTER — ACCEPTABLE"
+                david = "NO (Acceptable, but strict entry criteria applies)"
+            else:
+                status_word = "ENTER — WEAK — MONITOR ONLY"
+                david = "NO"
 
         return (
             f"{status_emoji} {card['token']} {card['direction']} — {status_word}\n"
-            f"**David should trade now:** {'YES' if approved else 'NO'}\n\n"
+            f"**David should trade now:** {david}\n\n"
             f"📊 **Score-Only Evaluation:**\n"
-            f"• Entry Score: {card['entry_score']:.1f}/10\n"
+            f"• Entry Score: {score:.1f}/10\n"
             f"{rr_line}\n"
             f"• Threshold ({card['direction']}): {threshold:.1f}/10\n\n"
             f"**Decision:** {status_emoji} {status_word}\n"
             f"{'Meets score threshold. Post full Entry/SL/Target to run full risk diagnostics.' if approved else 'Below threshold. Post full Entry/SL/Target only if you want full risk diagnostics.'}"
         )
-
     @app_commands.command(name="rerun", description="Re-run trade analysis with current market data")
     async def rerun(self, interaction: discord.Interaction):
         account_id = self._resolve_account_id()
@@ -727,8 +746,8 @@ class TradeRouter(commands.Cog):
         formatted = api_result.get("formatted_response") or ""
 
         # Build embed
-        status_emoji = "\u2705" if approved else "\U0001f6d1"
-        status_word = "APPROVED" if approved else "BLOCKED"
+        status_emoji = "\u2705" if approved else "⛔"
+        status_word = "ENTER — APPROVED" if approved else "SKIP — BLOCKED"
         color = discord.Color.green() if approved else discord.Color.red()
 
         embed = discord.Embed(
@@ -867,8 +886,8 @@ class LevelsResultView(discord.ui.View):
             )
 
             # Build condensed PTC summary for thread
-            status_emoji = "\u2705" if self._approved else "\U0001f6d1"
-            status_word = "APPROVED" if self._approved else "BLOCKED"
+            status_emoji = "\u2705" if self._approved else "⛔"
+            status_word = "ENTER — APPROVED" if self._approved else "SKIP — BLOCKED"
 
             lines = [f"{status_emoji} **Pre-Trade Check: {status_word}**"]
 
