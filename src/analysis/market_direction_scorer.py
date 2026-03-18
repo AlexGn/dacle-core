@@ -70,10 +70,10 @@ def load_weights() -> dict:
 
     config_path = CONFIG_DIR / "market_direction_weights.json"
     defaults = {
-        "btc_trend": 0.17, "btc_rsi": 0.07, "btcdom": 0.10,
+        "btc_trend": 0.14, "btc_ma200": 0.10, "btc_halving": 0.05, "btc_rsi": 0.07, "btcdom": 0.10,
         "usdt_d": 0.10, "total3": 0.10, "fear_greed": 0.07,
-        "funding": 0.08, "btc_structure": 0.17,
-        "oi_trend": 0.08, "ls_ratio": 0.06, "volume_profile": 0.05,
+        "funding": 0.08, "btc_structure": 0.14,
+        "oi_trend": 0.08, "ls_ratio": 0.05, "volume_profile": 0.04,
         "external_macro": 0.15, "liquidity_fuel": 0.10,
     }
     try:
@@ -287,6 +287,68 @@ def _score_btc_trend_mtf(
 
     label = f"{trend} (${price:,.0f}) — {', '.join(labels)}"
     return SignalResult("BTC Trend", w, score, price, label, emoji)
+
+
+def _score_btc_ma200(price: float, ma200: Optional[float]) -> SignalResult:
+    """BTC MA 200 (Daily) — Institutional Regime Filter.
+
+    Price > MA 200: Bullish (+1.0)
+    Price < MA 200: Bearish (-1.0)
+    Proximity modifier: score is attenuated when very close to the level.
+    """
+    w = load_weights().get("btc_ma200", 0.10)
+    if not price or not ma200:
+        return SignalResult("BTC MA 200", w, 0.0, None, "N/A", "⚪")
+
+    dist_pct = ((price - ma200) / ma200) * 100
+
+    if price > ma200:
+        # Full bullish if > 2% above, else partial
+        score = min(dist_pct / 2.0, 1.0) if dist_pct < 2.0 else 1.0
+        label = f"ABOVE MA 200 ({dist_pct:+.1f}%)"
+        emoji = "🟢"
+    else:
+        # Full bearish if > 2% below, else partial
+        score = max(dist_pct / 2.0, -1.0) if dist_pct > -2.0 else -1.0
+        label = f"BELOW MA 200 ({dist_pct:+.1f}%)"
+        emoji = "🔴"
+
+    return SignalResult("BTC MA 200", w, round(score, 3), round(ma200, 1), label, emoji)
+
+
+def _score_btc_halving() -> SignalResult:
+    """BTC Halving Cycle — Structural Bias (Gap K).
+
+    Last Halving: 2024-04-20
+    Cycle Phases (Approximate):
+    - 0-400 days: Early Bull (+0.5)
+    - 400-800 days: Mid Bull (+1.0)
+    - 800-1100 days: Distribution (-0.5)
+    - 1100-1460 days: Late Bear/Accumulation (+0.2)
+    """
+    w = load_weights().get("btc_halving", 0.05)
+    last_halving = datetime(2024, 4, 20, tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    days_since = (now - last_halving).days
+
+    if days_since < 400:
+        score = 0.5
+        label = f"EARLY BULL ({days_since}d post-halving)"
+        emoji = "🌱"
+    elif days_since < 800:
+        score = 1.0
+        label = f"MID BULL ({days_since}d post-halving)"
+        emoji = "🚀"
+    elif days_since < 1100:
+        score = -0.5
+        label = f"DISTRIBUTION ({days_since}d post-halving)"
+        emoji = "⚠️"
+    else:
+        score = 0.2
+        label = f"ACCUMULATION ({days_since}d post-halving)"
+        emoji = "🧱"
+
+    return SignalResult("BTC Halving", w, score, float(days_since), label, emoji)
 
 
 def _score_btc_rsi(rsi: Optional[float]) -> SignalResult:
@@ -921,9 +983,29 @@ async def calculate_direction_bias() -> DirectionUpdate:
         baseline = await _calculate_direction_bias_impl(use_realism=False)
         candidate = await _calculate_direction_bias_impl(use_realism=True)
         _append_shadow_compare(baseline, candidate)
-        return candidate if candidate_enabled else baseline
+        update = candidate if candidate_enabled else baseline
+    else:
+        update = await _calculate_direction_bias_impl(use_realism=candidate_enabled)
 
-    return await _calculate_direction_bias_impl(use_realism=candidate_enabled)
+    # Save latest update to disk for other services (L088/LongScorer)
+    _save_latest_market_direction(update)
+
+    return update
+
+
+def _save_latest_market_direction(update: DirectionUpdate) -> None:
+    """Save the full market direction payload to a centralized cache file."""
+    try:
+        cache_file = DATA_DIR / "cache" / "market_direction_latest.json"
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        
+        payload = update.to_dict()
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
+            
+        logger.debug(f"Saved latest market direction update to {cache_file.name}")
+    except Exception as e:
+        logger.warning(f"Failed to save market direction cache: {e}")
 
 
 async def _calculate_direction_bias_impl(use_realism: bool = False) -> DirectionUpdate:
@@ -1068,22 +1150,29 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
             except Exception as e:
                 logger.debug(f"L/S ratio fetch failed: {e}")
 
-            # Daily klines for EMA20(1D) — multi-TF BTC trend
+            # Daily klines for EMA20(1D) + MA200(1D) — institutional regime
             btc_ema20_1d = None
+            btc_ma200_1d = None
             try:
                 daily_resp = await client.get(
                     "https://api.binance.com/api/v3/klines",
-                    params={"symbol": "BTCUSDT", "interval": "1d", "limit": 30}
+                    params={"symbol": "BTCUSDT", "interval": "1d", "limit": 250}
                 )
                 if daily_resp.status_code == 200:
                     daily_klines = daily_resp.json()
                     daily_closes = [float(k[4]) for k in daily_klines]
+                    
+                    # EMA 20 (Daily)
                     if len(daily_closes) >= 20:
                         mult_d = 2 / 21
                         ema_d = sum(daily_closes[:20]) / 20
                         for p in daily_closes[20:]:
                             ema_d = (p - ema_d) * mult_d + ema_d
                         btc_ema20_1d = ema_d
+
+                    # SMA 200 (Daily) - Institutional Regime Filter (Gap E)
+                    if len(daily_closes) >= 200:
+                        btc_ma200_1d = sum(daily_closes[-200:]) / 200
 
                     # Calculate 7-day range (high-low) %
                     if len(daily_klines) >= 7:
@@ -1285,6 +1374,8 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
 
     signals = [
         btc_trend_signal,
+        _score_btc_ma200(btc_price or 0, btc_ma200_1d),
+        _score_btc_halving(),
         _score_btc_rsi(btc_rsi),
         _score_btcdom(btcdom_change_24h, btcdom_value),
         _score_usdt_d(usdt_d_change_24h, usdt_d_value),
@@ -1327,6 +1418,11 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
 
     if composite > 0.30:
         bias = DirectionBias.BULLISH
+        # Institutional Veto (Gap E): Cap BULLISH bias if BTC < MA 200
+        if btc_ma200_1d and btc_price and btc_price < btc_ma200_1d:
+            bias = DirectionBias.NEUTRAL
+            composite = min(composite, 0.25)
+            logger.info(f"VETO: BULLISH bias capped at NEUTRAL because BTC (${btc_price:,.0f}) < MA 200 (${btc_ma200_1d:,.0f})")
     elif composite < -0.30:
         bias = DirectionBias.BEARISH
     else:
