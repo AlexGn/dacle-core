@@ -181,6 +181,7 @@ data/audit/
 data/metrics/
 data/execution/execution_guard_metrics.json
 polymarket_raw_frames.json
+data/trades/*_sync_state.json
 
 # Prevent claude-mem from creating CLAUDE.md stubs everywhere (Session 382)
 # Only allow root CLAUDE.md (project changelog)
