@@ -214,7 +214,7 @@ data/learning_effectiveness.json
 data/shadow_journal.json
 data/validation_artifact.json
 data/vc_comprehensive_database.json
-data/vc_tier_classification.json
+# data/vc_tier_classification.json (Un-ignored in Session 457 - required for analysis)
 
 # News and Polymarket Runtime State (Session 527 Cleanup)
 data/seen_headlines.json
