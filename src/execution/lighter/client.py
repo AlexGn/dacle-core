@@ -1803,11 +1803,40 @@ class LighterRealClient:
         if not candidate_urls:
             candidate_urls.append(str(self.api_url or "").strip().rstrip("/"))
 
+        # api_key_index is needed by the /nextNonce endpoint (SDK-canonical path).
+        api_key_index = int(self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=0) or 0)
+
         best_result: Optional[dict] = None
         last_error: Optional[str] = None
         try:
             async with aiohttp.ClientSession(headers=get_standard_headers()) as session:
                 for base_url in candidate_urls:
+                    # --- Primary: /nextNonce (SDK-canonical, no auth required, always public) ---
+                    next_nonce_url = f"{base_url}/nextNonce"
+                    try:
+                        async with session.get(
+                            next_nonce_url,
+                            params={"account_index": account_index, "api_key_index": api_key_index},
+                        ) as resp:
+                            if resp.status == 200:
+                                data = await resp.json(content_type=None)
+                                nonce_val = data.get("nonce", 0) if isinstance(data, dict) else (data if isinstance(data, int) else 0)
+                                nonce_result = {
+                                    "status": "success",
+                                    "nonce": int(nonce_val),
+                                    "source": "nextNonce_endpoint",
+                                    "url": base_url,
+                                }
+                                if best_result is None or int(nonce_result["nonce"]) > int(best_result["nonce"]):
+                                    best_result = nonce_result
+                                continue
+                            else:
+                                err_text = await resp.text()
+                                logger.debug("nextNonce endpoint returned %s: %s", resp.status, err_text[:100])
+                    except Exception as exc:
+                        logger.debug("nextNonce fetch error via %s: %s", base_url, exc)
+
+                    # --- Fallback: /account/{id}/nonce (auth-gated, may return 403) ---
                     url = f"{base_url}/account/{account_index}/nonce"
                     try:
                         async with session.get(url, params=params) as resp:
