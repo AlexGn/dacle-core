@@ -199,6 +199,7 @@ data/config/
 data/execution/
 data/events/
 data/telemetry/
+data/trades/
 data/.dashboard_prefs.json
 data/alerts_cache.json
 data/alpha_callers.json
