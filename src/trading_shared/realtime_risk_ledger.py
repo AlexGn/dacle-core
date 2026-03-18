@@ -72,6 +72,8 @@ class RealTimeRiskLedger:
         self.k_synth_stop_price = f"{self.prefix}:synthetic_stop_price"
         self.k_synth_stop_reason = f"{self.prefix}:synthetic_stop_reason"
         self.k_synth_stop_ts = f"{self.prefix}:synthetic_stop_ts"
+        # Rolling 24h PnL tracking (Gap: Calendar vs Rolling)
+        self.k_pnl_history = f"{self.prefix}:pnl_history_zset"
 
     async def rebind_symbol(self, new_symbol: str):
         self.symbol = new_symbol
@@ -181,6 +183,20 @@ class RealTimeRiskLedger:
             # We will just rely on the caller to update notional or we update it.
             
             pipe.set(self.k_last_fill, str(now))
+            
+            # Log for rolling 24h PnL window
+            net_delta = realized_pnl_delta - fee_usd - slippage_usd
+            if net_delta != 0:
+                # Use a unique member (timestamp:rand) to handle multiple fills in same second
+                import random
+                member = f"{now}:{random.randint(0, 9999)}"
+                pipe.zadd(self.k_pnl_history, {member: now})
+                # We store the delta in a separate key mapping member -> delta
+                # Actually, simpler to just store delta in a separate key and use zremrangebyscore
+                # Wait, Redis doesn't have zrange with values.
+                # Let's use a simple HSET for (member -> delta) and ZSET for (member -> ts).
+                pipe.hset(f"{self.k_pnl_history}:data", member, str(net_delta))
+            
             await pipe.execute()
 
         # After recording, check limits
@@ -196,9 +212,39 @@ class RealTimeRiskLedger:
 
     async def _check_limits(self):
         """Check if limits breached and update risk state if necessary."""
-        realized = float(await self._redis.get(self.k_realized) or 0.0)
+        now = int(time.time())
+        cutoff = now - 86400
+
+        # 1. Cleanup and sum rolling realized PnL from zset
+        # We need to get all members within [cutoff, +inf]
+        members = await self._redis.zrangebyscore(self.k_pnl_history, cutoff, "+inf")
+        
+        rolling_realized = 0.0
+        if members:
+            # Fetch all deltas for these members
+            deltas = await self._redis.hmget(f"{self.k_pnl_history}:data", members)
+            rolling_realized = sum(float(d or 0.0) for d in deltas)
+
+        # 2. Cleanup old entries to prevent zset bloat
+        # Remove members older than 24h
+        old_members = await self._redis.zrangebyscore(self.k_pnl_history, "-inf", cutoff - 1)
+        if old_members:
+            async with self._redis.pipeline(transaction=True) as pipe:
+                pipe.zremrangebyscore(self.k_pnl_history, "-inf", cutoff - 1)
+                pipe.hdel(f"{self.k_pnl_history}:data", *old_members)
+                await pipe.execute()
+
+        # 3. Current Floating PnL
         unrealized = float(await self._redis.get(self.k_unrealized) or 0.0)
-        fees = float(await self._redis.get(self.k_fees) or 0.0)
+        
+        # total_rolling_pnl = rolling_realized_net + current_unrealized
+        total_rolling_pnl = rolling_realized + unrealized
+
+        # Session-level PnL (for catastrophic stop)
+        realized_session = float(await self._redis.get(self.k_realized) or 0.0)
+        fees_session = float(await self._redis.get(self.k_fees) or 0.0)
+        total_session_pnl = realized_session + unrealized - fees_session
+
         current_state_raw = await self._redis.get(self.k_risk_state)
         current_state = (
             current_state_raw.decode('utf-8')
@@ -206,22 +252,22 @@ class RealTimeRiskLedger:
             else str(current_state_raw or "")
         )
         
-        total_pnl = realized + unrealized - fees
-        
-        if total_pnl <= -self.catastrophic_loss_limit_usd:
-            breach_signature = (RiskState.HARD_STOP.value, round(total_pnl, 8))
+        # Priority 1: Catastrophic Stop (Session Level)
+        if total_session_pnl <= -self.catastrophic_loss_limit_usd:
+            breach_signature = (RiskState.HARD_STOP.value, round(total_session_pnl, 8))
             if current_state != RiskState.HARD_STOP.value:
                 await self.set_risk_state(RiskState.HARD_STOP)
             if self._last_limit_breach_signature != breach_signature:
-                self._log.critical(f"CATASTROPHIC LOSS LIMIT REACHED: {total_pnl}")
+                self._log.critical(f"CATASTROPHIC LOSS LIMIT REACHED: {total_session_pnl}")
                 self._last_limit_breach_signature = breach_signature
-        elif total_pnl <= -self.daily_loss_limit_usd:
-            breach_signature = (RiskState.BLOCK.value, round(total_pnl, 8))
+        # Priority 2: Daily Loss Limit (Rolling 24h Level)
+        elif total_rolling_pnl <= -self.daily_loss_limit_usd:
+            breach_signature = (RiskState.BLOCK.value, round(total_rolling_pnl, 8))
             if current_state != RiskState.HARD_STOP.value:
                 if current_state != RiskState.BLOCK.value:
                     await self.set_risk_state(RiskState.BLOCK)
                 if self._last_limit_breach_signature != breach_signature:
-                    self._log.error(f"DAILY LOSS LIMIT REACHED: {total_pnl}")
+                    self._log.error(f"DAILY ROLLING LOSS LIMIT REACHED: {total_rolling_pnl}")
                     self._last_limit_breach_signature = breach_signature
         else:
             self._last_limit_breach_signature = None
@@ -279,6 +325,9 @@ class RealTimeRiskLedger:
             pipe.set(self.k_synth_stop_price, "0.0")
             pipe.set(self.k_synth_stop_reason, "")
             pipe.set(self.k_synth_stop_ts, "0")
+            # Clear rolling history
+            pipe.delete(self.k_pnl_history)
+            pipe.delete(f"{self.k_pnl_history}:data")
             await pipe.execute()
         self._last_limit_breach_signature = None
         self._log.info(f"[{self.prefix}] Risk Ledger RESET.")

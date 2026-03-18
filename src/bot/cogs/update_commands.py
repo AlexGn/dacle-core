@@ -228,7 +228,7 @@ class UpdateCommands(commands.Cog):
                 if transient and attempt < self.api_post_attempts:
                     await asyncio.sleep(self._retry_delay(attempt))
                     continue
-                return None
+                return {"request_status": "error", "error": f"HTTP {resp.status_code}: {resp.text}"}
             except Exception as e:
                 logger.warning(
                     "/discovery POST %s failed (attempt %s/%s): %s",
@@ -240,8 +240,8 @@ class UpdateCommands(commands.Cog):
                 if attempt < self.api_post_attempts:
                     await asyncio.sleep(self._retry_delay(attempt))
                     continue
-                return None
-        return None
+                return {"request_status": "error", "error": f"{type(e).__name__}: {e}"}
+        return {"request_status": "error", "error": "Max retries exhausted"}
 
     async def _api_get(self, path: str) -> Optional[Dict[str, Any]]:
         url = f"{self.api_url}{path}"
@@ -264,7 +264,7 @@ class UpdateCommands(commands.Cog):
                 if transient and attempt < self.api_get_attempts:
                     await asyncio.sleep(self._retry_delay(attempt))
                     continue
-                return None
+                return {"request_status": "error", "error": f"HTTP {resp.status_code}: {resp.text}"}
             except Exception as e:
                 logger.warning(
                     "/discovery GET %s failed (attempt %s/%s): %s",
@@ -276,8 +276,8 @@ class UpdateCommands(commands.Cog):
                 if attempt < self.api_get_attempts:
                     await asyncio.sleep(self._retry_delay(attempt))
                     continue
-                return None
-        return None
+                return {"request_status": "error", "error": f"{type(e).__name__}: {e}"}
+        return {"request_status": "error", "error": "Max retries exhausted"}
 
     @staticmethod
     def _remaining_cooldown_seconds(run: Dict[str, Any]) -> int:
