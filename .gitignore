@@ -200,6 +200,7 @@ data/execution/
 data/events/
 data/telemetry/
 data/trades/
+data/memory/
 data/.dashboard_prefs.json
 data/alerts_cache.json
 data/alpha_callers.json
