@@ -24,6 +24,7 @@ from src.bot.cogs.analysis_views import TradeApprovalView
 from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.bot.utils.safe_task import safe_create_task
 from src.bot.runtime_routing import get_bot_api_base_url, resolve_channel
+from src.bot.utils.api_client import api_request
 from api.routers.macro import get_btc_regime_widget
 
 logger = get_logger(__name__)
@@ -43,9 +44,11 @@ def _api_headers() -> Dict[str, str]:
     return {"X-API-Key": api_key} if api_key else {}
 
 REQUIRED_FIELDS = {
-    "price": ("current_price", "price", "price_usd", "listing_price_low"),
-    "fdv": ("fdv", "fully_diluted_valuation", "fdv_low", "fdv_at_tge_low", "total_supply"),
-    "market_cap": ("market_cap", "circulating_supply", "total_supply"),
+    "price": ("current_price", "price"),
+    "fdv": ("fdv", "fully_diluted_valuation"),
+    "market_cap": ("market_cap",),
+    # float_percent: scorer handles missing gracefully (0/5 score + "MISSING DATA" flag).
+    # Hard-gating here blocks established tokens (e.g. TAO) where sources lack supply data.
 }
 ANALYSIS_REFRESH_TIMEOUT_SECONDS = 420
 ANALYSIS_PIPELINE_TIMEOUT_SECONDS = 240
@@ -189,7 +192,32 @@ def _check_ta_freshness(symbol: str) -> bool:
         return False
 
 
+def _request_with_retry(
+    method: str,
+    url: str,
+    *,
+    retries: int = 0,
+    retry_delay_seconds: float = 1.0,
+    **kwargs: Any,
+) -> requests.Response:
+    """Execute an HTTP request with optional timeout retries."""
+    for attempt in range(1, retries + 2):
+        try:
+            return requests.request(method=method, url=url, **kwargs)
+        except requests.RequestException as exc:
+            if not (_is_timeout_like_error(exc) or _is_local_api_unavailable_error(exc)):
+                raise
+            if attempt > retries:
+                if _is_local_api_unavailable_error(exc):
+                    raise requests.ConnectionError(str(exc)) from exc
+                raise requests.Timeout(str(exc)) from exc
+            logger.warning(
+                f"Transient local API error on {method} {url} (attempt {attempt}/{retries + 1}); "
+                f"retrying in {retry_delay_seconds}s"
+            )
+            time.sleep(retry_delay_seconds)
 
+    raise RuntimeError(f"Unexpected retry exhaustion for {method} {url}")
 
 
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
@@ -467,8 +495,6 @@ class AnalysisCommands(commands.Cog):
 
         entry = self._analyze_request_state.get(key)
         if entry and entry.get("state") == "active":
-            if entry.get("request_id") == request_id:
-                return True # Allow update for same interaction
             return False # Block concurrent for different interaction/retry
 
         self._analyze_request_state[key] = {
@@ -917,84 +943,105 @@ class AnalysisCommands(commands.Cog):
         }
         self._write_disambiguation_cache(cache)
 
-    async def _search_token(self, symbol: str) -> List[Dict[str, Any]]:
-        payload = await api_request("POST", "/api/tokens/search", json={"symbol": symbol.upper()})
+    def _search_token(self, symbol: str) -> List[Dict[str, Any]]:
+        api_base = _get_api_base_url()
+        url = f"{api_base}/api/tokens/search"
+        resp = _request_with_retry(
+            "POST",
+            url,
+            json={"symbol": symbol.upper()},
+            headers=_api_headers(),
+            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
+            retries=1,
+            retry_delay_seconds=1.0,
+        )
+        resp.raise_for_status()
+        payload = resp.json() or {}
         return payload.get("matches") or []
 
     async def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
+        """Trigger NEW token research and wait for completion (async)."""
         payload = await api_request(
-            "POST", "/api/tokens/research", json={"symbol": symbol.upper(), "name": name}
+            "POST", 
+            "/api/tokens/research/run",
+            json={"symbol": symbol.upper(), "name": name}
         )
+        
+        if not payload or "_status" in payload:
+            raise RuntimeError(f"Research kickoff failed (status={payload.get('_status') if payload else 'None'})")
+            
         task_id = payload.get("task_id")
         if not task_id:
             raise RuntimeError("Research did not return a task_id")
 
-        status_url = f"/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            try:
-                status_payload = await api_request("GET", status_url, retries=1, retry_delay=1.0)
-                status = status_payload.get("status")
-                if status in {"completed", "completed_with_warnings"}:
-                    return status_payload
-                if status in {"failed", "skipped"}:
-                    raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
-            except BotAPIError as e:
-                # Ignore 404s which mean the task is not yet ready
-                if e.status_code != 404:
-                    raise
+            status_payload = await api_request("GET", f"/api/tokens/research/{task_id}")
+            
+            if not status_payload or "_status" in status_payload:
+                if status_payload and status_payload.get("_status") == 404:
+                    await asyncio.sleep(2)
+                    continue
+                raise RuntimeError(f"Poll failed (status={status_payload.get('_status') if status_payload else 'None'})")
+
+            status = status_payload.get("status")
+            if status in {"completed", "completed_with_warnings"}:
+                return status_payload
+            if status in {"failed", "skipped"}:
+                raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
             
             if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
                 raise TimeoutError(f"Research timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
+
             await asyncio.sleep(2)
 
     async def _refresh_or_research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
-        """Prefer refetch for existing tokens; fallback to research for missing tokens."""
+        """Prefer refetch for existing tokens; fallback to research for missing tokens (async)."""
         try:
             return await self._refresh_token_data(symbol)
-        except BotAPIError as e:
-            if e.status_code == 404:
-                logger.info(f"[{symbol}] Refetch returned 404, falling back to research with name='{name}'")
+        except RuntimeError as e:
+            if "status=404" in str(e):
+                logger.info(
+                    f"[{symbol}] Refetch returned 404, falling back to research with name='{name}'"
+                )
                 return await self._research_token_data(symbol, name)
             raise
 
     async def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
-        """Trigger token refetch and wait for completion."""
+        """Trigger token refetch and wait for completion (async)."""
         payload = await api_request(
-            "POST",
+            "POST", 
             f"/api/tokens/{symbol}/refetch",
-            params={"force": "true", "auto_analyze": "false"},
+            params={"force": "true", "auto_analyze": "false"}
         )
+        
+        if not payload or "_status" in payload:
+            raise RuntimeError(f"Refetch kickoff failed (status={payload.get('_status') if payload else 'None'})")
+            
         task_id = payload.get("task_id")
         if not task_id:
             raise RuntimeError("Refetch did not return a task_id")
 
-        status_url = f"/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            try:
-                status_payload = await api_request("GET", status_url, retries=1, retry_delay=1.0)
-                status = status_payload.get("status")
-                if status in {"completed", "completed_with_warnings"}:
-                    return status_payload
-                if status in {"failed", "skipped"}:
-                    raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
-            except BotAPIError as e:
-                 if e.status_code != 404:
-                    raise
+            status_payload = await api_request("GET", f"/api/tokens/research/{task_id}")
             
-            if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
-                raise TimeoutError(f"Refetch polling timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
-            await asyncio.sleep(2)
-            status_payload = status_resp.json()
+            if not status_payload or "_status" in status_payload:
+                if status_payload and status_payload.get("_status") == 404:
+                    await asyncio.sleep(2)
+                    continue
+                raise RuntimeError(f"Poll failed (status={status_payload.get('_status') if status_payload else 'None'})")
+
             status = status_payload.get("status")
             if status in {"completed", "completed_with_warnings"}:
                 return status_payload
             if status in {"failed", "skipped"}:
                 raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Refetch failed")
+            
             if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
                 raise TimeoutError(f"Refetch timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
-            time.sleep(2)
+
+            await asyncio.sleep(2)
 
     def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
         consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
@@ -1173,13 +1220,14 @@ class AnalysisCommands(commands.Cog):
 
         symbol = symbol.upper()
         request_id = f"analyze-{interaction.id}"
+        invoke_channel = interaction.channel
         logger.info(
             "ANALYZE_SLASH_START "
             f"request_id={request_id} "
+            f"symbol={symbol} "
             f"user_id={interaction.user.id} "
-            f"symbol={symbol}"
+            f"channel_id={getattr(invoke_channel, 'id', 'unknown')}"
         )
-        invoke_channel = interaction.channel
         analysis_channel = self._resolve_analysis_channel()
         if analysis_channel is None:
             analysis_channel = invoke_channel if _is_supported_analysis_channel(invoke_channel) else None
@@ -1194,11 +1242,28 @@ class AnalysisCommands(commands.Cog):
             )
             return
 
-        # 1. Quietly acknowledge the interaction
+        if not self._mark_analyze_request_started(
+            interaction.user,
+            symbol,
+            request_id,
+            getattr(analysis_channel, "mention", None) or "the analysis channel",
+        ):
+            duplicate_notice = self._duplicate_analyze_notice(interaction.user, symbol)
+            await interaction.response.send_message(
+                content=duplicate_notice or f"⏳ **{symbol}** is already being analyzed.",
+                ephemeral=True,
+            )
+            return
+
+        # 1. Immediately acknowledge the slash command with an ephemeral status ping.
         try:
-            await interaction.response.defer(ephemeral=True)
+            await interaction.response.send_message(
+                content=f"🔍 Analyzing **{symbol}**...",
+                ephemeral=True,
+            )
         except Exception as e:
-            logger.error(f"Failed to defer interaction: {e}")
+            logger.error(f"Failed to acknowledge interaction: {e}")
+            self._finalize_analyze_request(interaction.user, symbol, request_id)
             return
 
         # 2. Pre-flight De-confliction: Check if another bot already started this in the last 60s
@@ -1212,17 +1277,18 @@ class AnalysisCommands(commands.Cog):
                             content=f"⏳ Analysis for **{symbol}** is already in progress.",
                             ephemeral=True
                         )
+                        self._finalize_analyze_request(interaction.user, symbol, request_id)
                         return
         except Exception as e:
             logger.warning(f"De-confliction check failed: {e}")
 
-        # 3. Minimal Parent Header
+        # 3. Post the classic analyze opener in the analysis channel.
         try:
             parent_msg = await analysis_channel.send(
-                content=f"📂 **{symbol} Analysis** (requested by {interaction.user.mention})"
+                content=f"🔍 Analyzing **{symbol}**... (requested by {interaction.user.mention})"
             )
         except Exception as e:
-
+            self._finalize_analyze_request(interaction.user, symbol, request_id)
             await interaction.followup.send(content=f"❌ Failed to post in analysis channel: {e}", ephemeral=True)
             return
 
@@ -1238,12 +1304,9 @@ class AnalysisCommands(commands.Cog):
             )
             target_channel = thread
             thread_created = True
-            
-            # This is the ONE AND ONLY status message
-            status_msg = await thread.send(f"🔍 Analyzing **{symbol}**... (this may take up to 2-3m)")
+            status_msg = parent_msg
 
-            # Mark for deduplication
-            self._mark_analyze_request_started(
+            self._update_analyze_request_location(
                 interaction.user,
                 symbol,
                 request_id,
@@ -1259,10 +1322,12 @@ class AnalysisCommands(commands.Cog):
             resolved = await self._maybe_disambiguate(symbol, interaction.user, target_channel)
             if not resolved:
                 await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
+                self._finalize_analyze_request(interaction.user, symbol, request_id)
                 return
             
             resolved_symbol, resolved_name = resolved
-            await status_msg.edit(content=f"🔍 Analyzing **{resolved_symbol}**...")
+            if resolved_symbol != symbol and status_msg is not None:
+                await status_msg.edit(content=f"🔍 Analyzing **{resolved_symbol}**...")
 
             safe_create_task(
                 self._run_analysis_task(
@@ -1279,8 +1344,6 @@ class AnalysisCommands(commands.Cog):
                 name=f"analyze-slash-{resolved_symbol}",
             )
             
-            # Final quiet confirmation
-            await interaction.followup.send(content=f"Started! Check {target_channel.mention}", ephemeral=True)
         except Exception as e:
             logger.error(
                 "ANALYZE_SLASH_ERROR "
@@ -1297,6 +1360,7 @@ class AnalysisCommands(commands.Cog):
                 )
             except Exception:
                 pass
+            self._finalize_analyze_request(interaction.user, symbol, request_id)
 
     @app_commands.command(name="analyze-batch", description="Analyze multiple tokens concurrently")
     @app_commands.describe(symbols="Comma-separated token symbols (e.g., ZRO, ALCH, DRIFT)")
@@ -1449,24 +1513,33 @@ class AnalysisCommands(commands.Cog):
             refresh_fallback_age_min: Optional[float] = None
 
             try:
-                # Session 457: Always use the refresh/research wrapper to handle 404s gracefully
-                # If resolved_name is missing, use symbol as fallback name for research
-                prep_name = resolved_name or symbol
-                await self._refresh_or_research_token_data(symbol, prep_name)
-                consolidated = await self._load_consolidated(symbol)
-            except (BotAPIError, TimeoutError) as e:
-                consolidated, refresh_fallback_age_min = await self._load_cached_after_refresh_delay(
+                if resolved_name:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(
+                            None,
+                            lambda: self._refresh_or_research_token_data(symbol, resolved_name),
+                        ),
+                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
+                    )
+                else:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: self._refresh_token_data(symbol)),
+                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
+                    )
+                consolidated = await asyncio.wait_for(
+                    loop.run_in_executor(None, lambda: self._load_consolidated(symbol)),
+                    timeout=30,
+                )
+            except requests.Timeout:
+                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
+                    loop=loop,
                     symbol=symbol,
-                    reason=f"api_error_{type(e).__name__}",
+                    reason="api_timeout_during_refresh",
                     request_id=request_id,
                     status_msg=status_msg,
                     target_channel=target_channel,
-                    load_cached_fn=self._load_consolidated,
+                    load_cached_fn=lambda: self._load_consolidated(symbol),
                 )
-            except Exception as e:
-                # Catch-all for other failures in the prep stage
-                logger.error(f"Analysis prep for {symbol} failed unexpectedly: {e}", exc_info=True)
-                raise BotAPIError(f"Analysis failed during data prep: {e}") from e
                 if consolidated is None:
                     return
                 used_refresh_fallback = True

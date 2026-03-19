@@ -13,6 +13,7 @@ from src.utils.redis_lms import get_current_price
 from src.utils.lifecycle_id import generate_lifecycle_id
 from src.utils.lifecycle_store import record_setup
 from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id
+from src.bot.utils.api_client import api_request
 
 logger = get_logger(__name__)
 
@@ -305,57 +306,35 @@ class TradeRouter(commands.Cog):
             return None
 
     async def call_pre_trade_check(self, setup: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        # This method is now a simple wrapper or can be removed if callers are updated.
-        from src.bot.utils.api_client import api_request, BotAPIError
-        try:
-            return await api_request("POST", "/api/execution/v2/full-analysis", json=setup)
-        except BotAPIError as e:
-            logger.error(f"API error in pre-trade check: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Failed to call API: {e}")
-            raise
+        api_result = await api_request("POST", "/api/execution/v2/full-analysis", json=setup)
+        if api_result:
+            if "_status" in api_result:
+                logger.error(f"API error: {api_result['_status']}")
+                return None
+            return api_result
+        return None
 
     def format_score_decision(self, card: Dict[str, Any]) -> str:
         threshold = 8.0 if card["direction"] == "SHORT" else 8.5
-        score = card.get("entry_score", 0.0)
-        approved = score >= threshold
-
-        rr = card.get("rr_ratio")
-        rr_line = f"• R:R: {rr:.1f}:1" if rr else "• R:R: N/A"
-        if rr:
-             rr_line += " ✅" if rr >= 2.0 else " ⚠️ (below 2.0)"
-
-        # Infer setup quality based on R:R (if present) and score
-        if not approved:
-            status_emoji = "⛔"
-            status_word = "SKIP — BLOCKED"
-            david = "NO"
-        else:
-            status_emoji = "✅"
-            if score >= 8.0 and (rr is None or rr >= 3.0):
-                status_word = "ENTER — STRONG SETUP"
-                david = "YES"
-            elif score >= 7.0 and (rr is None or rr >= 2.0):
-                status_word = "ENTER — GOOD SETUP"
-                david = "YES"
-            elif score >= 5.0 and (rr is None or rr >= 2.0):
-                status_word = "ENTER — ACCEPTABLE"
-                david = "NO (Acceptable, but strict entry criteria applies)"
-            else:
-                status_word = "ENTER — WEAK — MONITOR ONLY"
-                david = "NO"
+        approved = card["entry_score"] >= threshold
+        status_emoji = "✅" if approved else "❌"
+        status_word = "EXECUTE" if approved else "SKIP"
+        
+        rr_line = f"• R:R: {card['rr_ratio']:.1f}:1" if card["rr_ratio"] else "• R:R: N/A"
+        if card["rr_ratio"]:
+             rr_line += " ✅" if card["rr_ratio"] >= 2.0 else " ⚠️ (below 2.0)"
 
         return (
             f"{status_emoji} {card['token']} {card['direction']} — {status_word}\n"
-            f"**David should trade now:** {david}\n\n"
+            f"**David should trade now:** {'YES' if approved else 'NO'}\n\n"
             f"📊 **Score-Only Evaluation:**\n"
-            f"• Entry Score: {score:.1f}/10\n"
+            f"• Entry Score: {card['entry_score']:.1f}/10\n"
             f"{rr_line}\n"
             f"• Threshold ({card['direction']}): {threshold:.1f}/10\n\n"
             f"**Decision:** {status_emoji} {status_word}\n"
             f"{'Meets score threshold. Post full Entry/SL/Target to run full risk diagnostics.' if approved else 'Below threshold. Post full Entry/SL/Target only if you want full risk diagnostics.'}"
         )
+
     @app_commands.command(name="rerun", description="Re-run trade analysis with current market data")
     async def rerun(self, interaction: discord.Interaction):
         account_id = self._resolve_account_id()
@@ -397,26 +376,19 @@ class TradeRouter(commands.Cog):
         proximity_note = await self._check_price_proximity(setup)
 
         setup["is_rerun"] = True
-        try:
-            api_res = await self.call_pre_trade_check(setup)
-            if api_res and api_res.get("data", {}).get("formatted_response"):
-                header = f"🔄 **RERUN** — {setup['token']} {setup['direction']}\n"
-                if proximity_note:
-                    header += f"{proximity_note}\n"
-                header += f"_Original setup: Entry ${setup['entry']}, SL ${setup['sl']}"
-                if setup.get("target"):
-                    header += f", Target ${setup['target']}"
-                header += "_\n\n"
-                response_text = header + api_res["data"]["formatted_response"]
-            else:
-                response_text = "❌ Trade rerun failed — invalid API response format."
-        except Exception as e:
-            from src.bot.utils.api_client import BotAPIError
-            if isinstance(e, BotAPIError):
-                response_text = f"❌ Trade rerun failed: {e.message}"
-            else:
-                logger.error(f"Rerun API call failed: {e}")
-                response_text = "❌ Trade rerun failed — DACLE API unavailable or internal error."
+        api_res = await self.call_pre_trade_check(setup)
+
+        if api_res and api_res.get("data", {}).get("formatted_response"):
+            header = f"🔄 **RERUN** \u2014 {setup['token']} {setup['direction']}\n"
+            if proximity_note:
+                header += f"{proximity_note}\n"
+            header += f"_Original setup: Entry ${setup['entry']}, SL ${setup['sl']}"
+            if setup.get("target"):
+                header += f", Target ${setup['target']}"
+            header += "_\n\n"
+            response_text = header + api_res["data"]["formatted_response"]
+        else:
+            response_text = "❌ Trade rerun failed \u2014 DACLE API unavailable."
 
         await self._send_command_message(interaction, deferred=deferred, content=response_text)
 
@@ -452,15 +424,9 @@ class TradeRouter(commands.Cog):
 
             # Fallback: API live-price (Blofin → Binance → DexScreener)
             if current is None:
-                try:
-                    url = f"{self.api_url}/api/tokens/{setup['token']}/live-price"
-                    async with aiohttp.ClientSession() as session:
-                        async with session.get(url, headers=self._build_api_headers()) as resp:
-                            if resp.status == 200:
-                                data = await resp.json()
-                                current = data.get("price")
-                except Exception as e:
-                    logger.debug(f"Live-price API fallback failed for {setup['token']}: {e}")
+                api_result = await api_request("GET", f"/api/tokens/{setup['token']}/live-price")
+                if api_result and "_status" not in api_result:
+                    current = api_result.get("price")
 
             if current is None:
                 return "⚠️ Could not fetch current price — proximity check skipped."
@@ -709,31 +675,30 @@ class TradeRouter(commands.Cog):
         if tp is not None:
             payload["tp"] = tp
 
-        try:
-            from src.bot.utils.api_client import api_request, BotAPIError
-            api_result = await api_request("POST", "/api/execution/levels", json=payload)
-        except BotAPIError as e:
-            if e.status_code == 422:
-                # Validation error
-                await self._send_command_message(
-                    interaction,
-                    deferred=deferred,
-                    content=f"\u274c {e.message}",
-                )
-                return
-            await self._send_command_message(
-                interaction,
-                deferred=deferred,
-                content=f"\u274c API error: {e.message}",
-            )
-            return
-        except Exception as e:
-            logger.error(f"/levels API call failed: {e}")
+        api_result = await api_request("POST", "/api/execution/levels", json=payload)
+        
+        if api_result is None:
             await self._send_command_message(
                 interaction,
                 deferred=deferred,
                 content="DACLE API unavailable.",
             )
+            return
+            
+        if "_status" in api_result:
+            if api_result["_status"] == 422:
+                detail = api_result["_data"].get("detail", "Validation error")
+                await self._send_command_message(
+                    interaction,
+                    deferred=deferred,
+                    content=f"\u274c {detail}",
+                )
+            else:
+                await self._send_command_message(
+                    interaction,
+                    deferred=deferred,
+                    content=f"API error ({api_result['_status']}). Check DACLE API logs.",
+                )
             return
 
         # Extract results
@@ -744,8 +709,8 @@ class TradeRouter(commands.Cog):
         formatted = api_result.get("formatted_response") or ""
 
         # Build embed
-        status_emoji = "\u2705" if approved else "⛔"
-        status_word = "ENTER — APPROVED" if approved else "SKIP — BLOCKED"
+        status_emoji = "\u2705" if approved else "\U0001f6d1"
+        status_word = "APPROVED" if approved else "BLOCKED"
         color = discord.Color.green() if approved else discord.Color.red()
 
         embed = discord.Embed(
@@ -866,9 +831,8 @@ class LevelsResultView(discord.ui.View):
             button.style = discord.ButtonStyle.secondary
             await interaction.response.edit_message(view=self)
 
-            # Trade router (Node.js) handles pre-trade-check when it detects
-            # the setup in #trades — no need to run it here (avoids duplicates).
-            # await self._post_thread_summary(setup_message)
+            # Create thread and post PTC summary
+            await self._post_thread_summary(setup_message)
         except Exception as e:
             logger.error(f"[levels] Failed to post to #trades: {e}")
             await interaction.response.send_message(
@@ -884,8 +848,8 @@ class LevelsResultView(discord.ui.View):
             )
 
             # Build condensed PTC summary for thread
-            status_emoji = "\u2705" if self._approved else "⛔"
-            status_word = "ENTER — APPROVED" if self._approved else "SKIP — BLOCKED"
+            status_emoji = "\u2705" if self._approved else "\U0001f6d1"
+            status_word = "APPROVED" if self._approved else "BLOCKED"
 
             lines = [f"{status_emoji} **Pre-Trade Check: {status_word}**"]
 

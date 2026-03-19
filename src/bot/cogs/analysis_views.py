@@ -16,6 +16,7 @@ from src.utils.logger import get_logger
 from src.utils.lifecycle_id import generate_lifecycle_id
 from src.utils.lifecycle_store import record_setup
 from src.bot.runtime_routing import get_bot_api_base_url, get_channel_id
+from src.bot.utils.api_client import api_request
 
 logger = get_logger(__name__)
 
@@ -230,18 +231,20 @@ class SetLevelsModal(discord.ui.Modal):
         if tp is not None:
             payload["tp"] = tp
 
-        try:
-            from src.bot.utils.api_client import api_request, BotAPIError
-            api_result = await api_request("POST", "/api/execution/levels", json=payload)
-        except BotAPIError as e:
-            if e.status_code == 422:
-                await interaction.followup.send(f"{e.message}")
-            else:
-                await interaction.followup.send(f"API error: {e.message}")
-            return
-        except Exception as e:
-            logger.error(f"Set Levels API call failed: {e}")
+        api_result = await api_request("POST", "/api/execution/levels", json=payload)
+        
+        if api_result is None:
             await interaction.followup.send("DACLE API unavailable.")
+            return
+            
+        if "_status" in api_result:
+            if api_result["_status"] == 422:
+                detail = api_result["_data"].get("detail", "Validation error")
+                await interaction.followup.send(f"{detail}")
+            else:
+                await interaction.followup.send(
+                    f"API error ({api_result['_status']}). Check DACLE API logs."
+                )
             return
 
         ptc = api_result.get("pre_trade_check") or {}
@@ -250,8 +253,8 @@ class SetLevelsModal(discord.ui.Modal):
         approved = ptc.get("approved", False) if isinstance(ptc, dict) else False
         formatted = api_result.get("formatted_response") or ""
 
-        status_emoji = "\u2705" if approved else "⛔"
-        status_word = "ENTER — APPROVED" if approved else "SKIP — BLOCKED"
+        status_emoji = "\u2705" if approved else "\U0001f6d1"
+        status_word = "APPROVED" if approved else "BLOCKED"
         color = discord.Color.green() if approved else discord.Color.red()
 
         embed = discord.Embed(
@@ -296,6 +299,96 @@ class SetLevelsModal(discord.ui.Modal):
             )
         except Exception:
             pass
+
+
+class ManualOverrideModal(discord.ui.Modal):
+    """
+    Modal for entering a manual override value for a specific field.
+    Session 495: Interactive 'Click to Fix' workflow.
+    """
+    def __init__(self, symbol: str, field_name: str, display_name: str):
+        super().__init__(title=f"Set {display_name} - {symbol}")
+        self.symbol = symbol.upper()
+        self.field_name = field_name
+        self.display_name = display_name
+
+        self.value_input = discord.ui.TextInput(
+            label=f"New {display_name} Value",
+            placeholder=f"Enter numerical value for {display_name}...",
+            required=True,
+            style=discord.TextStyle.short,
+        )
+        self.add_item(self.value_input)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        value = self.value_input.value.strip()
+        
+        # Immediate visual feedback
+        await interaction.response.defer(ephemeral=True)
+        
+        # Convert to numeric if possible (Backend handles normalization)
+        try:
+            parsed_value = float(value) if '.' in value else int(value)
+        except ValueError:
+            parsed_value = value
+
+        payload = {
+            "field_name": self.field_name,
+            "value": parsed_value,
+            "source": "discord_ui_modal",
+            "notes": f"Set by {interaction.user.name} via UI Modal",
+            "cascade_conviction": True,
+            "sync_supabase": True
+        }
+
+        api_result = await api_request("PATCH", f"/api/tokens/{self.symbol}/consolidated", json=payload)
+        if api_result:
+            if "_status" in api_result:
+                await interaction.followup.send(f"❌ API Error ({api_result['_status']})", ephemeral=True)
+            else:
+                await interaction.followup.send(
+                    f"✅ **{self.symbol}** `{self.display_name}` set to `{value}`.\n"
+                    f"🔄 Deterministic re-analysis triggered. Watch this thread for results!",
+                    ephemeral=True
+                )
+        else:
+            await interaction.followup.send(f"❌ Failed to reach API.", ephemeral=True)
+
+
+class GapFixView(discord.ui.View):
+    """
+    View containing buttons to fix specific missing data gaps.
+    """
+    def __init__(self, symbol: str, gaps: list[str]):
+        super().__init__(timeout=3600) # 1 hour
+        self.symbol = symbol.upper()
+        
+        # Mapping of internal field names to pretty display names
+        FIELD_MAP = {
+            "float_percent": "Float %",
+            "market_cap": "Market Cap",
+            "fdv": "FDV",
+            "total_supply": "Total Supply",
+            "circulating_supply": "Circulating Supply",
+            "tge_date": "TGE Date"
+        }
+
+        for field in gaps[:5]: # Max 5 buttons
+            display = FIELD_MAP.get(field, field.replace("_", " ").title())
+            btn = discord.ui.Button(
+                label=f"Fix {display}",
+                style=discord.ButtonStyle.secondary,
+                custom_id=f"fix_{field}_{self.symbol}",
+                emoji="🔧"
+            )
+            btn.callback = self._create_callback(field, display)
+            self.add_item(btn)
+
+    def _create_callback(self, field: str, display: str):
+        async def callback(interaction: discord.Interaction):
+            modal = ManualOverrideModal(self.symbol, field, display)
+            await interaction.response.send_modal(modal)
+        return callback
 
 
 class TradeApprovalView(discord.ui.View):
@@ -418,29 +511,30 @@ class TradeApprovalView(discord.ui.View):
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.grey, emoji="🔄")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        try:
-            from src.bot.utils.api_client import api_request, BotAPIError
-            await api_request("POST", f"/api/tokens/research/{self.symbol}/refresh")
-            await interaction.followup.send(
-                f"🔄 Data refresh triggered for **{self.symbol}**. "
-                f"Re-run `/analyze {self.symbol}` in ~30s for updated results.",
-                ephemeral=True
-            )
-        except Exception as e:
-            from src.bot.utils.api_client import BotAPIError
-            if isinstance(e, BotAPIError) and e.status_code == 423:
-                await interaction.followup.send(
-                    f"🔒 Refresh already in progress for **{self.symbol}**. "
-                    f"Try `/analyze {self.symbol}` in ~30s.",
-                    ephemeral=True
-                )
+        api_result = await api_request("POST", f"/api/tokens/research/{self.symbol}/refresh")
+        
+        if api_result:
+            if "_status" in api_result:
+                status = api_result["_status"]
+                if status == 423:
+                    await interaction.followup.send(
+                        f"🔒 Refresh already in progress for **{self.symbol}**. "
+                        f"Try `/analyze {self.symbol}` in ~30s.",
+                        ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        f"❌ Refresh failed ({status}). Try `/analyze {self.symbol}` manually.",
+                        ephemeral=True
+                    )
             else:
-                logger.error(f"Refresh failed for {self.symbol}: {e}")
-                err_msg = e.message if isinstance(e, BotAPIError) else str(e)
                 await interaction.followup.send(
-                    f"❌ Refresh failed: {err_msg}",
+                    f"🔄 Data refresh triggered for **{self.symbol}**. "
+                    f"Re-run `/analyze {self.symbol}` in ~30s for updated results.",
                     ephemeral=True
                 )
+        else:
+            await interaction.followup.send(f"❌ Refresh failed: DACLE API unavailable.", ephemeral=True)
 
     @discord.ui.button(label="Veto", style=discord.ButtonStyle.red, emoji="❌")
     async def veto(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -510,15 +604,16 @@ class AuditExecutionView(discord.ui.View):
             
             # 4. Record 'OPEN' feedback automatically to start tracking
             try:
-                from src.bot.utils.api_client import api_request
-                payload = {
-                    "token": self.symbol,
-                    "result": "WATCHING", # Special status for active trades
-                    "key_feedback": f"Auto-executed via Deep Audit. Conviction: {self.conviction}/10"
-                }
-                await api_request("POST", "/api/feedback/simplified-submit", json=payload)
-            except Exception as e:
-                logger.warning(f"Failed to record auto-execution feedback for {self.symbol}: {e}")
+                async with aiohttp.ClientSession() as session:
+                    url = f"{_get_api_base_url()}/api/feedback/simplified-submit"
+                    payload = {
+                        "token": self.symbol,
+                        "result": "WATCHING", # Special status for active trades
+                        "key_feedback": f"Auto-executed via Deep Audit. Conviction: {self.conviction}/10"
+                    }
+                    async with session.post(url, data=payload, headers=_api_headers()) as resp:
+                        pass
+            except: pass
 
             await interaction.followup.send(
                 f"✅ **Trade Executed!** Setup posted to <#{trades_channel_id}> and Watcher engaged."
