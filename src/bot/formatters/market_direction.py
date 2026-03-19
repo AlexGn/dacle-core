@@ -65,7 +65,7 @@ def build_market_direction_embed(
     timestamp = data.get("timestamp")
 
     bias_cfg = {
-        "BULLISH": {"color": 0x34C759, "emoji": "🟢"},
+        "BULLISH": {"color": 0x34C759, "emoji": "🔵"},
         "NEUTRAL": {"color": 0xFF9500, "emoji": "🟡"},
         "BEARISH": {"color": 0xFF3B30, "emoji": "🔴"},
     }

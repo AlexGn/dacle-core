@@ -77,6 +77,7 @@ class DACLEBot(commands.Bot):
             self.config = get_discord_config()
             self.private_server_id = int(self.config.private_server_id)
             self._last_pulse_time = 0  # Session 470: Pulse Dot Heartbeat
+            self._tasks_started = False # Session 506: Task Deduplication
         except ValueError as e:
             logger.error(f"❌ Failed to load Discord config: {e}")
             logger.error("Ensure DISCORD_BOT_TOKEN and DISCORD_PRIVATE_SERVER_ID are set in .env")
@@ -226,6 +227,12 @@ class DACLEBot(commands.Bot):
 
         # Mark bot as ready for health checks (HIGH-REL-001)
         get_health_status().set_bot_ready(True)
+
+        if self._tasks_started:
+            logger.info("📡 Tasks already started, skipping duplicate initialization.")
+            return
+
+        self._tasks_started = True
 
         # Verify we're in the private server
         private_server = self.get_guild(self.private_server_id)

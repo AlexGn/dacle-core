@@ -1045,14 +1045,22 @@ class AnalysisCommands(commands.Cog):
 
     def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
         consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
+        bak_path = TOKENS_DIR / symbol.upper() / "consolidated.json.bak"
+        
+        path_to_load = consolidated_path
         if not consolidated_path.exists():
-            raise FileNotFoundError(f"No consolidated.json found for {symbol}")
+            if bak_path.exists():
+                logger.info(f"[{symbol}] consolidated.json missing, falling back to .bak")
+                path_to_load = bak_path
+            else:
+                raise FileNotFoundError(f"No consolidated.json found for {symbol}")
+                
         try:
-            with open(consolidated_path) as f:
+            with open(path_to_load) as f:
                 return json.load(f)
         except PermissionError as e:
             raise PermissionError(
-                f"Permission denied reading {consolidated_path}. "
+                f"Permission denied reading {path_to_load}. "
                 "Fix ownership/permissions for data/tokens."
             ) from e
 
@@ -1530,6 +1538,19 @@ class AnalysisCommands(commands.Cog):
                     loop.run_in_executor(None, lambda: self._load_consolidated(symbol)),
                     timeout=30,
                 )
+            except FileNotFoundError:
+                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
+                    loop=loop,
+                    symbol=symbol,
+                    reason="consolidated_file_missing_after_refresh",
+                    request_id=request_id,
+                    status_msg=status_msg,
+                    target_channel=target_channel,
+                    load_cached_fn=lambda: self._load_consolidated(symbol),
+                )
+                if consolidated is None:
+                    return
+                used_refresh_fallback = True
             except requests.Timeout:
                 consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
                     loop=loop,

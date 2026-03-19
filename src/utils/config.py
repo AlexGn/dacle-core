@@ -194,7 +194,7 @@ class DiscordConfig:
     macro_channel_id: Optional[int] = None
     focus_channel_id: Optional[int] = None
     logs_channel_id: Optional[int] = None
-    heartbeat_pulse_symbol: str = "🟢"
+    heartbeat_pulse_symbol: str = "💓"
 
     @classmethod
     def from_env(cls) -> "DiscordConfig":
@@ -215,7 +215,7 @@ class DiscordConfig:
         macro_id = _to_int("DISCORD_MACRO_CHANNEL_ID", 1470361576237306058)
         focus_id = _to_int("DISCORD_FOCUS_CHANNEL_ID", 1470789144736174326)
         logs_id = _to_int("DISCORD_LOGS_CHANNEL_ID", 1468187517147939068)
-        pulse_symbol = os.getenv("HEARTBEAT_PULSE_SYMBOL", "🟢")
+        pulse_symbol = os.getenv("HEARTBEAT_PULSE_SYMBOL", "💓")
 
         # Discord is optional - allow None values if not configured
         # Raises error only if partially configured (one but not both)
