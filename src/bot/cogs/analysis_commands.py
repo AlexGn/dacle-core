@@ -189,32 +189,7 @@ def _check_ta_freshness(symbol: str) -> bool:
         return False
 
 
-def _request_with_retry(
-    method: str,
-    url: str,
-    *,
-    retries: int = 0,
-    retry_delay_seconds: float = 1.0,
-    **kwargs: Any,
-) -> requests.Response:
-    """Execute an HTTP request with optional timeout retries."""
-    for attempt in range(1, retries + 2):
-        try:
-            return requests.request(method=method, url=url, **kwargs)
-        except requests.RequestException as exc:
-            if not (_is_timeout_like_error(exc) or _is_local_api_unavailable_error(exc)):
-                raise
-            if attempt > retries:
-                if _is_local_api_unavailable_error(exc):
-                    raise requests.ConnectionError(str(exc)) from exc
-                raise requests.Timeout(str(exc)) from exc
-            logger.warning(
-                f"Transient local API error on {method} {url} (attempt {attempt}/{retries + 1}); "
-                f"retrying in {retry_delay_seconds}s"
-            )
-            time.sleep(retry_delay_seconds)
 
-    raise RuntimeError(f"Unexpected retry exhaustion for {method} {url}")
 
 
 def _parse_iso_datetime(value: Any) -> Optional[datetime]:
@@ -942,112 +917,75 @@ class AnalysisCommands(commands.Cog):
         }
         self._write_disambiguation_cache(cache)
 
-    def _search_token(self, symbol: str) -> List[Dict[str, Any]]:
-        api_base = _get_api_base_url()
-        url = f"{api_base}/api/tokens/search"
-        resp = _request_with_retry(
-            "POST",
-            url,
-            json={"symbol": symbol.upper()},
-            headers=_api_headers(),
-            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
-            retries=1,
-            retry_delay_seconds=1.0,
-        )
-        resp.raise_for_status()
-        payload = resp.json() or {}
+    async def _search_token(self, symbol: str) -> List[Dict[str, Any]]:
+        payload = await api_request("POST", "/api/tokens/search", json={"symbol": symbol.upper()})
         return payload.get("matches") or []
 
-    def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
-        api_base = _get_api_base_url()
-        url = f"{api_base}/api/tokens/research"
-        resp = _request_with_retry(
-            "POST",
-            url,
-            json={"symbol": symbol.upper(), "name": name},
-            headers=_api_headers(),
-            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_RESEARCH_KICKOFF_READ_TIMEOUT_SECONDS),
-            retries=API_KICKOFF_RETRIES,
-            retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
+    async def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
+        payload = await api_request(
+            "POST", "/api/tokens/research", json={"symbol": symbol.upper(), "name": name}
         )
-        resp.raise_for_status()
-        payload = resp.json()
         task_id = payload.get("task_id")
         if not task_id:
             raise RuntimeError("Research did not return a task_id")
 
-        status_url = f"{api_base}/api/tokens/research/{task_id}"
+        status_url = f"/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            status_resp = _request_with_retry(
-                "GET",
-                status_url,
-                headers=_api_headers(),
-                timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
-                retries=1,
-                retry_delay_seconds=1.0,
-            )
-            if status_resp.status_code == 404:
-                time.sleep(2)
-                continue
-            status_resp.raise_for_status()
-            status_payload = status_resp.json()
-            status = status_payload.get("status")
-            if status in {"completed", "completed_with_warnings"}:
-                return status_payload
-            if status in {"failed", "skipped"}:
-                raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
+            try:
+                status_payload = await api_request("GET", status_url, retries=1, retry_delay=1.0)
+                status = status_payload.get("status")
+                if status in {"completed", "completed_with_warnings"}:
+                    return status_payload
+                if status in {"failed", "skipped"}:
+                    raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
+            except BotAPIError as e:
+                # Ignore 404s which mean the task is not yet ready
+                if e.status_code != 404:
+                    raise
+            
             if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
                 raise TimeoutError(f"Research timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
-            time.sleep(2)
+            await asyncio.sleep(2)
 
-    def _refresh_or_research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
+    async def _refresh_or_research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
         """Prefer refetch for existing tokens; fallback to research for missing tokens."""
         try:
-            return self._refresh_token_data(symbol)
-        except requests.HTTPError as e:
-            status = getattr(getattr(e, "response", None), "status_code", None)
-            if status == 404:
-                logger.info(
-                    f"[{symbol}] Refetch returned 404, falling back to research with name='{name}'"
-                )
-                return self._research_token_data(symbol, name)
+            return await self._refresh_token_data(symbol)
+        except BotAPIError as e:
+            if e.status_code == 404:
+                logger.info(f"[{symbol}] Refetch returned 404, falling back to research with name='{name}'")
+                return await self._research_token_data(symbol, name)
             raise
 
-    def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
+    async def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
         """Trigger token refetch and wait for completion."""
-        api_base = _get_api_base_url()
-        url = f"{api_base}/api/tokens/{symbol}/refetch"
-        resp = _request_with_retry(
+        payload = await api_request(
             "POST",
-            url,
+            f"/api/tokens/{symbol}/refetch",
             params={"force": "true", "auto_analyze": "false"},
-            headers=_api_headers(),
-            timeout=(API_CONNECT_TIMEOUT_SECONDS, API_REFRESH_KICKOFF_READ_TIMEOUT_SECONDS),
-            retries=API_KICKOFF_RETRIES,
-            retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
         )
-        resp.raise_for_status()
-        payload = resp.json()
         task_id = payload.get("task_id")
         if not task_id:
             raise RuntimeError("Refetch did not return a task_id")
 
-        status_url = f"{api_base}/api/tokens/research/{task_id}"
+        status_url = f"/api/tokens/research/{task_id}"
         start = time.time()
         while True:
-            status_resp = _request_with_retry(
-                "GET",
-                status_url,
-                headers=_api_headers(),
-                timeout=(API_CONNECT_TIMEOUT_SECONDS, API_STATUS_READ_TIMEOUT_SECONDS),
-                retries=1,
-                retry_delay_seconds=1.0,
-            )
-            if status_resp.status_code == 404:
-                time.sleep(2)
-                continue
-            status_resp.raise_for_status()
+            try:
+                status_payload = await api_request("GET", status_url, retries=1, retry_delay=1.0)
+                status = status_payload.get("status")
+                if status in {"completed", "completed_with_warnings"}:
+                    return status_payload
+                if status in {"failed", "skipped"}:
+                    raise RuntimeError(status_payload.get("error") or status_payload.get("message") or "Research failed")
+            except BotAPIError as e:
+                 if e.status_code != 404:
+                    raise
+            
+            if time.time() - start > ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS:
+                raise TimeoutError(f"Refetch polling timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
+            await asyncio.sleep(2)
             status_payload = status_resp.json()
             status = status_payload.get("status")
             if status in {"completed", "completed_with_warnings"}:
@@ -1514,28 +1452,21 @@ class AnalysisCommands(commands.Cog):
                 # Session 457: Always use the refresh/research wrapper to handle 404s gracefully
                 # If resolved_name is missing, use symbol as fallback name for research
                 prep_name = resolved_name or symbol
-                
-                await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: self._refresh_or_research_token_data(symbol, prep_name),
-                    ),
-                    timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
-                )
-                consolidated = await asyncio.wait_for(
-                    loop.run_in_executor(None, lambda: self._load_consolidated(symbol)),
-                    timeout=30,
-                )
-            except requests.Timeout:
-                consolidated, refresh_fallback_age_min = await _load_cached_after_refresh_delay(
-                    loop=loop,
+                await self._refresh_or_research_token_data(symbol, prep_name)
+                consolidated = await self._load_consolidated(symbol)
+            except (BotAPIError, TimeoutError) as e:
+                consolidated, refresh_fallback_age_min = await self._load_cached_after_refresh_delay(
                     symbol=symbol,
-                    reason="api_timeout_during_refresh",
+                    reason=f"api_error_{type(e).__name__}",
                     request_id=request_id,
                     status_msg=status_msg,
                     target_channel=target_channel,
-                    load_cached_fn=lambda: self._load_consolidated(symbol),
+                    load_cached_fn=self._load_consolidated,
                 )
+            except Exception as e:
+                # Catch-all for other failures in the prep stage
+                logger.error(f"Analysis prep for {symbol} failed unexpectedly: {e}", exc_info=True)
+                raise BotAPIError(f"Analysis failed during data prep: {e}") from e
                 if consolidated is None:
                     return
                 used_refresh_fallback = True

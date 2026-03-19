@@ -305,18 +305,16 @@ class TradeRouter(commands.Cog):
             return None
 
     async def call_pre_trade_check(self, setup: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        url = f"{self.api_url}/api/execution/v2/full-analysis"
+        # This method is now a simple wrapper or can be removed if callers are updated.
+        from src.bot.utils.api_client import api_request, BotAPIError
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=setup, headers=self._build_api_headers()) as response:
-                    if response.status == 200:
-                        return await response.json()
-                    else:
-                        logger.error(f"API error: {response.status}")
-                        return None
+            return await api_request("POST", "/api/execution/v2/full-analysis", json=setup)
+        except BotAPIError as e:
+            logger.error(f"API error in pre-trade check: {e}")
+            raise
         except Exception as e:
             logger.error(f"Failed to call API: {e}")
-            return None
+            raise
 
     def format_score_decision(self, card: Dict[str, Any]) -> str:
         threshold = 8.0 if card["direction"] == "SHORT" else 8.5
@@ -401,21 +399,24 @@ class TradeRouter(commands.Cog):
         setup["is_rerun"] = True
         try:
             api_res = await self.call_pre_trade_check(setup)
+            if api_res and api_res.get("data", {}).get("formatted_response"):
+                header = f"🔄 **RERUN** — {setup['token']} {setup['direction']}\n"
+                if proximity_note:
+                    header += f"{proximity_note}\n"
+                header += f"_Original setup: Entry ${setup['entry']}, SL ${setup['sl']}"
+                if setup.get("target"):
+                    header += f", Target ${setup['target']}"
+                header += "_\n\n"
+                response_text = header + api_res["data"]["formatted_response"]
+            else:
+                response_text = "❌ Trade rerun failed — invalid API response format."
         except Exception as e:
-            logger.error(f"Rerun API call failed: {e}")
-            api_res = None
-
-        if api_res and api_res.get("data", {}).get("formatted_response"):
-            header = f"🔄 **RERUN** — {setup['token']} {setup['direction']}\n"
-            if proximity_note:
-                header += f"{proximity_note}\n"
-            header += f"_Original setup: Entry ${setup['entry']}, SL ${setup['sl']}"
-            if setup.get("target"):
-                header += f", Target ${setup['target']}"
-            header += "_\n\n"
-            response_text = header + api_res["data"]["formatted_response"]
-        else:
-            response_text = "❌ Trade rerun failed — DACLE API unavailable."
+            from src.bot.utils.api_client import BotAPIError
+            if isinstance(e, BotAPIError):
+                response_text = f"❌ Trade rerun failed: {e.message}"
+            else:
+                logger.error(f"Rerun API call failed: {e}")
+                response_text = "❌ Trade rerun failed — DACLE API unavailable or internal error."
 
         await self._send_command_message(interaction, deferred=deferred, content=response_text)
 
@@ -709,26 +710,23 @@ class TradeRouter(commands.Cog):
             payload["tp"] = tp
 
         try:
-            url = f"{self.api_url}/api/execution/levels"
-            async with aiohttp.ClientSession() as session:
-                async with session.post(url, json=payload, headers=self._build_api_headers()) as response:
-                    if response.status == 422:
-                        error_data = await response.json()
-                        detail = error_data.get("detail", "Validation error")
-                        await self._send_command_message(
-                            interaction,
-                            deferred=deferred,
-                            content=f"\u274c {detail}",
-                        )
-                        return
-                    if response.status != 200:
-                        await self._send_command_message(
-                            interaction,
-                            deferred=deferred,
-                            content=f"API error ({response.status}). Check DACLE API logs.",
-                        )
-                        return
-                    api_result = await response.json()
+            from src.bot.utils.api_client import api_request, BotAPIError
+            api_result = await api_request("POST", "/api/execution/levels", json=payload)
+        except BotAPIError as e:
+            if e.status_code == 422:
+                # Validation error
+                await self._send_command_message(
+                    interaction,
+                    deferred=deferred,
+                    content=f"\u274c {e.message}",
+                )
+                return
+            await self._send_command_message(
+                interaction,
+                deferred=deferred,
+                content=f"\u274c API error: {e.message}",
+            )
+            return
         except Exception as e:
             logger.error(f"/levels API call failed: {e}")
             await self._send_command_message(

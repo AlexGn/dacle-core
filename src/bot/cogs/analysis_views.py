@@ -231,20 +231,14 @@ class SetLevelsModal(discord.ui.Modal):
             payload["tp"] = tp
 
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{_get_api_base_url()}/api/execution/levels"
-                async with session.post(url, json=payload, headers=_api_headers()) as response:
-                    if response.status == 422:
-                        error_data = await response.json()
-                        detail = error_data.get("detail", "Validation error")
-                        await interaction.followup.send(f"{detail}")
-                        return
-                    if response.status != 200:
-                        await interaction.followup.send(
-                            f"API error ({response.status}). Check DACLE API logs."
-                        )
-                        return
-                    api_result = await response.json()
+            from src.bot.utils.api_client import api_request, BotAPIError
+            api_result = await api_request("POST", "/api/execution/levels", json=payload)
+        except BotAPIError as e:
+            if e.status_code == 422:
+                await interaction.followup.send(f"{e.message}")
+            else:
+                await interaction.followup.send(f"API error: {e.message}")
+            return
         except Exception as e:
             logger.error(f"Set Levels API call failed: {e}")
             await interaction.followup.send("DACLE API unavailable.")
@@ -425,32 +419,28 @@ class TradeApprovalView(discord.ui.View):
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         try:
-            async with aiohttp.ClientSession() as session:
-                url = f"{_get_api_base_url()}/api/tokens/research/{self.symbol}/refresh"
-                async with session.post(url, headers=_api_headers()) as resp:
-                    if resp.status in (200, 202):
-                        await interaction.followup.send(
-                            f"🔄 Data refresh triggered for **{self.symbol}**. "
-                            f"Re-run `/analyze {self.symbol}` in ~30s for updated results.",
-                            ephemeral=True
-                        )
-                    elif resp.status == 423:
-                        await interaction.followup.send(
-                            f"🔒 Refresh already in progress for **{self.symbol}**. "
-                            f"Try `/analyze {self.symbol}` in ~30s.",
-                            ephemeral=True
-                        )
-                    else:
-                        await interaction.followup.send(
-                            f"❌ Refresh failed ({resp.status}). Try `/analyze {self.symbol}` manually.",
-                            ephemeral=True
-                        )
-        except Exception as e:
-            logger.error(f"Refresh failed for {self.symbol}: {e}")
+            from src.bot.utils.api_client import api_request, BotAPIError
+            await api_request("POST", f"/api/tokens/research/{self.symbol}/refresh")
             await interaction.followup.send(
-                f"❌ Refresh failed: {e}",
+                f"🔄 Data refresh triggered for **{self.symbol}**. "
+                f"Re-run `/analyze {self.symbol}` in ~30s for updated results.",
                 ephemeral=True
             )
+        except Exception as e:
+            from src.bot.utils.api_client import BotAPIError
+            if isinstance(e, BotAPIError) and e.status_code == 423:
+                await interaction.followup.send(
+                    f"🔒 Refresh already in progress for **{self.symbol}**. "
+                    f"Try `/analyze {self.symbol}` in ~30s.",
+                    ephemeral=True
+                )
+            else:
+                logger.error(f"Refresh failed for {self.symbol}: {e}")
+                err_msg = e.message if isinstance(e, BotAPIError) else str(e)
+                await interaction.followup.send(
+                    f"❌ Refresh failed: {err_msg}",
+                    ephemeral=True
+                )
 
     @discord.ui.button(label="Veto", style=discord.ButtonStyle.red, emoji="❌")
     async def veto(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -520,16 +510,15 @@ class AuditExecutionView(discord.ui.View):
             
             # 4. Record 'OPEN' feedback automatically to start tracking
             try:
-                async with aiohttp.ClientSession() as session:
-                    url = f"{_get_api_base_url()}/api/feedback/simplified-submit"
-                    payload = {
-                        "token": self.symbol,
-                        "result": "WATCHING", # Special status for active trades
-                        "key_feedback": f"Auto-executed via Deep Audit. Conviction: {self.conviction}/10"
-                    }
-                    async with session.post(url, data=payload, headers=_api_headers()) as resp:
-                        pass
-            except: pass
+                from src.bot.utils.api_client import api_request
+                payload = {
+                    "token": self.symbol,
+                    "result": "WATCHING", # Special status for active trades
+                    "key_feedback": f"Auto-executed via Deep Audit. Conviction: {self.conviction}/10"
+                }
+                await api_request("POST", "/api/feedback/simplified-submit", json=payload)
+            except Exception as e:
+                logger.warning(f"Failed to record auto-execution feedback for {self.symbol}: {e}")
 
             await interaction.followup.send(
                 f"✅ **Trade Executed!** Setup posted to <#{trades_channel_id}> and Watcher engaged."
