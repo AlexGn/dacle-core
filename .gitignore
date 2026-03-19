@@ -205,17 +205,17 @@ data/.dashboard_prefs.json
 data/alerts_cache.json
 data/alpha_callers.json
 # data/conviction_signals.json
-data/conviction_signals.json
-data/enriched_projects.json
-data/exchange_tiers.json
-data/fundraising_tracker.json
-data/historical_tges.csv
-data/vc_comprehensive_database.json
-data/vc_tier_classification.json
-data/README.md
-data/tokens_archived/
-data/vc_comprehensive_database.json
-data/vc_tier_classification.json
+# data/conviction_signals.json
+# data/enriched_projects.json
+# data/exchange_tiers.json
+# data/fundraising_tracker.json
+# data/historical_tges.csv
+# data/vc_comprehensive_database.json
+# data/vc_tier_classification.json
+# data/README.md
+# data/tokens_archived/
+# data/vc_comprehensive_database.json
+# data/vc_tier_classification.json
 
 # News and Polymarket Runtime State (Session 527 Cleanup)
 data/seen_headlines.json
