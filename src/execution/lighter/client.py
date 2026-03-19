@@ -1859,6 +1859,7 @@ class LighterRealClient:
                                 fallback_nonce = await self._fallback_nonce_from_account_metadata(
                                     session=session,
                                     account_index=int(account_index),
+                                    base_url=base_url,
                                 )
                                 if fallback_nonce is not None:
                                     logger.warning(
@@ -1901,12 +1902,13 @@ class LighterRealClient:
         if not self.signer or not getattr(self.signer, "address", None):
             return None
 
-        url = f"{self.api_url}/accountsByL1Address"
+        logger.debug("Falling back to accountsByL1Address for nonce: %s", base_url)
         status, payload, _ = await self._get_json(
             session,
-            url,
+            f"{base_url}/accountsByL1Address",
             params={"l1_address": self.signer.address},
         )
+        logger.debug("accountsByL1Address fallback response: status=%s, payload=%s", status, payload)
         if status != 200 or not isinstance(payload, dict):
             return None
 
@@ -1924,10 +1926,9 @@ class LighterRealClient:
         if not isinstance(chosen, dict):
             return None
 
-        for key in ("nonce", "next_nonce", "order_nonce", "total_order_count"):
-            value = self._to_int(chosen.get(key))
-            if value is not None and value >= 0:
-                return int(value)
+        total_order_count = self._to_int(chosen.get("total_order_count"), default=0)
+        if total_order_count is not None:
+            return total_order_count + 1
         return None
 
     async def preflight_live_readiness(self) -> Dict[str, Any]:
