@@ -217,7 +217,11 @@ data/alpha_callers.json
 # data/vc_comprehensive_database.json
 # data/vc_tier_classification.json
 
-# News and Polymarket Runtime State (Session 527 Cleanup)
+data/learning_effectiveness.json
+data/shadow_journal.json
+data/validation_artifact.json
+
+# News and Polymariate Runtime State (Session 527 Cleanup)
 data/seen_headlines.json
 data/rss_seen_articles.json
 data/polymarket_learning_feedback.json
@@ -233,7 +237,11 @@ data/macro/btc_structure_levels.json
 data/macro/external_indices.json
 data/macro/sherlock_macro_levels.json
 
-# News and Polymarket Runtime State (Session 527 Cleanup)
+data/learning_effectiveness.json
+data/shadow_journal.json
+data/validation_artifact.json
+
+# News and Polymariate Runtime State (Session 527 Cleanup)
 data/seen_headlines.json
 data/rss_seen_articles.json
 data/polymarket_learning_feedback.json
