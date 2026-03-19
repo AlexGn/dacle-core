@@ -1521,19 +1521,15 @@ class AnalysisCommands(commands.Cog):
             refresh_fallback_age_min: Optional[float] = None
 
             try:
-                if resolved_name:
-                    await asyncio.wait_for(
-                        loop.run_in_executor(
-                            None,
-                            lambda: self._refresh_or_research_token_data(symbol, resolved_name),
-                        ),
-                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
-                    )
-                else:
-                    await asyncio.wait_for(
-                        loop.run_in_executor(None, lambda: self._refresh_token_data(symbol)),
-                        timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
-                    )
+                # Use name if provided, otherwise default to symbol for research fallback
+                name_to_use = resolved_name or symbol
+                await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None,
+                        lambda: self._refresh_or_research_token_data(symbol, name_to_use),
+                    ),
+                    timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
+                )
                 consolidated = await asyncio.wait_for(
                     loop.run_in_executor(None, lambda: self._load_consolidated(symbol)),
                     timeout=30,
