@@ -1833,6 +1833,26 @@ class LighterRealClient:
                             else:
                                 err_text = await resp.text()
                                 logger.debug("nextNonce endpoint returned %s: %s", resp.status, err_text[:100])
+                                if resp.status == 403:
+                                    fallback_nonce = await self._fallback_nonce_from_account_metadata(
+                                        session=session,
+                                        account_index=int(account_index),
+                                        base_url=base_url,
+                                    )
+                                    if fallback_nonce is not None:
+                                        logger.warning(
+                                            "nextNonce endpoint forbidden (403); using accountsByL1Address fallback nonce=%s",
+                                            fallback_nonce,
+                                        )
+                                        nonce_result = {
+                                            "status": "success",
+                                            "nonce": int(fallback_nonce),
+                                            "source": "accountsByL1Address_fallback",
+                                            "url": base_url,
+                                        }
+                                        if best_result is None or int(nonce_result["nonce"]) > int(best_result["nonce"]):
+                                            best_result = nonce_result
+                                        continue
                     except Exception as exc:
                         logger.debug("nextNonce fetch error via %s: %s", base_url, exc)
 
@@ -1842,7 +1862,29 @@ class LighterRealClient:
                         async with session.get(url, params=params) as resp:
                             if resp.status == 200:
                                 data = await resp.json(content_type=None)
-                                nonce_val = data if isinstance(data, int) else data.get("nonce", 0) if isinstance(data, dict) else 0
+                                nonce_val = data if isinstance(data, int) else data.get("nonce") if isinstance(data, dict) else None
+                                if nonce_val is None:
+                                    fallback_nonce = await self._fallback_nonce_from_account_metadata(
+                                        session=session,
+                                        account_index=int(account_index),
+                                        base_url=base_url,
+                                    )
+                                    if fallback_nonce is not None:
+                                        logger.warning(
+                                            "Nonce endpoint returned malformed success payload; using accountsByL1Address fallback nonce=%s",
+                                            fallback_nonce,
+                                        )
+                                        nonce_result = {
+                                            "status": "success",
+                                            "nonce": int(fallback_nonce),
+                                            "source": "accountsByL1Address_fallback",
+                                            "url": base_url,
+                                        }
+                                        if best_result is None or int(nonce_result["nonce"]) > int(best_result["nonce"]):
+                                            best_result = nonce_result
+                                        continue
+                                    last_error = "nonce endpoint returned 200 without nonce"
+                                    continue
                                 nonce_result = {
                                     "status": "success",
                                     "nonce": int(nonce_val),
@@ -1893,6 +1935,7 @@ class LighterRealClient:
         self,
         session: aiohttp.ClientSession,
         account_index: int,
+        base_url: str,
     ) -> Optional[int]:
         """Best-effort nonce fallback from account metadata when nonce endpoint is blocked.
 
@@ -1927,6 +1970,7 @@ class LighterRealClient:
             return None
 
         total_order_count = self._to_int(chosen.get("total_order_count"), default=0)
+        logger.debug("total_order_count from accountsByL1Address: %s", total_order_count)
         if total_order_count is not None:
             return total_order_count + 1
         return None

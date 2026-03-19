@@ -410,6 +410,17 @@ class PolymarketCTFExecutor:
             logger.error(f"mergePositions failed: {e}")
             return {"status": "error", "error": str(e)}
 
+    async def get_matic_balance(self) -> Optional[float]:
+        """Fetch native MATIC balance of the signer EOA."""
+        if not self._ensure_account() or not self.address:
+            return None
+        try:
+            wei = await self._call_with_rpc_retry(self.w3.eth.get_balance, self.address)
+            return float(self.w3.from_wei(wei, "ether"))
+        except Exception as e:
+            logger.warning(f"Failed to fetch MATIC balance: {e}")
+            return None
+
     async def get_position_id(
         self,
         condition_id: str,
