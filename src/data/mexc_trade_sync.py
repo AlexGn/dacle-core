@@ -35,14 +35,11 @@ Date: 2026-01-02
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import hashlib
-
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +47,10 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 TRADE_LOG_PATH = PROJECT_ROOT / "data" / "trades" / "trade_log.json"
 SYNC_STATE_PATH = PROJECT_ROOT / "data" / "trades" / "mexc_sync_state.json"
 DATA_TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
+
+from src.utils.config import load_runtime_env_files
+
+load_runtime_env_files(PROJECT_ROOT)
 
 # Tokens we track in DACLE (will match against these)
 TRACKED_TOKENS: Optional[List[str]] = None  # Loaded dynamically
@@ -105,17 +106,34 @@ def _load_sync_state() -> Dict[str, Any]:
 
     return {
         "last_sync": None,
+        "last_attempt_at": None,
+        "last_error": None,
         "synced_trade_ids": [],
         "created_at": datetime.now(timezone.utc).isoformat()
     }
 
 
-def _save_sync_state(state: Dict[str, Any]) -> None:
+def _save_sync_state(state: Dict[str, Any], *, mark_success: bool = True) -> None:
     """Save sync state."""
     SYNC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    state["last_sync"] = datetime.now(timezone.utc).isoformat()
+    if mark_success:
+        state["last_sync"] = datetime.now(timezone.utc).isoformat()
     with open(SYNC_STATE_PATH, "w") as f:
         json.dump(state, f, indent=2)
+
+
+def _cli_exit_code_for_results(
+    results: Optional[Dict[str, Any]] = None,
+    *,
+    check_mode: bool = False,
+    available: Optional[bool] = None,
+) -> int:
+    """Translate sync/check results into a CLI exit code."""
+    if check_mode:
+        return 0 if available else 1
+    if results and (results.get("status") == "error" or results.get("fatal_error")):
+        return 1
+    return 0
 
 
 def _generate_trade_id(trade: Dict[str, Any]) -> str:
@@ -143,6 +161,7 @@ class MEXCTradeSync:
     def __init__(self):
         """Initialize MEXC connection."""
         self.exchange = None
+        self._last_sync_fetch_error: Optional[str] = None
         self._init_exchange()
 
     def _init_exchange(self) -> None:
@@ -236,6 +255,7 @@ class MEXCTradeSync:
             return []
 
         try:
+            self._last_sync_fetch_error = None
             since = datetime.now(timezone.utc) - timedelta(days=days)
             since_ts = int(since.timestamp() * 1000)
 
@@ -312,7 +332,8 @@ class MEXCTradeSync:
             return all_trades
 
         except Exception as e:
-            logger.error(f"Failed to fetch MEXC position history: {e}")
+            self._last_sync_fetch_error = f"Failed to fetch MEXC position history: {e}"
+            logger.error(self._last_sync_fetch_error)
             return []
 
     def sync_recent_trades(
@@ -338,21 +359,38 @@ class MEXCTradeSync:
             "skipped_existing": [],
             "skipped_untracked": [],
             "errors": [],
-            "sync_timestamp": datetime.now(timezone.utc).isoformat()
+            "sync_timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "ok",
+            "fatal_error": None,
         }
 
+        sync_state = _load_sync_state()
+        sync_state["last_attempt_at"] = results["sync_timestamp"]
+
         if not self.exchange:
-            results["errors"].append("MEXC not initialized - check API credentials")
+            fatal_error = "MEXC not initialized - check API credentials"
+            results["errors"].append(fatal_error)
+            results["status"] = "error"
+            results["fatal_error"] = fatal_error
+            sync_state["last_error"] = fatal_error
+            _save_sync_state(sync_state, mark_success=False)
             return results
 
         # Load current state
         trade_log = _load_trade_log()
-        sync_state = _load_sync_state()
         synced_ids = set(sync_state.get("synced_trade_ids", []))
         tracked_tokens = _get_tracked_tokens()
 
         # Fetch trades from MEXC
         mexc_trades = self.fetch_position_history(days=days)
+        fatal_fetch_error = getattr(self, "_last_sync_fetch_error", None)
+        if fatal_fetch_error:
+            results["errors"].append(fatal_fetch_error)
+            results["status"] = "error"
+            results["fatal_error"] = fatal_fetch_error
+            sync_state["last_error"] = fatal_fetch_error
+            _save_sync_state(sync_state, mark_success=False)
+            return results
 
         for mexc_trade in mexc_trades:
             try:
@@ -448,6 +486,7 @@ class MEXCTradeSync:
 
         # Always update last_sync timestamp on successful run
         # (health check uses this to verify sync is running, not just new trades)
+        sync_state["last_error"] = None
         _save_sync_state(sync_state)
 
         return results
@@ -1016,10 +1055,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Load environment
-    from dotenv import load_dotenv
-    load_dotenv(PROJECT_ROOT / ".env")
-
     sync = MEXCTradeSync()
 
     if args.check:
@@ -1028,6 +1063,7 @@ if __name__ == "__main__":
             print("✅ MEXC connection successful")
         else:
             print("❌ MEXC not configured - add MEXC_API_KEY and MEXC_API_SECRET to .env")
+        sys.exit(_cli_exit_code_for_results(check_mode=True, available=sync.is_available()))
     else:
         include_untracked = not args.tracked_only
         mode = "DACLE-tracked tokens only" if args.tracked_only else "ALL trades"
@@ -1058,3 +1094,4 @@ if __name__ == "__main__":
                 print(f"  • {error}")
 
         print(f"\nSync timestamp: {results['sync_timestamp']}")
+        sys.exit(_cli_exit_code_for_results(results))

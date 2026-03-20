@@ -35,17 +35,15 @@ Date: 2026-01-24
 import json
 import logging
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import hashlib
 
-# Load environment variables
-from dotenv import load_dotenv
-load_dotenv()
-
 from src.utils.lifecycle_store import find_lifecycle_for_position, get_entry as get_lifecycle_entry
 from src.learning.exit_reason import infer_exit_reason
+from src.utils.config import load_runtime_env_files
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +51,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 TRADE_LOG_PATH = PROJECT_ROOT / "data" / "trades" / "trade_log.json"
 SYNC_STATE_PATH = PROJECT_ROOT / "data" / "trades" / "blofin_sync_state.json"
 DATA_TOKENS_DIR = PROJECT_ROOT / "data" / "tokens"
+
+load_runtime_env_files(PROJECT_ROOT)
 
 # Tokens we track in DACLE (will match against these)
 TRACKED_TOKENS: Optional[List[str]] = None  # Loaded dynamically
@@ -108,17 +108,34 @@ def _load_sync_state() -> Dict[str, Any]:
 
     return {
         "last_sync": None,
+        "last_attempt_at": None,
+        "last_error": None,
         "synced_trade_ids": [],
         "created_at": datetime.now(timezone.utc).isoformat()
     }
 
 
-def _save_sync_state(state: Dict[str, Any]) -> None:
+def _save_sync_state(state: Dict[str, Any], *, mark_success: bool = True) -> None:
     """Save sync state."""
     from src.utils.atomic_write import atomic_json_write
     SYNC_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    state["last_sync"] = datetime.now(timezone.utc).isoformat()
+    if mark_success:
+        state["last_sync"] = datetime.now(timezone.utc).isoformat()
     atomic_json_write(SYNC_STATE_PATH, state)
+
+
+def _cli_exit_code_for_results(
+    results: Optional[Dict[str, Any]] = None,
+    *,
+    check_mode: bool = False,
+    available: Optional[bool] = None,
+) -> int:
+    """Translate sync/check results into a CLI exit code."""
+    if check_mode:
+        return 0 if available else 1
+    if results and (results.get("status") == "error" or results.get("fatal_error")):
+        return 1
+    return 0
 
 
 def _generate_trade_id(trade: Dict[str, Any]) -> str:
@@ -146,6 +163,7 @@ class BlofinTradeSync:
     def __init__(self):
         """Initialize Blofin connection."""
         self.exchange = None
+        self._last_sync_fetch_error: Optional[str] = None
         self._init_exchange()
 
     def _init_exchange(self) -> None:
@@ -264,6 +282,7 @@ class BlofinTradeSync:
             return []
 
         try:
+            self._last_sync_fetch_error = None
             since = datetime.now(timezone.utc) - timedelta(days=days)
             since_ts = int(since.timestamp() * 1000)
 
@@ -335,7 +354,8 @@ class BlofinTradeSync:
             return all_trades
 
         except Exception as e:
-            logger.error(f"Failed to fetch Blofin position history: {e}")
+            self._last_sync_fetch_error = f"Failed to fetch Blofin position history: {e}"
+            logger.error(self._last_sync_fetch_error)
             return []
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
@@ -581,21 +601,38 @@ class BlofinTradeSync:
             "skipped_existing": [],
             "skipped_untracked": [],
             "errors": [],
-            "sync_timestamp": datetime.now(timezone.utc).isoformat()
+            "sync_timestamp": datetime.now(timezone.utc).isoformat(),
+            "status": "ok",
+            "fatal_error": None,
         }
 
+        sync_state = _load_sync_state()
+        sync_state["last_attempt_at"] = results["sync_timestamp"]
+
         if not self.exchange:
-            results["errors"].append("Blofin not initialized - check API credentials")
+            fatal_error = "Blofin not initialized - check API credentials"
+            results["errors"].append(fatal_error)
+            results["status"] = "error"
+            results["fatal_error"] = fatal_error
+            sync_state["last_error"] = fatal_error
+            _save_sync_state(sync_state, mark_success=False)
             return results
 
         # Load current state
         trade_log = _load_trade_log()
-        sync_state = _load_sync_state()
         synced_ids = set(sync_state.get("synced_trade_ids", []))
         tracked_tokens = _get_tracked_tokens()
 
         # Fetch trades from Blofin
         blofin_trades = self.fetch_position_history(days=days)
+        fatal_fetch_error = getattr(self, "_last_sync_fetch_error", None)
+        if fatal_fetch_error:
+            results["errors"].append(fatal_fetch_error)
+            results["status"] = "error"
+            results["fatal_error"] = fatal_fetch_error
+            sync_state["last_error"] = fatal_fetch_error
+            _save_sync_state(sync_state, mark_success=False)
+            return results
 
         # Session 433: Build entry fill lookup by symbol
         # Blofin returns individual fills; entry fills have fillPnl=0,
@@ -722,6 +759,7 @@ class BlofinTradeSync:
 
         # Always update last_sync timestamp on successful run
         # (health check uses this to verify sync is running, not just new trades)
+        sync_state["last_error"] = None
         _save_sync_state(sync_state)
 
         return results
@@ -1212,10 +1250,6 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    # Load environment
-    from dotenv import load_dotenv
-    load_dotenv(PROJECT_ROOT / ".env")
-
     sync = BlofinTradeSync()
 
     if args.check:
@@ -1224,6 +1258,7 @@ if __name__ == "__main__":
             print("✅ Blofin connection successful")
         else:
             print("❌ Blofin not configured - add BLOFIN_API_KEY, BLOFIN_API_SECRET, BLOFIN_PASSPHRASE to .env")
+        sys.exit(_cli_exit_code_for_results(check_mode=True, available=sync.is_available()))
     else:
         include_untracked = not args.tracked_only
         mode = "DACLE-tracked tokens only" if args.tracked_only else "ALL trades"
@@ -1254,3 +1289,4 @@ if __name__ == "__main__":
                 print(f"  • {error}")
 
         print(f"\nSync timestamp: {results['sync_timestamp']}")
+        sys.exit(_cli_exit_code_for_results(results))

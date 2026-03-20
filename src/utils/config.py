@@ -14,6 +14,55 @@ from typing import Optional, Dict, Any, Tuple
 from dotenv import load_dotenv
 
 
+def _detect_root_path(root_path: Optional[Path] = None) -> Path:
+    """Resolve project root for runtime env/config loading."""
+    if root_path is not None:
+        return root_path
+
+    current = Path(__file__).resolve().parent
+    while current != current.parent:
+        if (current / "pyproject.toml").exists() or (current / ".env").exists():
+            return current
+        current = current.parent
+
+    return Path(__file__).parent.parent.parent
+
+
+def load_runtime_env_files(
+    root_path: Optional[Path] = None,
+    shared_env_file: Optional[Path] = None,
+    override: bool = True,
+) -> Tuple[Path, ...]:
+    """
+    Load runtime env files with the same precedence used by cron_wrapper.sh.
+
+    Order:
+    1. external shared env file (`DACLE_SHARED_ENV_FILE` or `/home/clawd/.env.shared`)
+    2. project-local `.env.shared`
+    3. project-local `.env`
+    4. project-local `.env.secret`
+    """
+    resolved_root = _detect_root_path(root_path)
+    external_shared = shared_env_file
+    if external_shared is None:
+        external_shared = Path(
+            os.getenv("DACLE_SHARED_ENV_FILE", "/home/clawd/.env.shared")
+        )
+
+    loaded: list[Path] = []
+    for path in (
+        external_shared,
+        resolved_root / ".env.shared",
+        resolved_root / ".env",
+        resolved_root / ".env.secret",
+    ):
+        if path.exists() and path not in loaded:
+            load_dotenv(path, override=override)
+            loaded.append(path)
+
+    return tuple(loaded)
+
+
 # =============================================================================
 # Timeout Configuration (Session 302)
 # =============================================================================
@@ -391,32 +440,8 @@ def load_config(root_path: Optional[Path] = None, force_reload: bool = False) ->
     if _config is not None and not force_reload:
         return _config
 
-    # Auto-detect root path if not provided
-    if root_path is None:
-        # Find project root by looking for pyproject.toml or .env
-        current = Path(__file__).resolve().parent
-        while current != current.parent:
-            if (current / "pyproject.toml").exists() or (current / ".env").exists():
-                root_path = current
-                break
-            current = current.parent
-
-        if root_path is None:
-            # Fallback to parent.parent.parent if auto-detection fails
-            root_path = Path(__file__).parent.parent.parent
-
-    # Load in specific order (Session 495)
-    # 1. Base defaults (.env.shared)
-    if (root_path / ".env.shared").exists():
-        load_dotenv(root_path / ".env.shared", override=True)
-
-    # 2. Local overrides (.env)
-    if (root_path / ".env").exists():
-        load_dotenv(root_path / ".env", override=True)
-
-    # 3. Sensitive secrets (.env.secret)
-    if (root_path / ".env.secret").exists():
-        load_dotenv(root_path / ".env.secret", override=True)
+    root_path = _detect_root_path(root_path)
+    load_runtime_env_files(root_path=root_path, override=True)
 
     _config = AppConfig.from_env()
     return _config
