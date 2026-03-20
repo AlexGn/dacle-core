@@ -367,6 +367,19 @@ class LighterRealClient:
             or ""
         ).strip()
 
+    @staticmethod
+    def _classify_signer_client_error(last_error: str) -> str:
+        error_text = str(last_error or "").lower()
+        if "invalid api key index" in error_text:
+            return "API_KEY_INDEX_INVALID"
+        if "couldnt find account" in error_text or "couldn't find account" in error_text:
+            return "API_KEY_SLOT_MISMATCH"
+        if "invalid signature" in error_text:
+            return "INVALID_SIGNATURE"
+        if "nonce" in error_text:
+            return "NONCE_ERROR"
+        return "API_ERROR"
+
     async def _create_order_via_signer_client(
         self,
         *,
@@ -483,7 +496,7 @@ class LighterRealClient:
                         except Exception:
                             pass
 
-        error_code = "NONCE_ERROR" if "nonce" in last_error.lower() else "API_ERROR"
+        error_code = self._classify_signer_client_error(last_error)
         return True, {"status": "error", "error": last_error, "error_code": error_code}
 
     async def create_order(
