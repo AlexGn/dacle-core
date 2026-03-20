@@ -49,6 +49,11 @@ class CapitalAllocator:
         except Exception as e:
             logger.error(f"Failed to sync global config: {e}")
 
+    async def get_active_lease_count(self) -> int:
+        """Returns the number of globally active capital leases (proxy for concurrent positions)."""
+        await self._cleanup_expired_leases()
+        return await self.redis.hlen(self.key_leases)
+
     async def get_available(self) -> float:
         """Returns the current available (unallocated) capital from global Redis state."""
         await self.sync_global_config()
