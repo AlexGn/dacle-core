@@ -70,6 +70,12 @@ ANALYSIS_REFRESH_FALLBACK_MAX_AGE_MINUTES = int(
 )
 API_KICKOFF_RETRIES = int(os.getenv("DACLE_API_KICKOFF_RETRIES", "2"))
 API_KICKOFF_RETRY_DELAY_SECONDS = float(os.getenv("DACLE_API_KICKOFF_RETRY_DELAY_SECONDS", "2"))
+CONSOLIDATED_APPEAR_TIMEOUT_SECONDS = float(
+    os.getenv("ANALYSIS_CONSOLIDATED_APPEAR_TIMEOUT_SECONDS", "8")
+)
+CONSOLIDATED_APPEAR_POLL_SECONDS = float(
+    os.getenv("ANALYSIS_CONSOLIDATED_APPEAR_POLL_SECONDS", "0.25")
+)
 
 
 def _is_supported_analysis_channel(channel: Optional[Any]) -> bool:
@@ -1046,14 +1052,25 @@ class AnalysisCommands(commands.Cog):
     def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
         consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
         bak_path = TOKENS_DIR / symbol.upper() / "consolidated.json.bak"
-        
+
         path_to_load = consolidated_path
         if not consolidated_path.exists():
-            if bak_path.exists():
-                logger.info(f"[{symbol}] consolidated.json missing, falling back to .bak")
-                path_to_load = bak_path
-            else:
-                raise FileNotFoundError(f"No consolidated.json found for {symbol}")
+            deadline = time.time() + max(0.0, CONSOLIDATED_APPEAR_TIMEOUT_SECONDS)
+            while time.time() < deadline:
+                if consolidated_path.exists():
+                    break
+                if bak_path.exists():
+                    logger.info(f"[{symbol}] consolidated.json missing, falling back to .bak")
+                    path_to_load = bak_path
+                    break
+                time.sleep(max(0.01, CONSOLIDATED_APPEAR_POLL_SECONDS))
+
+            if not consolidated_path.exists() and path_to_load == consolidated_path:
+                if bak_path.exists():
+                    logger.info(f"[{symbol}] consolidated.json missing after retry, falling back to .bak")
+                    path_to_load = bak_path
+                else:
+                    raise FileNotFoundError(f"No consolidated.json found for {symbol}")
                 
         try:
             with open(path_to_load) as f:
