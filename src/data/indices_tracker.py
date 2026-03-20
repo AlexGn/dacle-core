@@ -77,6 +77,50 @@ class IndicesTracker:
         except Exception:
             pass
 
+    @staticmethod
+    def _signal_for_short_from_usdt_change(change_4h: Optional[float]) -> str:
+        if change_4h is None:
+            return "UNKNOWN"
+        if change_4h > 0.1:
+            return "FAVORABLE"
+        if change_4h < -0.1:
+            return "HEADWIND"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _signal_for_short_from_total_change(change_4h: Optional[float]) -> str:
+        if change_4h is None:
+            return "UNKNOWN"
+        if change_4h < -0.5:
+            return "FAVORABLE"
+        if change_4h > 0.5:
+            return "HEADWIND"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _format_market_cap(value: float) -> str:
+        if value >= 1e12:
+            return f"${value / 1e12:.2f}T"
+        if value >= 1e9:
+            return f"${value / 1e9:.0f}B"
+        if value >= 1e6:
+            return f"${value / 1e6:.0f}M"
+        return f"${value:.0f}"
+
+    @staticmethod
+    def _combine_totals_short_signals(total_signals: list[str]) -> str:
+        favorable = sum(1 for signal in total_signals if signal == "FAVORABLE")
+        headwind = sum(1 for signal in total_signals if signal == "HEADWIND")
+        if favorable == len(total_signals):
+            return "ALL_FAVORABLE"
+        if headwind == len(total_signals):
+            return "ALL_HEADWIND"
+        if favorable >= 2:
+            return "MOSTLY_FAVORABLE"
+        if headwind >= 2:
+            return "MOSTLY_HEADWIND"
+        return "MIXED"
+
     def fetch_all_indices(self, force_refresh: bool = False) -> Dict:
         if not force_refresh:
             cached = self._get_cached_indices()
@@ -139,6 +183,8 @@ class IndicesTracker:
             eth_d = data_map.get('CRYPTOCAP:ETH.D', [0])[0]
             usdt_d = data_map.get('CRYPTOCAP:USDT.D', [0])[0]
             usdc_d = data_map.get('CRYPTOCAP:USDC.D', [0])[0]
+            usdt_d_change_24h = data_map.get('CRYPTOCAP:USDT.D', [0, 0, 0])[1]
+            usdt_d_change_4h = data_map.get('CRYPTOCAP:USDT.D', [0, 0, 0])[2]
             
             stables_c_d = usdt_d + usdc_d
             others_d = 100 - btc_d - eth_d
@@ -148,19 +194,59 @@ class IndicesTracker:
             total3 = data_map.get('CRYPTOCAP:TOTAL3', [0])[0]
             
             total_mc_change = data_map.get('CRYPTOCAP:TOTAL', [0, 0])[1]
+            total_market_cap_change_4h = data_map.get('CRYPTOCAP:TOTAL', [0, 0, 0])[2]
+            total2_change_24h = data_map.get('CRYPTOCAP:TOTAL2', [0, 0, 0])[1]
+            total2_change_4h = data_map.get('CRYPTOCAP:TOTAL2', [0, 0, 0])[2]
+            total3_change_24h = data_map.get('CRYPTOCAP:TOTAL3', [0, 0, 0])[1]
+            total3_change_4h = data_map.get('CRYPTOCAP:TOTAL3', [0, 0, 0])[2]
             btc_24h_change = be_map.get('BINANCE:BTCUSDT', [0, 0])[1]
             eth_24h_change = be_map.get('BINANCE:ETHUSDT', [0, 0])[1]
+
+            total1_short_signal = self._signal_for_short_from_total_change(total_market_cap_change_4h)
+            total2_short_signal = self._signal_for_short_from_total_change(total2_change_4h)
+            total3_short_signal = self._signal_for_short_from_total_change(total3_change_4h)
 
             results = {
                 'timestamp': datetime.now(timezone.utc).isoformat(),
                 'indices': {
                     'btc_d': {'value': round(btc_d, 2), 'signal': self._interpret_btc_d(btc_d), 'note': f'BTC.D at {btc_d:.2f}%'},
-                    'usdt_d': {'value': round(usdt_d, 2), 'signal': self._interpret_usdt_d(usdt_d), 'note': f'USDT.D at {usdt_d:.2f}%'},
+                    'usdt_d': {
+                        'value': round(usdt_d, 2),
+                        'signal': self._interpret_usdt_d(usdt_d),
+                        'signal_for_short': self._signal_for_short_from_usdt_change(usdt_d_change_4h),
+                        'change_24h': round(usdt_d_change_24h, 2),
+                        'change_4h': round(usdt_d_change_4h, 2),
+                        'note': f'USDT.D at {usdt_d:.2f}%'
+                    },
                     'stables_c_d': {'value': round(stables_c_d, 2), 'signal': self._interpret_stables_d(stables_c_d), 'note': f'Stables at {stables_c_d:.2f}%'},
                     'others_d': {'value': round(others_d, 2), 'signal': self._interpret_others_d(others_d), 'note': f'Others at {others_d:.2f}%'},
-                    'total': {'value': int(total_market_cap), 'signal': 'INFO', 'note': f'Total MC: ${total_market_cap/1e12:.2f}T'},
-                    'total2': {'value': int(total2), 'signal': 'INFO', 'note': f'Total2: ${total2/1e12:.2f}T'},
-                    'total3': {'value': int(total3), 'signal': 'INFO', 'note': f'Total3: ${total3/1e9:.0f}B'},
+                    'total': {
+                        'value': int(total_market_cap),
+                        'value_formatted': self._format_market_cap(total_market_cap),
+                        'signal': total1_short_signal,
+                        'signal_for_short': total1_short_signal,
+                        'change_24h': round(total_mc_change, 2),
+                        'change_4h': round(total_market_cap_change_4h, 2),
+                        'note': f'Total MC: {self._format_market_cap(total_market_cap)}'
+                    },
+                    'total2': {
+                        'value': int(total2),
+                        'value_formatted': self._format_market_cap(total2),
+                        'signal': total2_short_signal,
+                        'signal_for_short': total2_short_signal,
+                        'change_24h': round(total2_change_24h, 2),
+                        'change_4h': round(total2_change_4h, 2),
+                        'note': f'Total2: {self._format_market_cap(total2)}'
+                    },
+                    'total3': {
+                        'value': int(total3),
+                        'value_formatted': self._format_market_cap(total3),
+                        'signal': total3_short_signal,
+                        'signal_for_short': total3_short_signal,
+                        'change_24h': round(total3_change_24h, 2),
+                        'change_4h': round(total3_change_4h, 2),
+                        'note': f'Total3: {self._format_market_cap(total3)}'
+                    },
                     'fear_greed_index': {'value': fear_greed_value, 'signal': self._interpret_fear_greed(fear_greed_value) if fear_greed_value else 'UNKNOWN'},
                     'realtime_sentiment': realtime_sentiment,
                     'btc_24h_change': btc_24h_change,
@@ -177,6 +263,30 @@ class IndicesTracker:
         except Exception as e:
             logger.error(f"❌ Failed to fetch indices: {e}")
             return self._fallback_result()
+
+    def fetch_realtime_macro_indices(self, force_refresh: bool = False) -> Dict:
+        """Backward-compatible macro layout for live monitor/playbook callers."""
+        data = self.fetch_all_indices(force_refresh=force_refresh)
+        indices = data.get('indices', {})
+        if not indices:
+            return {'error': data.get('error', 'indices unavailable')}
+
+        total1 = indices.get('total', {})
+        total2 = indices.get('total2', {})
+        total3 = indices.get('total3', {})
+        total_signals = [
+            total1.get('signal_for_short', 'UNKNOWN'),
+            total2.get('signal_for_short', 'UNKNOWN'),
+            total3.get('signal_for_short', 'UNKNOWN'),
+        ]
+        return {
+            'timestamp': data.get('timestamp'),
+            'usdt_d': indices.get('usdt_d', {}),
+            'total1': total1,
+            'total2': total2,
+            'total3': total3,
+            'totals_combined': self._combine_totals_short_signals(total_signals),
+        }
 
     def _interpret_btc_d(self, value: float) -> str:
         if value >= 60: return "BEARISH_FOR_ALTS"
