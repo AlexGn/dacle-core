@@ -257,6 +257,20 @@ def _estimate_snapshot_age_minutes(symbol: str, consolidated: Dict[str, Any]) ->
     return max(0.0, (time.time() - mtime) / 60.0)
 
 
+def _snapshot_paths(symbol: str) -> tuple[Path, Path]:
+    token_dir = TOKENS_DIR / symbol.upper()
+    return token_dir / "consolidated.json", token_dir / "consolidated.json.bak"
+
+
+def _has_local_snapshot(symbol: str) -> bool:
+    consolidated_path, bak_path = _snapshot_paths(symbol)
+    return consolidated_path.exists() or bak_path.exists()
+
+
+def _normalize_token_name(value: Optional[str]) -> str:
+    return (value or "").strip().upper()
+
+
 async def _load_cached_after_refresh_delay(
     *,
     loop: asyncio.AbstractEventLoop,
@@ -279,7 +293,7 @@ async def _load_cached_after_refresh_delay(
             loop.run_in_executor(None, load_cached_fn),
             timeout=30,
         )
-    except Exception:
+    except Exception as exc:
         logger.error(
             "ANALYZE_SLASH_ERROR "
             f"request_id={request_id or 'n/a'} "
@@ -287,6 +301,17 @@ async def _load_cached_after_refresh_delay(
             "reason=refresh_timeout_and_cached_load_failed",
             exc_info=True,
         )
+        if isinstance(exc, FileNotFoundError) and not _has_local_snapshot(symbol):
+            content = (
+                f"❌ Analysis unavailable for **{symbol}** on this deployment. "
+                "Live refresh did not create local research data, and no cached snapshot exists. "
+                "Please add or refresh this token in the dashboard first."
+            )
+            if status_msg is not None:
+                await status_msg.edit(content=content)
+            else:
+                await target_channel.send(content)
+            return None, None
         content = (
             f"❌ Analysis timed out while refreshing **{symbol}**, and cached data "
             "could not be loaded. Please retry in ~1 minute."
@@ -1050,8 +1075,7 @@ class AnalysisCommands(commands.Cog):
             await asyncio.sleep(2)
 
     def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
-        consolidated_path = TOKENS_DIR / symbol.upper() / "consolidated.json"
-        bak_path = TOKENS_DIR / symbol.upper() / "consolidated.json.bak"
+        consolidated_path, bak_path = _snapshot_paths(symbol)
 
         path_to_load = consolidated_path
         if not consolidated_path.exists():
@@ -1118,6 +1142,27 @@ class AnalysisCommands(commands.Cog):
         matches = await loop.run_in_executor(None, lambda: self._search_token(symbol))
         if not matches:
             return symbol, None
+        exact_symbol_matches = [
+            match for match in matches
+            if _normalize_token_name(match.get("symbol")) == symbol.upper()
+        ]
+        if exact_symbol_matches and not force_prompt:
+            unique_exact_names = {
+                _normalize_token_name(match.get("name"))
+                for match in exact_symbol_matches
+                if _normalize_token_name(match.get("name"))
+            }
+            if len(unique_exact_names) <= 1:
+                best_exact = max(
+                    exact_symbol_matches,
+                    key=lambda match: (
+                        isinstance(match.get("market_cap"), (int, float)),
+                        match.get("market_cap") or 0,
+                    ),
+                )
+                if best_exact.get("name"):
+                    self._cache_disambiguation(symbol, best_exact)
+                return best_exact.get("symbol") or symbol, best_exact.get("name")
         if len(matches) == 1 and not force_prompt:
             match = matches[0]
             if match.get("name"):
