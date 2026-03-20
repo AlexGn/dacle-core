@@ -994,7 +994,7 @@ class AnalysisCommands(commands.Cog):
         """Trigger NEW token research and wait for completion (async)."""
         payload = await api_request(
             "POST", 
-            "/api/tokens/research/run",
+            "/api/tokens/research",
             json={"symbol": symbol.upper(), "name": name}
         )
         
@@ -1028,6 +1028,9 @@ class AnalysisCommands(commands.Cog):
 
     async def _refresh_or_research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
         """Prefer refetch for existing tokens; fallback to research for missing tokens (async)."""
+        if not _has_local_snapshot(symbol):
+            logger.info(f"[{symbol}] No local snapshot found, bootstrapping via research")
+            return await self._research_token_data(symbol, name)
         try:
             return await self._refresh_token_data(symbol)
         except RuntimeError as e:
