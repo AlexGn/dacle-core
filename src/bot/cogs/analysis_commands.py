@@ -24,8 +24,8 @@ from src.bot.cogs.analysis_views import TradeApprovalView
 from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.bot.utils.safe_task import safe_create_task
 from src.bot.runtime_routing import get_bot_api_base_url, resolve_channel
-from src.bot.utils.api_client import api_request
 from api.routers.macro import get_btc_regime_widget
+from src.data.token_identity_lock import get_identity_lock
 
 logger = get_logger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -156,7 +156,7 @@ def _is_local_api_unavailable_error(exc: BaseException) -> bool:
     return False
 
 
-def _format_user_facing_analysis_error(exc: BaseException) -> str:
+def _format_user_facing_analysis_error(exc: BaseException, *, stage: str = "analysis") -> str:
     """Convert internal exception details into stable user-facing text."""
     if isinstance(exc, requests.HTTPError):
         status = getattr(exc.response, "status_code", "unknown")
@@ -173,15 +173,29 @@ def _format_user_facing_analysis_error(exc: BaseException) -> str:
             "Please fix data folder ownership (clawd) and retry."
         )
     if _is_local_api_unavailable_error(exc):
-        return (
-            "Local API was temporarily unavailable during refresh. "
-            "Please retry in ~1 minute."
-        )
+        if stage == "resolution":
+            return (
+                "Local API was temporarily unavailable while resolving token data. "
+                "Please retry in ~1 minute."
+            )
+        if stage == "refresh":
+            return (
+                "Local API was temporarily unavailable during refresh. "
+                "Please retry in ~1 minute."
+            )
+        return "Local API was temporarily unavailable during analysis. Please retry in ~1 minute."
     if _is_timeout_like_error(exc):
-        return (
-            "Timed out waiting for local API response. "
-            "API may be busy; retry in ~1 minute."
-        )
+        if stage == "resolution":
+            return (
+                "Timed out while resolving token data from the local API. "
+                "API may be busy; retry in ~1 minute."
+            )
+        if stage == "refresh":
+            return (
+                "Timed out waiting for local API response. "
+                "API may be busy; retry in ~1 minute."
+            )
+        return "Timed out during analysis. API may be busy; retry in ~1 minute."
     return err_text
 
 
@@ -269,6 +283,29 @@ def _has_local_snapshot(symbol: str) -> bool:
 
 def _normalize_token_name(value: Optional[str]) -> str:
     return (value or "").strip().upper()
+
+
+async def _publish_status_update(
+    *,
+    status_msg: Optional[discord.Message],
+    target_channel: discord.abc.Messageable,
+    content: str,
+    mirror_to_thread: bool = False,
+) -> None:
+    if status_msg is not None:
+        await status_msg.edit(content=content)
+    else:
+        await target_channel.send(content)
+
+    if not mirror_to_thread or not isinstance(target_channel, discord.Thread):
+        return
+
+    status_channel_id = getattr(getattr(status_msg, "channel", None), "id", None)
+    target_channel_id = getattr(target_channel, "id", None)
+    if status_msg is not None and status_channel_id == target_channel_id:
+        return
+
+    await target_channel.send(content)
 
 
 async def _load_cached_after_refresh_delay(
@@ -990,12 +1027,54 @@ class AnalysisCommands(commands.Cog):
         payload = resp.json() or {}
         return payload.get("matches") or []
 
+    async def _local_api_json_request(
+        self,
+        method: str,
+        endpoint: str,
+        *,
+        json_payload: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        read_timeout_seconds: Optional[float] = None,
+        retries: int = 0,
+        retry_delay_seconds: float = 1.0,
+    ) -> Dict[str, Any]:
+        api_base = _get_api_base_url().rstrip("/")
+        url = f"{api_base}{endpoint}"
+        timeout = (
+            API_CONNECT_TIMEOUT_SECONDS,
+            read_timeout_seconds if read_timeout_seconds is not None else API_READ_TIMEOUT_SECONDS,
+        )
+        loop = asyncio.get_running_loop()
+        resp = await loop.run_in_executor(
+            None,
+            lambda: _request_with_retry(
+                method,
+                url,
+                json=json_payload,
+                params=params,
+                headers=_api_headers(),
+                timeout=timeout,
+                retries=retries,
+                retry_delay_seconds=retry_delay_seconds,
+            ),
+        )
+        if resp.status_code == 422:
+            return {"_status": 422, "_data": resp.json()}
+        if resp.status_code == 404:
+            return {"_status": 404}
+        resp.raise_for_status()
+        payload = resp.json()
+        return payload if isinstance(payload, dict) else {}
+
     async def _research_token_data(self, symbol: str, name: str) -> Dict[str, Any]:
         """Trigger NEW token research and wait for completion (async)."""
-        payload = await api_request(
-            "POST", 
+        payload = await self._local_api_json_request(
+            "POST",
             "/api/tokens/research",
-            json={"symbol": symbol.upper(), "name": name}
+            json_payload={"symbol": symbol.upper(), "name": name},
+            read_timeout_seconds=API_RESEARCH_KICKOFF_READ_TIMEOUT_SECONDS,
+            retries=API_KICKOFF_RETRIES,
+            retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
         )
         
         if not payload or "_status" in payload:
@@ -1007,7 +1086,11 @@ class AnalysisCommands(commands.Cog):
 
         start = time.time()
         while True:
-            status_payload = await api_request("GET", f"/api/tokens/research/{task_id}")
+            status_payload = await self._local_api_json_request(
+                "GET",
+                f"/api/tokens/research/{task_id}",
+                read_timeout_seconds=API_STATUS_READ_TIMEOUT_SECONDS,
+            )
             
             if not status_payload or "_status" in status_payload:
                 if status_payload and status_payload.get("_status") == 404:
@@ -1043,10 +1126,13 @@ class AnalysisCommands(commands.Cog):
 
     async def _refresh_token_data(self, symbol: str) -> Dict[str, Any]:
         """Trigger token refetch and wait for completion (async)."""
-        payload = await api_request(
-            "POST", 
+        payload = await self._local_api_json_request(
+            "POST",
             f"/api/tokens/{symbol}/refetch",
-            params={"force": "true", "auto_analyze": "false"}
+            params={"force": "true", "auto_analyze": "false"},
+            read_timeout_seconds=API_REFRESH_KICKOFF_READ_TIMEOUT_SECONDS,
+            retries=API_KICKOFF_RETRIES,
+            retry_delay_seconds=API_KICKOFF_RETRY_DELAY_SECONDS,
         )
         
         if not payload or "_status" in payload:
@@ -1058,7 +1144,11 @@ class AnalysisCommands(commands.Cog):
 
         start = time.time()
         while True:
-            status_payload = await api_request("GET", f"/api/tokens/research/{task_id}")
+            status_payload = await self._local_api_json_request(
+                "GET",
+                f"/api/tokens/research/{task_id}",
+                read_timeout_seconds=API_STATUS_READ_TIMEOUT_SECONDS,
+            )
             
             if not status_payload or "_status" in status_payload:
                 if status_payload and status_payload.get("_status") == 404:
@@ -1076,6 +1166,30 @@ class AnalysisCommands(commands.Cog):
                 raise TimeoutError(f"Refetch timed out after {ANALYSIS_REFRESH_POLL_TIMEOUT_SECONDS}s")
 
             await asyncio.sleep(2)
+
+    def _resolve_local_tracked_token(self, symbol: str) -> Optional[Tuple[str, Optional[str]]]:
+        sym = symbol.upper()
+        identity_lock = get_identity_lock(sym)
+        if identity_lock and identity_lock.get("name"):
+            return identity_lock.get("symbol") or sym, identity_lock.get("name")
+
+        for candidate in _snapshot_paths(sym):
+            if not candidate.exists():
+                continue
+            try:
+                with open(candidate) as f:
+                    data = json.load(f)
+            except Exception:
+                continue
+            resolved_symbol = (
+                _normalize_token_name(data.get("symbol"))
+                or _normalize_token_name(data.get("token_symbol"))
+                or sym
+            )
+            resolved_name = data.get("name") or data.get("token_name")
+            if resolved_name:
+                return resolved_symbol, resolved_name
+            return resolved_symbol, None
 
     def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
         consolidated_path, bak_path = _snapshot_paths(symbol)
@@ -1140,6 +1254,9 @@ class AnalysisCommands(commands.Cog):
             cached = self._get_cached_disambiguation(symbol)
             if cached and cached.get("name"):
                 return cached.get("symbol") or symbol, cached.get("name")
+            local_match = self._resolve_local_tracked_token(symbol)
+            if local_match is not None:
+                return local_match
 
         loop = asyncio.get_running_loop()
         matches = await loop.run_in_executor(None, lambda: self._search_token(symbol))
@@ -1394,7 +1511,12 @@ class AnalysisCommands(commands.Cog):
         try:
             resolved = await self._maybe_disambiguate(symbol, interaction.user, target_channel)
             if not resolved:
-                await status_msg.edit(content="❌ Analysis cancelled. No token selected.")
+                await _publish_status_update(
+                    status_msg=status_msg,
+                    target_channel=target_channel,
+                    content="❌ Analysis cancelled. No token selected.",
+                    mirror_to_thread=thread_created,
+                )
                 self._finalize_analyze_request(interaction.user, symbol, request_id)
                 return
             
@@ -1427,9 +1549,12 @@ class AnalysisCommands(commands.Cog):
                 exc_info=True,
             )
             try:
-                user_err = _format_user_facing_analysis_error(e)
-                await status_msg.edit(
-                    content=f"❌ Analysis failed for **{symbol}**: {user_err}"
+                user_err = _format_user_facing_analysis_error(e, stage="resolution")
+                await _publish_status_update(
+                    status_msg=status_msg,
+                    target_channel=target_channel,
+                    content=f"❌ Analysis failed for **{symbol}**: {user_err}",
+                    mirror_to_thread=thread_created,
                 )
             except Exception:
                 pass
@@ -1514,6 +1639,7 @@ class AnalysisCommands(commands.Cog):
         async with semaphore:
             target_channel: discord.abc.Messageable = analysis_channel
             status_msg: Optional[discord.Message] = None
+            thread_created = False
             try:
                 status_msg = await analysis_channel.send(
                     f"Analyzing **{symbol}**... (batch request by {requester.mention})"
@@ -1523,16 +1649,19 @@ class AnalysisCommands(commands.Cog):
                     auto_archive_duration=60,
                 )
                 target_channel = thread
+                thread_created = True
             except Exception:
                 pass
 
             try:
                 resolved = await self._maybe_disambiguate(symbol, requester, target_channel)
                 if not resolved:
-                    if status_msg is not None:
-                        await status_msg.edit(content=f"Skipped {symbol} -- disambiguation cancelled.")
-                    else:
-                        await target_channel.send(f"Skipped {symbol} -- disambiguation cancelled.")
+                    await _publish_status_update(
+                        status_msg=status_msg,
+                        target_channel=target_channel,
+                        content=f"Skipped {symbol} -- disambiguation cancelled.",
+                        mirror_to_thread=thread_created,
+                    )
                     return symbol, False
                 resolved_symbol, resolved_name = resolved
                 if status_msg is not None:
@@ -1555,9 +1684,14 @@ class AnalysisCommands(commands.Cog):
                 return symbol, True
             except Exception as e:
                 logger.error(f"Batch analysis failed for {symbol}: {e}", exc_info=True)
-                user_err = _format_user_facing_analysis_error(e)
+                user_err = _format_user_facing_analysis_error(e, stage="resolution")
                 try:
-                    await status_msg.edit(content=f"Analysis failed for **{symbol}**: {user_err}")
+                    await _publish_status_update(
+                        status_msg=status_msg,
+                        target_channel=target_channel,
+                        content=f"Analysis failed for **{symbol}**: {user_err}",
+                        mirror_to_thread=thread_created,
+                    )
                 except Exception:
                     pass
                 return symbol, False
@@ -1589,10 +1723,7 @@ class AnalysisCommands(commands.Cog):
                 # Use name if provided, otherwise default to symbol for research fallback
                 name_to_use = resolved_name or symbol
                 await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: self._refresh_or_research_token_data(symbol, name_to_use),
-                    ),
+                    self._refresh_or_research_token_data(symbol, name_to_use),
                     timeout=ANALYSIS_REFRESH_TIMEOUT_SECONDS,
                 )
                 consolidated = await asyncio.wait_for(
@@ -1669,12 +1800,11 @@ class AnalysisCommands(commands.Cog):
                 if not _check_ta_freshness(symbol):
                     logger.info(f"[{symbol}] TA data is stale (>{TA_FRESHNESS_THRESHOLD_MINUTES}min)")
                     try:
-                        if status_msg is not None:
-                            await status_msg.edit(
-                                content=f"Refreshing stale TA data for **{symbol}**..."
-                            )
-                        else:
-                            await target_channel.send(f"Refreshing stale TA data for **{symbol}**...")
+                        await _publish_status_update(
+                            status_msg=status_msg,
+                            target_channel=target_channel,
+                            content=f"Refreshing stale TA data for **{symbol}**...",
+                        )
                     except Exception:
                         pass
 
@@ -1705,10 +1835,12 @@ class AnalysisCommands(commands.Cog):
                     f"({missing_str}). Please refresh in dashboard and verify sources."
                     f"{diag_text}"
                 )
-                if status_msg is not None:
-                    await status_msg.edit(content=content)
-                else:
-                    await target_channel.send(content)
+                await _publish_status_update(
+                    status_msg=status_msg,
+                    target_channel=target_channel,
+                    content=content,
+                    mirror_to_thread=True,
+                )
                 return
 
             # Run the full pipeline
@@ -1732,10 +1864,12 @@ class AnalysisCommands(commands.Cog):
                     f"❌ Analysis timed out while running pipeline for **{symbol}**. "
                     "Please retry shortly."
                 )
-                if status_msg is not None:
-                    await status_msg.edit(content=content)
-                else:
-                    await target_channel.send(content)
+                await _publish_status_update(
+                    status_msg=status_msg,
+                    target_channel=target_channel,
+                    content=content,
+                    mirror_to_thread=True,
+                )
                 return
             
             if result.has_error:
@@ -1746,10 +1880,12 @@ class AnalysisCommands(commands.Cog):
                     f"reason=pipeline_error "
                     f"error={result.error_message}"
                 )
-                if status_msg is not None:
-                    await status_msg.edit(content=f"❌ Analysis failed: {result.error_message}")
-                else:
-                    await target_channel.send(f"❌ Analysis failed: {result.error_message}")
+                await _publish_status_update(
+                    status_msg=status_msg,
+                    target_channel=target_channel,
+                    content=f"❌ Analysis failed: {result.error_message}",
+                    mirror_to_thread=True,
+                )
                 return
 
             # Fetch macro data for context (optional)
@@ -1808,11 +1944,19 @@ class AnalysisCommands(commands.Cog):
             logger.error(f"Error in analyze command: {e}", exc_info=True)
             # Try to report error to the user if possible
             try:
-                err_text = _format_user_facing_analysis_error(e)
+                err_text = _format_user_facing_analysis_error(e, stage="analysis")
+                content = f"❌ An error occurred while analyzing **{symbol}**: {err_text}"
                 if status_msg:
-                    await status_msg.edit(content=f"❌ An error occurred while analyzing **{symbol}**: {err_text}")
+                    await _publish_status_update(
+                        status_msg=status_msg,
+                        target_channel=target_channel,
+                        content=content,
+                        mirror_to_thread=True,
+                    )
                 elif notify_channel:
                     await notify_channel.send(f"❌ Analysis failed for **{symbol}**: {err_text}")
+                    if isinstance(target_channel, discord.Thread):
+                        await target_channel.send(content)
                 else:
                     await target_channel.send(f"❌ An error occurred: {err_text}")
             except Exception:
