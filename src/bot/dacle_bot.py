@@ -284,7 +284,18 @@ class DACLEBot(commands.Bot):
                 # A. Watcher: Sweep positions (Every cycle)
                 await watcher.watch_cycle()
                 
-                # B. Sentinel: Scheduled tasks
+                # B. Heartbeat: Active Pulse (Every cycle)
+                if self.config.logs_channel_id:
+                    try:
+                        logs_channel = self.get_channel(self.config.logs_channel_id)
+                        if logs_channel:
+                            pulse_symbol = getattr(self.config, "heartbeat_pulse_symbol", "💓")
+                            await logs_channel.send(pulse_symbol)
+                            logger.info(f"💓 SENTINEL: Heartbeat pulse ({pulse_symbol}) sent to logs channel.")
+                    except Exception as pulse_err:
+                        logger.warning(f"⚠️ SENTINEL: Failed to send pulse: {pulse_err}")
+
+                # C. Sentinel: Scheduled tasks
                 now = datetime.now(timezone.utc)
                 
                 # 1. Macro Refresh (Every 4 hours at :00)
