@@ -282,16 +282,16 @@ class RealTimeRiskLedger:
         slippage = float(diag.get("slippage_paid_usd") or 0.0)
         risk_state = str(diag.get("risk_state") or "")
 
+        # On flat startup, any residual open exposure state is stale regardless
+        # of realized session PnL. Exchange truth already says the account is flat.
+        if abs(inventory) > 1e-8 or abs(notional) > 1e-6 or abs(unrealized) > 1e-6:
+            return True
+
         return (
             abs(realized) < 1e-9
-            and abs(unrealized) < 1e-9
-            and abs(notional) < 1e-9
             and (
-                abs(inventory) > 1e-8
-                or (
-                    risk_state in {RiskState.BLOCK.value, RiskState.HARD_STOP.value}
-                    and (fees > 0.0 or slippage > 0.0)
-                )
+                risk_state in {RiskState.BLOCK.value, RiskState.HARD_STOP.value}
+                and (fees > 0.0 or slippage > 0.0)
             )
         )
 
