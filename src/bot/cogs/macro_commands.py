@@ -1,5 +1,7 @@
 """Macro Discord Commands."""
 
+import time
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -17,6 +19,13 @@ class MacroCommands(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._active_market_requests: dict[int, float] = {}
+
+    def _prune_market_requests(self) -> None:
+        now = time.monotonic()
+        expired = [user_id for user_id, expires_at in self._active_market_requests.items() if expires_at <= now]
+        for user_id in expired:
+            self._active_market_requests.pop(user_id, None)
 
     @app_commands.command(
         name="market",
@@ -24,12 +33,35 @@ class MacroCommands(commands.Cog):
     )
     async def market(self, interaction: discord.Interaction):
         """Fetch and display current market direction."""
-        await safe_defer(
+        user_id = getattr(getattr(interaction, "user", None), "id", None)
+        self._prune_market_requests()
+        if user_id is not None and user_id in self._active_market_requests:
+            await safe_send(
+                interaction,
+                command_name="market",
+                logger=logger,
+                content="⏳ `/market` is already running for you. Please wait a few seconds.",
+                ephemeral=True,
+            )
+            return
+        if user_id is not None:
+            self._active_market_requests[user_id] = time.monotonic() + 30
+
+        deferred = await safe_defer(
             interaction,
             ephemeral=False,
+            thinking=True,
             command_name="market",
             logger=logger,
         )
+        if not deferred:
+            logger.warning(
+                "Aborting /market after defer failure user_id=%s interaction_id=%s",
+                user_id,
+                getattr(interaction, "id", None),
+            )
+            self._active_market_requests.pop(user_id, None)
+            return
 
         try:
             data = await get_market_direction()
@@ -66,6 +98,9 @@ class MacroCommands(commands.Cog):
                 content=f"❌ Error getting market direction: {e}",
                 ephemeral=True,
             )
+        finally:
+            if user_id is not None:
+                self._active_market_requests.pop(user_id, None)
 
 
     async def cog_app_command_error(self, interaction, error):
