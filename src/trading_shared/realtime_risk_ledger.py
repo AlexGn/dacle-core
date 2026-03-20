@@ -210,6 +210,21 @@ class RealTimeRiskLedger:
             await pipe.execute()
         await self._check_limits()
 
+    async def clear_position_state(self):
+        """
+        Clear only position-derived state on a confirmed flat transition.
+
+        This preserves realized/session fee history and the current risk state
+        while ensuring stale inventory cannot recreate synthetic open notional
+        on the next periodic mark-to-market tick.
+        """
+        async with self._redis.pipeline(transaction=True) as pipe:
+            pipe.set(self.k_unrealized, "0.0")
+            pipe.set(self.k_notional, "0.0")
+            pipe.set(self.k_inventory, "0.0")
+            await pipe.execute()
+        await self._check_limits()
+
     async def _check_limits(self):
         """Check if limits breached and update risk state if necessary."""
         now = int(time.time())

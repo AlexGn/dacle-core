@@ -810,6 +810,12 @@ class LighterRealClient:
             if "HTTP 429" in trades_error or "429" in trades_error:
                 return {"status": "error", "error": trades_error}
 
+            # Public recentTrades cannot safely reconstruct account-specific fill
+            # history for LIVE reconciliation. In LIVE mode, fail closed and require
+            # authenticated /trades instead of risking partial fill replay.
+            if str(self.mode or "").strip().upper() == "LIVE":
+                return {"status": "error", "error": f"trades failed ({trades_error})"}
+
             # Fallback path when auth token missing/invalid or endpoint shape drifts.
             fallback_result = await self._fetch_recent_trades(
                 session=session,
