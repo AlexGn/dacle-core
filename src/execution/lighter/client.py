@@ -612,9 +612,9 @@ class LighterRealClient:
         if self.enable_order_deadline:
             sdk_expiry = int(time.time()) + int(self.order_deadline_sec)
         else:
-            sdk_expiry = int(time.time()) + 3600 * 24 * 28 # DEFAULT_28_DAY_ORDER_EXPIRY
+            sdk_expiry = -1 # DEFAULT_28_DAY_ORDER_EXPIRY
             if order_type == "IOC":
-                sdk_expiry = int(time.time()) + 300 # DEFAULT_IOC_EXPIRY
+                sdk_expiry = 0 # DEFAULT_IOC_EXPIRY
 
         if order_type == "IOC":
             sdk_order_type = 1 # MARKET/IOC
