@@ -271,14 +271,17 @@ def _estimate_snapshot_age_minutes(symbol: str, consolidated: Dict[str, Any]) ->
     return max(0.0, (time.time() - mtime) / 60.0)
 
 
-def _snapshot_paths(symbol: str) -> tuple[Path, Path]:
+def _snapshot_paths(symbol: str) -> tuple[Path, ...]:
     token_dir = TOKENS_DIR / symbol.upper()
-    return token_dir / "consolidated.json", token_dir / "consolidated.json.bak"
+    return (
+        token_dir / "consolidated.json",
+        token_dir / "consolidated.json.backup",
+        token_dir / "consolidated.json.bak",
+    )
 
 
 def _has_local_snapshot(symbol: str) -> bool:
-    consolidated_path, bak_path = _snapshot_paths(symbol)
-    return consolidated_path.exists() or bak_path.exists()
+    return any(path.exists() for path in _snapshot_paths(symbol))
 
 
 def _normalize_token_name(value: Optional[str]) -> str:
@@ -1192,24 +1195,31 @@ class AnalysisCommands(commands.Cog):
             return resolved_symbol, None
 
     def _load_consolidated(self, symbol: str) -> Dict[str, Any]:
-        consolidated_path, bak_path = _snapshot_paths(symbol)
-
+        snapshot_paths = _snapshot_paths(symbol)
+        consolidated_path = snapshot_paths[0]
+        fallback_paths = snapshot_paths[1:]
         path_to_load = consolidated_path
         if not consolidated_path.exists():
             deadline = time.time() + max(0.0, CONSOLIDATED_APPEAR_TIMEOUT_SECONDS)
             while time.time() < deadline:
                 if consolidated_path.exists():
                     break
-                if bak_path.exists():
-                    logger.info(f"[{symbol}] consolidated.json missing, falling back to .bak")
-                    path_to_load = bak_path
+                fallback_existing = next((path for path in fallback_paths if path.exists()), None)
+                if fallback_existing is not None:
+                    logger.info(
+                        f"[{symbol}] consolidated.json missing, falling back to {fallback_existing.name}"
+                    )
+                    path_to_load = fallback_existing
                     break
                 time.sleep(max(0.01, CONSOLIDATED_APPEAR_POLL_SECONDS))
 
             if not consolidated_path.exists() and path_to_load == consolidated_path:
-                if bak_path.exists():
-                    logger.info(f"[{symbol}] consolidated.json missing after retry, falling back to .bak")
-                    path_to_load = bak_path
+                fallback_existing = next((path for path in fallback_paths if path.exists()), None)
+                if fallback_existing is not None:
+                    logger.info(
+                        f"[{symbol}] consolidated.json missing after retry, falling back to {fallback_existing.name}"
+                    )
+                    path_to_load = fallback_existing
                 else:
                     raise FileNotFoundError(f"No consolidated.json found for {symbol}")
                 
