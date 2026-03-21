@@ -637,17 +637,17 @@ class LighterRealClient:
 
         payload = {
             "type": "create_order",
-            "marketId": self.market_id,
+            "market_id": int(self.market_id),
             "side": side.lower(),
-            "price": str(price_f),
-            "size": str(qty_f),
-            "nonce": nonce,
+            "price": str(price_int),
+            "size": str(size_int),
+            "nonce": int(nonce),
             "signature": signature,
-            "timeInForce": sdk_tif,
-            "subAccountIndex": int(account_index or 0),
-            "orderType": sdk_order_type,
-            "orderExpiry": sdk_expiry,
-            "clientOrderIndex": nonce,
+            "time_in_force": int(sdk_tif),
+            "sub_account_index": int(account_index or 0),
+            "order_type": int(sdk_order_type),
+            "order_expiry": int(sdk_expiry),
+            "client_order_index": int(nonce),
         }
 
         # 5.11: Try each API URL in order; failover on transient errors.
