@@ -424,22 +424,21 @@ class LighterRealClient:
         is_ask = str(side).upper() != "BUY"
         order_type_u = str(order_type or "IOC").upper()
 
-        # Mirror Lighter SDK semantics:
-        # - IOC => market order + IOC tif + immediate expiry
-        # - LIMIT => limit + GTT
-        # - POST_ONLY => limit + post-only tif
+        # Lighter V2 constants (Day 3 hardening)
+        # Order Types: LIMIT=0, MARKET=1, STOP_LIMIT=2, STOP_MARKET=3
+        # Time In Force: GTC=0, POST_ONLY=1, IOC=2, FOK=3
         if order_type_u == "IOC":
-            sdk_order_type = SignerClient.ORDER_TYPE_MARKET
-            sdk_tif = SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
-            sdk_expiry = SignerClient.DEFAULT_IOC_EXPIRY
+            sdk_order_type = 1 # MARKET
+            sdk_tif = 2 # IOC
+            sdk_expiry = int(time.time()) + 300
         elif order_type_u == "LIMIT":
-            sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
-            sdk_tif = SignerClient.ORDER_TIME_IN_FORCE_GOOD_TILL_TIME
-            sdk_expiry = SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY
+            sdk_order_type = 0 # LIMIT
+            sdk_tif = 0 # GTC
+            sdk_expiry = int(time.time()) + 3600 * 24 * 28
         else:  # POST_ONLY
-            sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
-            sdk_tif = SignerClient.ORDER_TIME_IN_FORCE_POST_ONLY
-            sdk_expiry = SignerClient.DEFAULT_28_DAY_ORDER_EXPIRY
+            sdk_order_type = 0 # LIMIT
+            sdk_tif = 1 # POST_ONLY
+            sdk_expiry = int(time.time()) + 3600 * 24 * 28
 
         last_error = "unknown signer-client failure"
         for api_url in self.api_urls:
@@ -637,14 +636,15 @@ class LighterRealClient:
             "type": "create_order",
             "marketId": self.market_id,
             "side": side.lower(),
-            "price": str(price_int),
-            "size": str(size_int),
+            "price": str(price_f),
+            "size": str(qty_f),
             "nonce": nonce,
             "signature": signature,
-            "timeInForce": tif,
+            "timeInForce": sdk_tif,
             "subAccountIndex": int(account_index or 0),
             "orderType": sdk_order_type,
             "orderExpiry": sdk_expiry,
+            "clientOrderIndex": nonce,
         }
 
         # 5.11: Try each API URL in order; failover on transient errors.
