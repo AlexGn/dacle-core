@@ -424,21 +424,22 @@ class LighterRealClient:
         is_ask = str(side).upper() != "BUY"
         order_type_u = str(order_type or "IOC").upper()
 
-        # Lighter V2 constants (Day 3 hardening)
-        # Order Types: LIMIT=0, MARKET=1, STOP_LIMIT=2, STOP_MARKET=3
-        # Time In Force: IOC=0, GTC=1, POST_ONLY=2
+        # Mirror Lighter SDK semantics:
+        # - IOC => market order + IOC tif + immediate expiry
+        # - LIMIT => limit + GTT
+        # - POST_ONLY => limit + post-only tif
         if order_type_u == "IOC":
-            sdk_order_type = 1 # MARKET
-            sdk_tif = 0 # IOC
-            sdk_expiry = 0 # DEFAULT_IOC_EXPIRY
+            sdk_order_type = SignerClient.ORDER_TYPE_MARKET
+            sdk_tif = SignerClient.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
+            sdk_expiry = getattr(SignerClient, "DEFAULT_IOC_EXPIRY", 0)
         elif order_type_u == "LIMIT":
-            sdk_order_type = 0 # LIMIT
-            sdk_tif = 1 # GTC
-            sdk_expiry = -1 # DEFAULT_28_DAY_ORDER_EXPIRY
+            sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
+            sdk_tif = getattr(SignerClient, "ORDER_TIME_IN_FORCE_GOOD_TILL_TIME", 1)
+            sdk_expiry = getattr(SignerClient, "DEFAULT_28_DAY_ORDER_EXPIRY", -1)
         else:  # POST_ONLY
-            sdk_order_type = 0 # LIMIT
-            sdk_tif = 2 # POST_ONLY
-            sdk_expiry = -1 # DEFAULT_28_DAY_ORDER_EXPIRY
+            sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
+            sdk_tif = getattr(SignerClient, "ORDER_TIME_IN_FORCE_POST_ONLY", 2)
+            sdk_expiry = getattr(SignerClient, "DEFAULT_28_DAY_ORDER_EXPIRY", -1)
 
         last_error = "unknown signer-client failure"
         for api_url in self.api_urls:
