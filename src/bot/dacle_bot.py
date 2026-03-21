@@ -33,6 +33,7 @@ from src.bot.utils.memory_guard import (
 )
 from src.bot.utils.interaction_response import safe_send
 from src.bot.runtime_routing import get_bot_api_base_url
+from src.ops.runtime_release import write_runtime_release_marker
 
 # Load configuration explicitly at startup if not already loaded
 try:
@@ -701,6 +702,8 @@ def run_bot():
     logger = get_logger(__name__)
 
     logger.info("Starting DACLE Discord Bot...")
+    runtime_release = write_runtime_release_marker("bot", project_root=project_root)
+    logger.info("Runtime release marker updated for bot: sha=%s", runtime_release["components"]["bot"]["sha"])
 
     # Start health check HTTP server (HIGH-REL-001)
     health_server = HealthCheckServer(host="0.0.0.0", port=8081)
