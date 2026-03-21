@@ -207,6 +207,14 @@ class UpdateCommands(commands.Cog):
 
         return ""
 
+    @staticmethod
+    def _extract_error_detail(payload: Dict[str, Any]) -> str:
+        for key in ("error", "detail", "message"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
     async def _api_post(self, path: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         url = f"{self.api_url}{path}"
         for attempt in range(1, self.api_post_attempts + 1):
@@ -638,6 +646,13 @@ class UpdateCommands(commands.Cog):
 
         if request_status == "blocked":
             await self._send_followup(interaction, self._blocked_message(result), ephemeral=True)
+            return
+
+        if request_status in {"error", "failed"} or self._extract_error_detail(result):
+            await self._handle_start_failure(
+                interaction,
+                error_detail=self._extract_error_detail(result),
+            )
             return
 
         await self._send_followup(
