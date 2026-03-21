@@ -58,7 +58,7 @@ class LighterRealClient:
         self.account_type = self.account_tier
         self.mode = str(config.get("mode", "SHADOW")).upper()
         use_signer_sendtx = self._to_bool(config.get("use_signer_client_sendtx"))
-        self.use_signer_client_sendtx = bool(use_signer_sendtx) if use_signer_sendtx is not None else False
+        self.use_signer_client_sendtx = bool(use_signer_sendtx) if use_signer_sendtx is not None else True
         configured_account_index = config.get("account_index")
         if configured_account_index is None and self.mode == "LIVE":
             env_account_index = str(os.getenv("SCALPER_ACCOUNT_INDEX") or "").strip()
