@@ -605,23 +605,23 @@ class LighterRealClient:
         # Resolve SDK-specific order type values for signing
         # Matches logic in _create_order_via_signer_client
         sdk_order_type = 0 # LIMIT
-        sdk_tif = 0 # GTC
+        sdk_tif = 1 # GTC
         
         # Session 455: Default long expiry for GTC/POST_ONLY, short for IOC
         # Hardened safety: use config-driven deadline if enabled.
         if self.enable_order_deadline:
             sdk_expiry = int(time.time()) + int(self.order_deadline_sec)
         else:
-            sdk_expiry = -1 # DEFAULT_28_DAY_ORDER_EXPIRY
+            sdk_expiry = int(time.time()) + 3600 * 24 * 28 # DEFAULT_28_DAY_ORDER_EXPIRY
             if order_type == "IOC":
-                sdk_expiry = 0 # DEFAULT_IOC_EXPIRY
+                sdk_expiry = int(time.time()) + 300 # DEFAULT_IOC_EXPIRY
 
         if order_type == "IOC":
             sdk_order_type = 1 # MARKET/IOC
-            sdk_tif = 2 # IOC
+            sdk_tif = 0 # IOC
         elif order_type == "POST_ONLY":
             sdk_order_type = 0 # LIMIT
-            sdk_tif = 1 # POST_ONLY
+            sdk_tif = 2 # POST_ONLY
         
         order_data = {
             "subAccountIndex": int(account_index or 0),
