@@ -263,3 +263,4 @@ data/macro/sherlock_macro_levels.json
 !/CLAUDE.md
 .env.lock
 data/polymarket/
+.env.secret.bin
