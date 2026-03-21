@@ -604,6 +604,7 @@ class LighterRealClient:
         # Resolve SDK-specific order type values for signing
         # Matches logic in _create_order_via_signer_client
         sdk_order_type = 0 # LIMIT
+        sdk_tif = 0 # GTC
         
         # Session 455: Default long expiry for GTC/POST_ONLY, short for IOC
         # Hardened safety: use config-driven deadline if enabled.
@@ -616,8 +617,10 @@ class LighterRealClient:
 
         if order_type == "IOC":
             sdk_order_type = 1 # MARKET/IOC
+            sdk_tif = 2 # IOC
         elif order_type == "POST_ONLY":
             sdk_order_type = 0 # LIMIT
+            sdk_tif = 1 # POST_ONLY
         
         order_data = {
             "subAccountIndex": int(account_index or 0),
