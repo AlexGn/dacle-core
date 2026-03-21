@@ -426,18 +426,18 @@ class LighterRealClient:
 
         # Lighter V2 constants (Day 3 hardening)
         # Order Types: LIMIT=0, MARKET=1, STOP_LIMIT=2, STOP_MARKET=3
-        # Time In Force: GTC=0, POST_ONLY=1, IOC=2, FOK=3
+        # Time In Force: IOC=0, GTC=1, POST_ONLY=2
         if order_type_u == "IOC":
             sdk_order_type = 1 # MARKET
-            sdk_tif = 2 # IOC
+            sdk_tif = 0 # IOC
             sdk_expiry = int(time.time()) + 300
         elif order_type_u == "LIMIT":
             sdk_order_type = 0 # LIMIT
-            sdk_tif = 0 # GTC
+            sdk_tif = 1 # GTC
             sdk_expiry = int(time.time()) + 3600 * 24 * 28
         else:  # POST_ONLY
             sdk_order_type = 0 # LIMIT
-            sdk_tif = 1 # POST_ONLY
+            sdk_tif = 2 # POST_ONLY
             sdk_expiry = int(time.time()) + 3600 * 24 * 28
 
         last_error = "unknown signer-client failure"
