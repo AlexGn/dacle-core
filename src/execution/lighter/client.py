@@ -638,7 +638,7 @@ class LighterRealClient:
         payload = {
             "type": "create_order",
             "market_id": int(self.market_id),
-            "side": side.lower(),
+            "side": 0 if str(side).upper() == "BUY" else 1,
             "price": str(price_int),
             "size": str(size_int),
             "nonce": int(nonce),
