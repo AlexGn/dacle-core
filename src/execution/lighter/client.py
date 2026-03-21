@@ -430,15 +430,15 @@ class LighterRealClient:
         if order_type_u == "IOC":
             sdk_order_type = 1 # MARKET
             sdk_tif = 0 # IOC
-            sdk_expiry = int(time.time()) + 300
+            sdk_expiry = 0 # DEFAULT_IOC_EXPIRY
         elif order_type_u == "LIMIT":
             sdk_order_type = 0 # LIMIT
             sdk_tif = 1 # GTC
-            sdk_expiry = int(time.time()) + 3600 * 24 * 28
+            sdk_expiry = -1 # DEFAULT_28_DAY_ORDER_EXPIRY
         else:  # POST_ONLY
             sdk_order_type = 0 # LIMIT
             sdk_tif = 2 # POST_ONLY
-            sdk_expiry = int(time.time()) + 3600 * 24 * 28
+            sdk_expiry = -1 # DEFAULT_28_DAY_ORDER_EXPIRY
 
         last_error = "unknown signer-client failure"
         for api_url in self.api_urls:
@@ -611,9 +611,9 @@ class LighterRealClient:
         if self.enable_order_deadline:
             sdk_expiry = int(time.time()) + int(self.order_deadline_sec)
         else:
-            sdk_expiry = int(time.time()) + 3600 * 24 * 28 # 28 days
+            sdk_expiry = -1 # DEFAULT_28_DAY_ORDER_EXPIRY
             if order_type == "IOC":
-                sdk_expiry = int(time.time()) + 300 # 5 min
+                sdk_expiry = 0 # DEFAULT_IOC_EXPIRY
 
         if order_type == "IOC":
             sdk_order_type = 1 # MARKET/IOC
