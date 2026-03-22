@@ -637,20 +637,24 @@ class LighterRealClient:
 
         signature = self.signer.sign_order(order_data)
 
+        # Lighter V2 Verified Protocol (PascalCase, Integers, specific Sig/ExpiredAt keys)
+        # Session 538: Definitive alignment with SDK's Go library output.
         tx_info = {
+            "AccountIndex": int(account_index or 0),
+            "ApiKeyIndex": int(self.api_key_index),
             "MarketIndex": int(self.market_id),
             "ClientOrderIndex": int(nonce),
-            "BaseAmount": str(size_int),
-            "Price": str(price_int),
+            "BaseAmount": int(size_int),
+            "Price": int(price_int),
             "IsAsk": 1 if str(side).upper() != "BUY" else 0,
             "Type": int(sdk_order_type),
             "TimeInForce": int(sdk_tif),
             "ReduceOnly": 1 if bool(is_reduce_only) else 0,
-            "TriggerPrice": "0",
+            "TriggerPrice": 0,
             "OrderExpiry": int(sdk_expiry),
+            "ExpiredAt": int(time.time() * 1000) + 300000, # ms timestamp, 5 min buffer
             "Nonce": int(nonce),
-            "Signature": signature,
-            "ApiKeyIndex": int(self.api_key_index),
+            "Sig": signature,
         }
         payload = {
             "tx_type": 14,
@@ -2332,14 +2336,19 @@ class LighterRealClient:
                 "nonce": int(nonce),
             })
             
+            # Lighter V2 Verified Protocol (PascalCase, Index key, Sig key)
             tx_info = {
-                "OrderIndex": order_index_int,
+                "AccountIndex": int(self._resolved_account_index or 0),
+                "ApiKeyIndex": int(self.api_key_index),
+                "MarketIndex": market_index_int,
+                "Index": order_index_int,
+                "ExpiredAt": int(time.time() * 1000) + 300000, # ms timestamp, 5 min buffer
                 "Nonce": int(nonce),
+                "Sig": signature,
             }
             payload = {
                 "tx_type": 15,  # Lighter V2 cancel order type
                 "tx_info": json.dumps(tx_info, separators=(',', ':')),
-                "signature": signature,
             }
 
             status, response_payload, err_text = await self._post_json(session, url, json_payload=payload)
