@@ -636,19 +636,23 @@ class LighterRealClient:
 
         signature = self.signer.sign_order(order_data)
 
-        payload = {
-            "type": "create_order",
-            "market_id": int(self.market_id),
-            "side": 0 if str(side).upper() == "BUY" else 1,
+        tx_info = {
+            "marketIndex": int(self.market_id),
+            "clientOrderIndex": int(nonce),
+            "baseAmount": str(size_int),
             "price": str(price_int),
-            "size": str(size_int),
+            "side": 0 if str(side).upper() == "BUY" else 1,
+            "orderType": int(sdk_order_type),
+            "timeInForce": int(sdk_tif),
+            "reduceOnly": bool(is_reduce_only),
+            "orderExpiry": int(sdk_expiry),
             "nonce": int(nonce),
             "signature": signature,
-            "time_in_force": int(sdk_tif),
-            "sub_account_index": int(account_index or 0),
-            "order_type": int(sdk_order_type),
-            "order_expiry": int(sdk_expiry),
-            "client_order_index": int(nonce),
+            "apiKeyIndex": int(api_key_index),
+        }
+        payload = {
+            "txType": 14,
+            "txInfo": json.dumps(tx_info, separators=(',', ':')),
         }
 
         # 5.11: Try each API URL in order; failover on transient errors.
@@ -1057,8 +1061,17 @@ class LighterRealClient:
         url: str,
         json_payload: Dict[str, Any],
     ) -> Tuple[int, Any, str]:
-        """POST wrapper with auth-expiry detection."""
-        async with session.post(url, json=json_payload) as resp:
+        """POST wrapper with auth-expiry detection. Auto-switches to form-data if txType present."""
+        import aiohttp
+        if "txType" in json_payload:
+            form = aiohttp.FormData()
+            for k, v in json_payload.items():
+                form.add_field(k, str(v))
+            post_coro = session.post(url, data=form)
+        else:
+            post_coro = session.post(url, json=json_payload)
+
+        async with post_coro as resp:
             status = resp.status
             try:
                 payload = await resp.json(content_type=None)
