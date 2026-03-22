@@ -655,6 +655,7 @@ class LighterRealClient:
             "ExpiredAt": int(time.time() * 1000) + 300000, # ms timestamp, 5 min buffer
             "Nonce": int(nonce),
             "Sig": signature,
+            "L2TxAttributes": {"1": 0, "2": 0, "3": 0},
         }
         payload = {
             "tx_type": 14,
