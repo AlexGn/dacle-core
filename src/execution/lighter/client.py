@@ -637,22 +637,23 @@ class LighterRealClient:
         signature = self.signer.sign_order(order_data)
 
         tx_info = {
-            "marketIndex": int(self.market_id),
-            "clientOrderIndex": int(nonce),
-            "baseAmount": str(size_int),
-            "price": str(price_int),
-            "side": 0 if str(side).upper() == "BUY" else 1,
-            "orderType": int(sdk_order_type),
-            "timeInForce": int(sdk_tif),
-            "reduceOnly": bool(is_reduce_only),
-            "orderExpiry": int(sdk_expiry),
-            "nonce": int(nonce),
-            "signature": signature,
-            "apiKeyIndex": int(api_key_index),
+            "MarketIndex": int(self.market_id),
+            "ClientOrderIndex": int(nonce),
+            "BaseAmount": str(size_int),
+            "Price": str(price_int),
+            "IsAsk": 1 if str(side).upper() != "BUY" else 0,
+            "Type": int(sdk_order_type),
+            "TimeInForce": int(sdk_tif),
+            "ReduceOnly": 1 if bool(is_reduce_only) else 0,
+            "TriggerPrice": "0",
+            "OrderExpiry": int(sdk_expiry),
+            "Nonce": int(nonce),
+            "Signature": signature,
+            "ApiKeyIndex": int(api_key_index),
         }
         payload = {
-            "txType": 14,
-            "txInfo": json.dumps(tx_info, separators=(',', ':')),
+            "tx_type": 14,
+            "tx_info": json.dumps(tx_info, separators=(',', ':')),
         }
 
         # 5.11: Try each API URL in order; failover on transient errors.
@@ -1061,9 +1062,8 @@ class LighterRealClient:
         url: str,
         json_payload: Dict[str, Any],
     ) -> Tuple[int, Any, str]:
-        """POST wrapper with auth-expiry detection. Auto-switches to form-data if txType present."""
-        import aiohttp
-        if "txType" in json_payload:
+        """POST wrapper with auth-expiry detection. Auto-switches to form-data if tx_type present."""
+        if "tx_type" in json_payload:
             form = aiohttp.FormData()
             for k, v in json_payload.items():
                 form.add_field(k, str(v))
