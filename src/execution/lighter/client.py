@@ -112,7 +112,10 @@ class LighterRealClient:
         self.enable_order_deadline = bool(config.get("enable_order_deadline", False))
         self.order_deadline_sec = int(config.get("order_deadline_sec", 5))
 
-        self.api_key_index = int(config.get("api_key_index", 2))
+        self.api_key_index = self._to_int(config.get("api_key_index"))
+        if self.api_key_index is None:
+            self.api_key_index = self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=2)
+        
         # 5.11: API failover — primary + optional secondary URLs.
         self.api_urls: List[str] = config.get("api_urls") or [self.api_url]
         self.ws_urls: List[str] = config.get("ws_urls") or []
@@ -362,11 +365,21 @@ class LighterRealClient:
         }
 
     def _resolve_lighter_api_private_key(self) -> str:
-        return str(
+        val = str(
             os.getenv("LIGHTER_API_PRIVATE_KEY")
             or os.getenv("SCALPER_API_PRIVATE_KEY")
             or ""
         ).strip()
+        if val:
+            return val
+        
+        # Fallback to local .env.secret resolution if available
+        try:
+            from scripts.lighter.runtime_env import resolve_env_key
+            from pathlib import Path
+            return resolve_env_key(Path("."), "LIGHTER_API_PRIVATE_KEY")
+        except Exception:
+            return ""
 
     @staticmethod
     def _classify_signer_client_error(last_error: str) -> str:
