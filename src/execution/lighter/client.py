@@ -421,7 +421,7 @@ class LighterRealClient:
         if self.enforce_account_tier_match and self._account_tier_mismatch:
             return True, self._account_tier_mismatch_error(context="create_order")
 
-        api_key_index = int(self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=0) or 0)
+        api_key_index = int(self.api_key_index)
         is_ask = str(side).upper() != "BUY"
         order_type_u = str(order_type or "IOC").upper()
 
@@ -459,7 +459,9 @@ class LighterRealClient:
                 submit_client_order_index = int(nonce)
                 if submit_nonce < 0:
                     submit_nonce = int(getattr(SignerClient, "DEFAULT_NONCE", -1))
-                    submit_api_key_index = int(getattr(SignerClient, "DEFAULT_API_KEY_INDEX", 255))
+                    # Use our resolved api_key_index, not the SDK default 255, 
+                    # because we only provided one key to the SignerClient.
+                    submit_api_key_index = int(api_key_index) 
                     submit_client_order_index = max(1, int(time.time() * 1000) & 0x7FFFFFFF)
                 _tx, resp, err = await signer_client.create_order(
                     market_index=int(self.market_id),
@@ -643,7 +645,7 @@ class LighterRealClient:
             "AccountIndex": int(account_index or 0),
             "ApiKeyIndex": int(self.api_key_index),
             "MarketIndex": int(self.market_id),
-            "ClientOrderIndex": int(nonce),
+            "ClientOrderIndex": int(nonce) if int(nonce) >= 0 else max(1, int(time.time() * 1000) & 0x7FFFFFFF),
             "BaseAmount": int(size_int),
             "Price": int(price_int),
             "IsAsk": 1 if str(side).upper() != "BUY" else 0,
