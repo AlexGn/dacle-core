@@ -117,3 +117,42 @@ class LighterSigner:
 
         signed_msg = self.account.sign_message(encode_typed_data(full_message=structured_data))
         return signed_msg.signature.hex()
+
+    def sign_cancel_order(self, cancel_data: dict) -> str:
+        """
+        Signs an order cancellation using EIP-712.
+        
+        Lighter V2 CancelOrder Struct:
+        - subAccountIndex (uint64)
+        - marketId (uint32)
+        - orderIndex (uint64)
+        - nonce (uint32)
+        """
+        from eth_account.messages import encode_typed_data
+
+        cancel_fields = [
+            {"name": "subAccountIndex", "type": "uint64"},
+            {"name": "marketId", "type": "uint32"},
+            {"name": "orderIndex", "type": "uint64"},
+            {"name": "nonce", "type": "uint32"},
+        ]
+
+        types = {
+            "EIP712Domain": [
+                {"name": "name", "type": "string"},
+                {"name": "version", "type": "string"},
+                {"name": "chainId", "type": "uint256"},
+                {"name": "verifyingContract", "type": "address"},
+            ],
+            "CancelOrder": cancel_fields,
+        }
+
+        structured_data = {
+            "types": types,
+            "domain": self.domain,
+            "primaryType": "CancelOrder",
+            "message": cancel_data,
+        }
+
+        signed_msg = self.account.sign_message(encode_typed_data(full_message=structured_data))
+        return signed_msg.signature.hex()

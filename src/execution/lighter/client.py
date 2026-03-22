@@ -112,6 +112,7 @@ class LighterRealClient:
         self.enable_order_deadline = bool(config.get("enable_order_deadline", False))
         self.order_deadline_sec = int(config.get("order_deadline_sec", 5))
 
+        self.api_key_index = int(config.get("api_key_index", 2))
         # 5.11: API failover — primary + optional secondary URLs.
         self.api_urls: List[str] = config.get("api_urls") or [self.api_url]
         self.ws_urls: List[str] = config.get("ws_urls") or []
@@ -649,7 +650,7 @@ class LighterRealClient:
             "OrderExpiry": int(sdk_expiry),
             "Nonce": int(nonce),
             "Signature": signature,
-            "ApiKeyIndex": int(api_key_index),
+            "ApiKeyIndex": int(self.api_key_index),
         }
         payload = {
             "tx_type": 14,
@@ -677,7 +678,7 @@ class LighterRealClient:
                     status, response_payload, err_text = await self._post_json(session, url, json_payload=payload)
 
                     # Exit safety: on auth expiry, trigger immediate refresh and retry once.
-                    if status in (401, 403) and emergency_exit_mode and not did_reactive_retry:
+                    if status in (401, 403) and is_emergency_exit and not did_reactive_retry:
                         refreshed = await self._reactive_auth_refresh_once("create_order_401_403")
                         if refreshed:
                             did_reactive_retry = True
@@ -2313,36 +2314,38 @@ class LighterRealClient:
         }
 
     async def _cancel_order(self, session: aiohttp.ClientSession, order_id: Any, nonce: int) -> dict:
-        """Cancel a single order via POST /sendTx."""
+        """Cancel a single order via POST /sendTx using Lighter V2 protocol."""
         url = f"{self.api_url}/sendTx"
-        payload = {
-            "type": "cancel_order",
-            "orderId": str(order_id),
-            "nonce": nonce,
-        }
-
-        if self.signer:
-            try:
-                # V2: Even cancellations currently reuse the Order struct with dummy values
-                # or require specific CancelOrder struct. Given the existing code reuses
-                # sign_order, we provide the V2 fields to avoid 400 Bad Request.
-                payload["signature"] = self.signer.sign_order({
-                    "subAccountIndex": int(self._resolved_account_index or 0),
-                    "marketId": self.market_id,
-                    "side": 0,
-                    "price": 0,
-                    "size": 0,
-                    "orderType": 0,
-                    "nonce": nonce,
-                    "orderExpiry": 0,
-                })
-            except Exception as e:
-                logger.warning(f"Failed to sign cancel for order {order_id}: {e}")
+        
+        if not self.signer:
+            return {"status": "error", "error": "No signer available for _cancel_order."}
 
         try:
-            status, payload, err_text = await self._post_json(session, url, json_payload=payload)
+            # V2: Use sign_cancel_order with correct parameters
+            market_index_int = int(self.market_id)
+            order_index_int = int(order_id)
+            
+            signature = self.signer.sign_cancel_order({
+                "subAccountIndex": int(self._resolved_account_index or 0),
+                "marketId": market_index_int,
+                "orderIndex": order_index_int,
+                "nonce": int(nonce),
+            })
+            
+            tx_info = {
+                "OrderIndex": order_index_int,
+                "Nonce": int(nonce),
+            }
+            payload = {
+                "tx_type": 15,  # Lighter V2 cancel order type
+                "tx_info": json.dumps(tx_info, separators=(',', ':')),
+                "signature": signature,
+            }
+
+            status, response_payload, err_text = await self._post_json(session, url, json_payload=payload)
             if status == 200:
-                return {"status": "success"}
-            return {"status": "error", "error": f"HTTP {status}: {err_text}"}
+                return {"status": "success", "orderId": order_id}
+            return {"status": "error", "error": f"HTTP {status}: {err_text}", "error_code": "API_ERROR"}
         except Exception as e:
-            return {"status": "error", "error": str(e)}
+            logger.error(f"Cancel order {order_id} failed: {e}")
+            return {"status": "error", "error": str(e), "error_code": "CLIENT_ERROR"}
