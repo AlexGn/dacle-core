@@ -82,8 +82,8 @@ class PropCommands(commands.Cog):
 
         now = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         header = (
-            "**🎯 Prop Firm Top 10 High-Conviction Setups**\n"
-            f"*Dacle Cipher + Genesis Macro Alignment | {now}*\n\n"
+            "**🎯 Prop Firm Top Setups**\n"
+            f"*Shared Core | {now}*\n\n"
         )
 
         ready = [r for r in results if r.get("decision_label") == "CONTINUATION_READY"]
@@ -94,47 +94,32 @@ class PropCommands(commands.Cog):
             setup_type_display = setup_type.replace("_", " ")
             is_bullish = "LONG" in setup_type
             emoji = "🚀" if is_bullish else "📉"
-            rsi = float(r.get("rsi") or 50.0)
-            verdict = "APPROVE"
-            reversal_risk = 2.0
-
-            if is_bullish:
-                if rsi > 75:
-                    reversal_risk += (rsi - 75) / 5 * 2.0
-                if r.get("has_red_dot"):
-                    reversal_risk += 3.0
-                if rsi > 85:
-                    verdict = "SKIP"
-            else:
-                if rsi < 25:
-                    reversal_risk += (25 - rsi) / 5 * 2.0
-                if r.get("has_green_dot"):
-                    reversal_risk += 3.0
-                if rsi < 15:
-                    verdict = "SKIP"
-
-            reversal_risk = min(max(reversal_risk, 0.0), 9.9)
-            conviction = float(r.get("conviction") or 0.0)
-            ratio = (conviction / 10.0) * 0.5 + 0.1
-            change_str = f"{float(r.get('change_24h') or 0.0):+.1f}%"
-            vol_m = float(r.get("volume_usd") or 0.0) / 1e6
-            symbol = str(r.get("symbol") or "?")
+            check_mark = "✅"
+            
+            symbol = str(r.get("symbol", "?"))
+            change_pct = float(r.get("change_24h_pct", 0.0))
+            vol_usd = float(r.get("volume_24h_usd", 0.0))
+            vol_m = vol_usd / 1e6
+            
+            c_score = float(r.get("continuation_score", 0.0))
+            r_score = float(r.get("reversal_risk_score", 0.0))
+            decision = str(r.get("decision_label", "MONITOR"))
+            
+            ta_bias = str(r.get("ta_bias", "NEUTRAL"))
+            ta_conf = float(r.get("ta_confidence", 0.0))
+            rsi = float(r.get("rsi_14", 50.0))
 
             line1 = (
-                f"✅ `{symbol:8s}` {change_str} | {emoji} {setup_type} | "
-                f"C {conviction:.1f} | R {reversal_risk:.1f} | Vol ${vol_m:.0f}M\n"
+                f"{check_mark} `{symbol:8s}` {change_pct:+.1f}% | {emoji} {setup_type_display} | "
+                f"C {c_score:.1f} | R {r_score:.1f} | Vol ${vol_m:.0f}M\n"
             )
 
-            bias = "Bullish" if is_bullish else "Bearish"
-            if r.get("has_green_dot"):
-                bias += " (🟢 Green Dot)"
-            elif r.get("has_red_dot"):
-                bias += " (🔴 Red Dot)"
-
-            ta_align = "LONG ALIGNED" if is_bullish else "SHORT ALIGNED"
+            status_text = f"**{decision}**"
+            if decision == "REVERSAL_WATCH":
+                status_text += " ⚠️ HIGH_REVERSAL_RISK"
+                
             line2 = (
-                f"    *{bias}, RSI {rsi:.0f}, TA {ta_align}* | "
-                f"Verdict **{verdict}** ({ratio:.2f})\n"
+                f"    *RSI {rsi:.0f}, TA {ta_bias} ({ta_conf:.2f})* | Verdict {status_text}\n"
             )
             return line1 + line2
 
