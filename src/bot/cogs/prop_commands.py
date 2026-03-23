@@ -88,26 +88,28 @@ class PropCommands(commands.Cog):
 
         body = ""
         for r in results[:10]:
-            setup_type = r.get("setup_type", "UNKNOWN")
+            setup_type = str(r.get("setup_type", "UNKNOWN"))
+            # Normalize setup_type for display (e.g., LONG_CONTINUATION -> LONG CONTINUATION)
+            setup_type_display = setup_type.replace("_", " ")
             is_bullish = "LONG" in setup_type
             emoji = "🚀" if is_bullish else "📉"
             check_mark = "✅"
             
             symbol = str(r.get("symbol", "?"))
-            change_pct = float(r.get("change_24h_pct", r.get("change_24h", 0.0)))
-            vol_usd = float(r.get("volume_24h_usd", r.get("volume_usd", 0.0)))
+            change_pct = float(r.get("change_24h_pct", 0.0))
+            vol_usd = float(r.get("volume_24h_usd", 0.0))
             vol_m = vol_usd / 1e6
             
-            c_score = float(r.get("continuation_score", r.get("conviction", 0.0)))
+            c_score = float(r.get("continuation_score", 0.0))
             r_score = float(r.get("reversal_risk_score", 0.0))
-            decision = r.get("decision_label", "MONITOR")
+            decision = str(r.get("decision_label", "MONITOR"))
             
-            ta_bias = r.get("ta_bias", "NEUTRAL")
+            ta_bias = str(r.get("ta_bias", "NEUTRAL"))
             ta_conf = float(r.get("ta_confidence", 0.0))
-            rsi = float(r.get("rsi_14", r.get("rsi", 50.0)))
+            rsi = float(r.get("rsi_14", 50.0))
 
             line1 = (
-                f"{check_mark} `{symbol:8s}` {change_pct:+.1f}% | {emoji} {setup_type} | "
+                f"{check_mark} `{symbol:8s}` {change_pct:+.1f}% | {emoji} {setup_type_display} | "
                 f"C {c_score:.1f} | R {r_score:.1f} | Vol ${vol_m:.0f}M\n"
             )
 
