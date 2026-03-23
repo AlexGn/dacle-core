@@ -35,7 +35,7 @@ class BinanceAggressionStream:
         self.window_sec = float(cfg.get("window_sec", 2.0))
         self.signal_ttl_sec = float(cfg.get("signal_ttl_sec", 3.0))
         self._base_poll_interval = float(cfg.get("poll_interval_sec", 2.0))
-        self.request_timeout_sec = float(cfg.get("request_timeout_sec", 3.0))
+        self.request_timeout_sec = float(cfg.get("request_timeout_sec", 10.0))
         self.min_sweep_qty = float(cfg.get("min_sweep_qty", 100.0))
         self.dominance_ratio = float(cfg.get("dominance_ratio", 1.4))
         self.limit = int(cfg.get("limit", 200))
