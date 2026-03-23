@@ -1022,6 +1022,7 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     btc_ema50_4h = None
     btc_ema20_12h = None
     btc_ema20_1d = None
+    btc_ma200_1d = None
     btc_range_7d = 0.0
     funding_rate_pct = None
     funding_rates_history: list = []
