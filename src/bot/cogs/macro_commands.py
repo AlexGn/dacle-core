@@ -33,6 +33,14 @@ class MacroCommands(commands.Cog):
     )
     async def market(self, interaction: discord.Interaction):
         """Fetch and display current market direction."""
+        deferred = await safe_defer(
+            interaction,
+            ephemeral=False,
+            thinking=True,
+            command_name="market",
+            logger=logger,
+        )
+
         user_id = getattr(getattr(interaction, "user", None), "id", None)
         self._prune_market_requests()
         if user_id is not None and user_id in self._active_market_requests:
@@ -47,13 +55,6 @@ class MacroCommands(commands.Cog):
         if user_id is not None:
             self._active_market_requests[user_id] = time.monotonic() + 30
 
-        deferred = await safe_defer(
-            interaction,
-            ephemeral=False,
-            thinking=True,
-            command_name="market",
-            logger=logger,
-        )
         if not deferred:
             logger.warning(
                 "Aborting /market after defer failure user_id=%s interaction_id=%s",

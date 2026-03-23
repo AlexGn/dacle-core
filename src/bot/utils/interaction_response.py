@@ -72,20 +72,18 @@ async def safe_send(
 ) -> bool:
     """Send response/followup; fallback to channel send when interaction token is invalid."""
     try:
+        kwargs: dict[str, Any] = {
+            "content": content,
+            "embed": embed,
+            "ephemeral": ephemeral,
+        }
+        if view is not None:
+            kwargs["view"] = view
+
         if interaction.response.is_done():
-            await interaction.followup.send(
-                content=content,
-                embed=embed,
-                view=view,
-                ephemeral=ephemeral,
-            )
+            await interaction.followup.send(**kwargs)
         else:
-            await interaction.response.send_message(
-                content=content,
-                embed=embed,
-                view=view,
-                ephemeral=ephemeral,
-            )
+            await interaction.response.send_message(**kwargs)
         return True
     except Exception as exc:
         if logger:

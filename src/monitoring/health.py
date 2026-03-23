@@ -185,9 +185,13 @@ class HealthCheckServer:
             logger.info(f"  - Liveness:  http://{self.host}:{self.port}/health")
             logger.info(f"  - Readiness: http://{self.host}:{self.port}/ready")
             logger.info(f"  - Status:    http://{self.host}:{self.port}/status")
+        except OSError as e:
+            if e.errno == 98:
+                logger.warning(f"Health check server could not start: Port {self.port} already in use. Continuing without health check server.")
+            else:
+                logger.error(f"Health check server failed to start: {e}")
         except Exception as e:
-            logger.error(f"Failed to start health check server: {e}")
-            raise
+            logger.error(f"Unexpected error starting health check server: {e}")
 
     def _run_server(self):
         """Run the HTTP server (called in background thread)"""
