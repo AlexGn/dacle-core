@@ -86,10 +86,11 @@ class PropCommands(commands.Cog):
             f"*Shared Core | {now}*\n\n"
         )
 
-        body = ""
-        for r in results[:10]:
+        ready = [r for r in results if r.get("decision_label") == "CONTINUATION_READY"]
+        watch = [r for r in results if r.get("decision_label") == "REVERSAL_WATCH"]
+
+        def format_item(r: dict[str, Any]) -> str:
             setup_type = str(r.get("setup_type", "UNKNOWN"))
-            # Normalize setup_type for display (e.g., LONG_CONTINUATION -> LONG CONTINUATION)
             setup_type_display = setup_type.replace("_", " ")
             is_bullish = "LONG" in setup_type
             emoji = "🚀" if is_bullish else "📉"
@@ -120,7 +121,19 @@ class PropCommands(commands.Cog):
             line2 = (
                 f"    *RSI {rsi:.0f}, TA {ta_bias} ({ta_conf:.2f})* | Verdict {status_text}\n"
             )
-            body += line1 + line2
+            return line1 + line2
+
+        body = ""
+        if ready:
+            body += "**🚀 READY TO TRADE**\n"
+            for r in ready[:10]:
+                body += format_item(r)
+            body += "\n"
+
+        if watch:
+            body += "**👀 REVERSAL WATCH**\n"
+            for r in watch[:5]:
+                body += format_item(r)
 
         return header + body if body else None
 
