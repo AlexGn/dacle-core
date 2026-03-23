@@ -698,9 +698,9 @@ def run_bot():
     logger.info("Runtime release marker updated for bot: sha=%s", runtime_release["components"]["bot"]["sha"])
 
     # Start health check HTTP server (HIGH-REL-001)
-    health_server = HealthCheckServer(host="0.0.0.0", port=8081)
+    health_server = HealthCheckServer(host="0.0.0.0", port=8082)
     health_server.start()
-    logger.info("Health check server started on http://0.0.0.0:8081")
+    logger.info("Health check server started on http://0.0.0.0:8082")
 
     try:
         # Create bot instance (will load config in __init__)
