@@ -86,10 +86,13 @@ class PropCommands(commands.Cog):
             f"*Dacle Cipher + Genesis Macro Alignment | {now}*\n\n"
         )
 
-        body = ""
-        for r in results[:10]:
-            is_bullish = "BULLISH" in str(r.get("genesis") or "")
-            setup_type = "LONG CONTINUATION" if is_bullish else "SHORT CONTINUATION"
+        ready = [r for r in results if r.get("decision_label") == "CONTINUATION_READY"]
+        watch = [r for r in results if r.get("decision_label") == "REVERSAL_WATCH"]
+
+        def format_item(r: dict[str, Any]) -> str:
+            setup_type = str(r.get("setup_type", "UNKNOWN"))
+            setup_type_display = setup_type.replace("_", " ")
+            is_bullish = "LONG" in setup_type
             emoji = "🚀" if is_bullish else "📉"
             rsi = float(r.get("rsi") or 50.0)
             verdict = "APPROVE"
@@ -133,7 +136,19 @@ class PropCommands(commands.Cog):
                 f"    *{bias}, RSI {rsi:.0f}, TA {ta_align}* | "
                 f"Verdict **{verdict}** ({ratio:.2f})\n"
             )
-            body += line1 + line2
+            return line1 + line2
+
+        body = ""
+        if ready:
+            body += "**🚀 READY TO TRADE**\n"
+            for r in ready[:10]:
+                body += format_item(r)
+            body += "\n"
+
+        if watch:
+            body += "**👀 REVERSAL WATCH**\n"
+            for r in watch[:5]:
+                body += format_item(r)
 
         return header + body if body else None
 

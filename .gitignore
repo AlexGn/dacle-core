@@ -221,6 +221,10 @@ data/learning_effectiveness.json
 data/shadow_journal.json
 data/validation_artifact.json
 
+# Platform runtime state
+data/runtime/cloudflare_tunnel.json
+data/runtime/*_heartbeat
+
 # News and Polymariate Runtime State (Session 527 Cleanup)
 data/seen_headlines.json
 data/rss_seen_articles.json
@@ -240,6 +244,10 @@ data/macro/sherlock_macro_levels.json
 data/learning_effectiveness.json
 data/shadow_journal.json
 data/validation_artifact.json
+
+# Platform runtime state
+data/runtime/cloudflare_tunnel.json
+data/runtime/*_heartbeat
 
 # News and Polymariate Runtime State (Session 527 Cleanup)
 data/seen_headlines.json
