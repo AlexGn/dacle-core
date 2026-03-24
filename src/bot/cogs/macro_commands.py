@@ -28,28 +28,16 @@ class MacroCommands(commands.Cog):
             self._active_market_requests.pop(user_id, None)
 
     @app_commands.command(
-        name="market",
-        description="Get current market direction bias (BULLISH / NEUTRAL / BEARISH)",
-    )
-    async def market(self, interaction: discord.Interaction):
-        """Fetch and display current market direction."""
-        await self._handle_market_direction(interaction, "market")
-
-    @app_commands.command(
         name="macro",
         description="Get current market direction bias (BULLISH / NEUTRAL / BEARISH)",
     )
     async def macro(self, interaction: discord.Interaction):
-        """Alias for /market command."""
-        await self._handle_market_direction(interaction, "macro")
-
-    async def _handle_market_direction(self, interaction: discord.Interaction, command_name: str):
-        """Shared logic for market and macro commands."""
+        """Fetch and display current market direction."""
         deferred = await safe_defer(
             interaction,
             ephemeral=False,
             thinking=True,
-            command_name=command_name,
+            command_name="macro",
             logger=logger,
         )
 
@@ -58,9 +46,9 @@ class MacroCommands(commands.Cog):
         if user_id is not None and user_id in self._active_market_requests:
             await safe_send(
                 interaction,
-                command_name=command_name,
+                command_name="macro",
                 logger=logger,
-                content=f"⏳ `/{command_name}` is already running for you. Please wait a few seconds.",
+                content="⏳ `/macro` is already running for you. Please wait a few seconds.",
                 ephemeral=True,
             )
             return
@@ -69,8 +57,7 @@ class MacroCommands(commands.Cog):
 
         if not deferred:
             logger.warning(
-                "Aborting /%s after defer failure user_id=%s interaction_id=%s",
-                command_name,
+                "Aborting /macro after defer failure user_id=%s interaction_id=%s",
                 user_id,
                 getattr(interaction, "id", None),
             )
@@ -83,7 +70,7 @@ class MacroCommands(commands.Cog):
                 error = data.get("error", "Unknown error")
                 await safe_send(
                     interaction,
-                    command_name=command_name,
+                    command_name="macro",
                     logger=logger,
                     content=(
                     f"❌ Failed to fetch market direction: {error}",
@@ -97,17 +84,17 @@ class MacroCommands(commands.Cog):
 
             await safe_send(
                 interaction,
-                command_name=command_name,
+                command_name="macro",
                 logger=logger,
                 embed=embed,
             )
-            logger.info(f"✅ {interaction.user.name} requested /{command_name}")
+            logger.info(f"✅ {interaction.user.name} requested /macro")
 
         except Exception as e:
-            logger.error(f"❌ Error in /{command_name} command: {e}", exc_info=True)
+            logger.error(f"❌ Error in /macro command: {e}", exc_info=True)
             await safe_send(
                 interaction,
-                command_name=command_name,
+                command_name="macro",
                 logger=logger,
                 content=f"❌ Error getting market direction: {e}",
                 ephemeral=True,
