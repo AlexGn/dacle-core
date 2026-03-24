@@ -9,7 +9,6 @@ from types import SimpleNamespace
 from typing import Any, Dict, Optional
 
 import discord
-import httpx
 from discord import app_commands
 from discord.ext import commands
 
@@ -18,6 +17,15 @@ from src.bot.utils.safe_task import safe_create_task
 from src.ops.discord_channel_contract import get_discord_channel_contract
 from src.bot.runtime_routing import get_bot_api_base_url
 from src.utils.logger import get_logger
+
+# Direct backend logic imports
+from src.ops.futures_refresh import (
+    request_manual_refresh,
+    get_manual_refresh_run,
+    get_latest_manual_refresh_run,
+)
+from api.routers.macro import get_market_direction, get_long_alignment
+from api.routers.futures import get_latest_futures_movers
 
 logger = get_logger(__name__)
 
@@ -43,23 +51,6 @@ def _fmt_utc(value: Any) -> str:
 class UpdateCommands(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.api_url = get_bot_api_base_url()
-        self.api_key = os.getenv("DACLE_API_KEY", "").strip()
-        self.api_post_attempts = max(
-            1,
-            self._parse_int(os.getenv("MANUAL_REFRESH_API_POST_ATTEMPTS"), default=3),
-        )
-        self.api_get_attempts = max(
-            1,
-            self._parse_int(os.getenv("MANUAL_REFRESH_API_GET_ATTEMPTS"), default=2),
-        )
-        self.api_retry_backoff_seconds = max(
-            0.0,
-            self._parse_float(
-                os.getenv("MANUAL_REFRESH_API_RETRY_BACKOFF_SECONDS"),
-                default=1.0,
-            ),
-        )
         self.owner_id = self._parse_int(os.getenv("DISCORD_OWNER_ID"))
         self.discovery_channel_id = self._resolve_discovery_channel_id()
         self.poll_interval_seconds = self._parse_int(
@@ -138,19 +129,6 @@ class UpdateCommands(commands.Cog):
             return True
         return self._is_discovery_context(interaction)
 
-    def _headers(self) -> Dict[str, str]:
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-        return headers
-
-    @staticmethod
-    def _is_transient_http_status(status_code: int) -> bool:
-        return status_code >= 500
-
-    def _retry_delay(self, attempt: int) -> float:
-        return self.api_retry_backoff_seconds * max(1, attempt)
-
     @staticmethod
     def _normalize_refresh_payload(payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         """Accept legacy and envelope-style responses for refresh endpoints."""
@@ -215,78 +193,6 @@ class UpdateCommands(commands.Cog):
                 return value.strip()
         return ""
 
-    async def _api_post(self, path: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        url = f"{self.api_url}{path}"
-        for attempt in range(1, self.api_post_attempts + 1):
-            try:
-                async with httpx.AsyncClient(timeout=20) as client:
-                    resp = await client.post(url, json=payload, headers=self._headers())
-                if 200 <= resp.status_code < 300:
-                    data = resp.json()
-                    return data if isinstance(data, dict) else None
-
-                transient = self._is_transient_http_status(resp.status_code)
-                logger.warning(
-                    "/discovery POST %s failed (attempt %s/%s): HTTP %s",
-                    path,
-                    attempt,
-                    self.api_post_attempts,
-                    resp.status_code,
-                )
-                if transient and attempt < self.api_post_attempts:
-                    await asyncio.sleep(self._retry_delay(attempt))
-                    continue
-                return {"request_status": "error", "error": f"HTTP {resp.status_code}: {resp.text}"}
-            except Exception as e:
-                logger.warning(
-                    "/discovery POST %s failed (attempt %s/%s): %s",
-                    path,
-                    attempt,
-                    self.api_post_attempts,
-                    e,
-                )
-                if attempt < self.api_post_attempts:
-                    await asyncio.sleep(self._retry_delay(attempt))
-                    continue
-                return {"request_status": "error", "error": f"{type(e).__name__}: {e}"}
-        return {"request_status": "error", "error": "Max retries exhausted"}
-
-    async def _api_get(self, path: str) -> Optional[Dict[str, Any]]:
-        url = f"{self.api_url}{path}"
-        for attempt in range(1, self.api_get_attempts + 1):
-            try:
-                async with httpx.AsyncClient(timeout=20) as client:
-                    resp = await client.get(url, headers=self._headers())
-                if 200 <= resp.status_code < 300:
-                    data = resp.json()
-                    return data if isinstance(data, dict) else None
-
-                transient = self._is_transient_http_status(resp.status_code)
-                logger.warning(
-                    "/discovery GET %s failed (attempt %s/%s): HTTP %s",
-                    path,
-                    attempt,
-                    self.api_get_attempts,
-                    resp.status_code,
-                )
-                if transient and attempt < self.api_get_attempts:
-                    await asyncio.sleep(self._retry_delay(attempt))
-                    continue
-                return {"request_status": "error", "error": f"HTTP {resp.status_code}: {resp.text}"}
-            except Exception as e:
-                logger.warning(
-                    "/discovery GET %s failed (attempt %s/%s): %s",
-                    path,
-                    attempt,
-                    self.api_get_attempts,
-                    e,
-                )
-                if attempt < self.api_get_attempts:
-                    await asyncio.sleep(self._retry_delay(attempt))
-                    continue
-                return {"request_status": "error", "error": f"{type(e).__name__}: {e}"}
-        return {"request_status": "error", "error": "Max retries exhausted"}
-
     @staticmethod
     def _remaining_cooldown_seconds(run: Dict[str, Any]) -> int:
         try:
@@ -331,10 +237,13 @@ class UpdateCommands(commands.Cog):
             return False
 
     async def _handle_start_failure(self, interaction: discord.Interaction, error_detail: str = "") -> None:
-        latest_payload = self._normalize_refresh_payload(
-            await self._api_get("/api/futures/refresh/latest")
-        )
-        run = latest_payload.get("run") if isinstance(latest_payload, dict) else None
+        try:
+            # Direct backend logic call instead of HTTP GET
+            run = get_latest_manual_refresh_run()
+        except Exception as e:
+            logger.warning(f"Failed to fetch latest manual refresh run: {e}")
+            run = None
+
         if isinstance(run, dict):
             status = str(run.get("status") or "").upper()
             if status == "RUNNING":
@@ -443,9 +352,14 @@ class UpdateCommands(commands.Cog):
         return SimpleNamespace(**payload)
 
     async def _build_discovery_report_message(self) -> Optional[str]:
-        movers = await self._api_get("/api/futures/movers/latest") or {}
-        macro = await self._api_get("/api/macro/market-direction") or {}
-        long_alignment = await self._api_get("/api/macro/long-alignment") or {}
+        try:
+            # Direct backend logic calls instead of HTTP GET
+            movers = await get_latest_futures_movers()
+            macro = await get_market_direction()
+            long_alignment = await get_long_alignment()
+        except Exception as e:
+            logger.warning(f"Failed to fetch backend data for discovery report: {e}")
+            return None
 
         setup_objs = []
         for raw in movers.get("setups") or []:
@@ -529,9 +443,14 @@ class UpdateCommands(commands.Cog):
     async def _watch_run_completion(self, run_id: str, channel: discord.abc.Messageable) -> None:
         deadline = datetime.now(timezone.utc).timestamp() + float(self.poll_timeout_seconds)
         while datetime.now(timezone.utc).timestamp() < deadline:
-            payload = self._normalize_refresh_payload(
-                await self._api_get(f"/api/futures/refresh/run/{run_id}")
-            )
+            try:
+                # Direct backend logic call instead of HTTP GET
+                run_raw = get_manual_refresh_run(run_id)
+                payload = self._normalize_refresh_payload({"run": run_raw} if run_raw else {})
+            except Exception as e:
+                logger.warning(f"Failed to poll manual refresh status for {run_id}: {e}")
+                payload = {}
+
             if payload and isinstance(payload.get("run"), dict):
                 run = payload["run"]
                 status = str(run.get("status") or "").upper()
@@ -605,19 +524,23 @@ class UpdateCommands(commands.Cog):
         if not await self._defer_interaction(interaction):
             return
 
-        payload = {
-            "triggered_by": str(interaction.user),
-            "requested_channel_id": str(interaction.channel_id),
-        }
-
-        result = self._normalize_refresh_payload(
-            await self._api_post("/api/futures/refresh/run", payload)
-        )
+        try:
+            # Direct backend logic call instead of HTTP POST
+            result = request_manual_refresh(
+                triggered_by=str(interaction.user),
+                requested_channel_id=str(interaction.channel_id),
+            )
+        except Exception as e:
+            logger.error(f"Failed to request manual refresh: {e}", exc_info=True)
+            await self._handle_start_failure(interaction, error_detail=str(e))
+            return
 
         if not result:
             await self._handle_start_failure(interaction)
             return
 
+        # Normalize and resolve status
+        result = self._normalize_refresh_payload(result)
         request_status = self._resolve_request_status(result)
         run = result.get("run") if isinstance(result.get("run"), dict) else {}
 
@@ -648,10 +571,11 @@ class UpdateCommands(commands.Cog):
             await self._send_followup(interaction, self._blocked_message(result), ephemeral=True)
             return
 
-        if request_status in {"error", "failed"} or self._extract_error_detail(result):
+        error_detail = self._extract_error_detail(result)
+        if request_status in {"error", "failed"} or error_detail:
             await self._handle_start_failure(
                 interaction,
-                error_detail=self._extract_error_detail(result),
+                error_detail=error_detail or "Backend error",
             )
             return
 
