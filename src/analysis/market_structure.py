@@ -124,6 +124,7 @@ class LiquiditySweep:
     confirmed: bool         # True if price recovered back inside the level
     strength: str           # 'strong' (>2% sweep + full recovery), 'moderate', 'weak'
     candle_index: int       # Index of the sweep candle
+    obi_confirmed: bool = False # Session 460: OBI alignment confirmation
 
 
 @dataclass
@@ -321,7 +322,8 @@ class MarketStructureAnalyzer:
             return self._error_result(token_symbol, str(e))
 
     def analyze_from_ohlcv(self, ohlcv: list, timeframe: str = "4h",
-                           category: str = None, token_symbol: str = "UNKNOWN") -> Dict:
+                           category: str = None, token_symbol: str = "UNKNOWN",
+                           obi: float = None) -> Dict:
         """
         Full market structure analysis from pre-fetched OHLCV data.
 
@@ -334,6 +336,7 @@ class MarketStructureAnalyzer:
             timeframe: Candle timeframe (default 4h)
             category: Token category for R:R target calculation (Session 116)
             token_symbol: Token symbol for labeling (default "UNKNOWN")
+            obi: Optional Order Book Imbalance (-1.0 to +1.0) (Session 460)
 
         Returns:
             Same dict structure as analyze().
@@ -386,7 +389,11 @@ class MarketStructureAnalyzer:
                            f"({nearest_bullish_fvg.strength})")
 
             # 5. Session 121 SMC Series - Liquidity Sweeps, Order Blocks, EQH/EQL, Equilibrium
-            liquidity_sweeps = self._detect_liquidity_sweeps(ohlcv, swing_highs, swing_lows)
+            liquidity_sweeps = self._detect_liquidity_sweeps(ohlcv, swing_highs, swing_lows, obi=obi)
+            
+            # Phase 1: CISD detection after sweeps
+            cisd = self._detect_cisd(ohlcv, liquidity_sweeps) if liquidity_sweeps else None
+            
             order_blocks = self._detect_order_blocks(ohlcv, liquidity_sweeps, current_price)
             equal_levels = self._detect_equal_levels(swing_highs, swing_lows)
             equilibrium = self._calculate_equilibrium(swing_highs, swing_lows, current_price, structure)
@@ -455,6 +462,15 @@ class MarketStructureAnalyzer:
                     'direction': bos.direction if bos else None,
                     'price': bos.price if bos else None,
                 } if bos else None,
+                'cisd_detected': cisd is not None,
+                'cisd_details': {
+                    'type': cisd.type if cisd else None,
+                    'direction': cisd.direction if cisd else None,
+                    'price': cisd.price if cisd else None,
+                    'level_broken': cisd.level_broken if cisd else None,
+                    'timestamp': cisd.timestamp.isoformat() if cisd and cisd.timestamp else None,
+                    'metadata': cisd.metadata if cisd else None,
+                } if cisd else None,
 
                 # Entry Levels
                 'fib_levels': fib_levels,
@@ -513,6 +529,7 @@ class MarketStructureAnalyzer:
                         'sweep_depth_pct': s.sweep_depth_pct,
                         'strength': s.strength,
                         'confirmed': s.confirmed,
+                        'obi_confirmed': s.obi_confirmed,
                         'timestamp': s.timestamp.isoformat(),
                     } for s in liquidity_sweeps[:3]  # Top 3 most recent
                 ] if liquidity_sweeps else [],
@@ -1028,33 +1045,12 @@ class MarketStructureAnalyzer:
 
     def _detect_liquidity_sweeps(
         self, ohlcv: List, swing_highs: List[SwingPoint], swing_lows: List[SwingPoint],
-        lookback: int = 20
+        lookback: int = 20, obi: float = None
     ) -> List[LiquiditySweep]:
         """
         Detect Liquidity Sweeps - Session 121 (SMC Series Integration).
-
-        From Kaizen SMC Series:
-        "Liquidity sweeps are when institutional traders intentionally move the market
-        to trigger stop-loss orders at important price levels beneath lows or above highs."
-
-        Algorithm:
-        1. Find swing highs/lows as liquidity levels
-        2. Look for candles that wick BEYOND these levels
-        3. Check if price RECOVERED back inside (confirms sweep vs breakdown)
-
-        A sweep is confirmed when:
-        - Wick extends beyond swing high/low
-        - Body closes back inside the level
-        - This is a "stop hunt" pattern
-
-        Args:
-            ohlcv: OHLCV data
-            swing_highs: List of swing high points
-            swing_lows: List of swing low points
-            lookback: Number of candles to analyze
-
-        Returns:
-            List of LiquiditySweep objects
+        
+        Session 460: OBI confirmation filters ICT sweeps.
         """
         sweeps = []
 
@@ -1062,10 +1058,12 @@ class MarketStructureAnalyzer:
             return sweeps
 
         recent_candles = ohlcv[-lookback:] if len(ohlcv) >= lookback else ohlcv
+        current_idx = len(ohlcv) - 1
 
         # Check for sweeps below swing lows (bullish sweeps)
         for sl in swing_lows[-5:]:  # Check last 5 swing lows
             for i, candle in enumerate(recent_candles):
+                candle_global_idx = (len(ohlcv) - len(recent_candles)) + i
                 # candle = [timestamp, open, high, low, close, volume]
                 low = candle[3]
                 close = candle[4]
@@ -1083,6 +1081,13 @@ class MarketStructureAnalyzer:
                         strength = 'moderate'
                     else:
                         strength = 'weak'
+                        
+                    # OBI Confirmation (Session 460)
+                    # Bullish sweep confirmed if OBI is positive
+                    obi_confirmed = False
+                    if obi is not None and (current_idx - candle_global_idx) <= 3:
+                        if obi >= 0.15:
+                            obi_confirmed = True
 
                     sweeps.append(LiquiditySweep(
                         direction='bullish',
@@ -1093,12 +1098,14 @@ class MarketStructureAnalyzer:
                         timestamp=datetime.fromtimestamp(candle[0] / 1000),
                         confirmed=True,
                         strength=strength,
-                        candle_index=len(ohlcv) - lookback + i
+                        candle_index=candle_global_idx,
+                        obi_confirmed=obi_confirmed
                     ))
 
         # Check for sweeps above swing highs (bearish sweeps)
         for sh in swing_highs[-5:]:  # Check last 5 swing highs
             for i, candle in enumerate(recent_candles):
+                candle_global_idx = (len(ohlcv) - len(recent_candles)) + i
                 high = candle[2]
                 close = candle[4]
                 open_price = candle[1]
@@ -1115,6 +1122,13 @@ class MarketStructureAnalyzer:
                         strength = 'moderate'
                     else:
                         strength = 'weak'
+                        
+                    # OBI Confirmation (Session 460)
+                    # Bearish sweep confirmed if OBI is negative
+                    obi_confirmed = False
+                    if obi is not None and (current_idx - candle_global_idx) <= 3:
+                        if obi <= -0.15:
+                            obi_confirmed = True
 
                     sweeps.append(LiquiditySweep(
                         direction='bearish',
@@ -1125,7 +1139,8 @@ class MarketStructureAnalyzer:
                         timestamp=datetime.fromtimestamp(candle[0] / 1000),
                         confirmed=True,
                         strength=strength,
-                        candle_index=len(ohlcv) - lookback + i
+                        candle_index=candle_global_idx,
+                        obi_confirmed=obi_confirmed
                     ))
 
         # Sort by timestamp (most recent first)
@@ -1777,6 +1792,64 @@ class MarketStructureAnalyzer:
                     timestamp=datetime.utcnow(),
                     confirmed=True
                 )
+
+        return None
+
+    def _detect_cisd(
+        self, ohlcv: List, sweeps: List[LiquiditySweep], lookback: int = 3
+    ) -> Optional[StructureBreak]:
+        """
+        Detect Change in State of Delivery (CISD) - micro-CHoCH.
+        A CISD occurs when price breaks internal structure following a liquidity sweep.
+        Victor's 'High Conviction' trigger: prioritize the candle body close above/below
+        the sweep candle's range.
+        """
+        if not ohlcv or not sweeps:
+            return None
+
+        # Look at the most recent sweep (must be reasonably fresh, e.g. last 10 candles)
+        recent_sweep = sweeps[0]
+        current_idx = len(ohlcv) - 1
+        
+        # If sweep is too old, ignore
+        if current_idx - recent_sweep.candle_index > 10:
+            return None
+
+        sweep_candle = ohlcv[recent_sweep.candle_index]
+        sweep_high = sweep_candle[2]
+        sweep_low = sweep_candle[3]
+
+        # Scan candles after the sweep
+        for i in range(recent_sweep.candle_index + 1, len(ohlcv)):
+            candle = ohlcv[i]
+            # candle = [timestamp, open, high, low, close, volume]
+            close = candle[4]
+            timestamp = datetime.fromtimestamp(candle[0] / 1000)
+
+            if recent_sweep.direction == 'bearish':
+                # Sweep of highs (bearish setup). We want a body close below the sweep candle's low.
+                if close < sweep_low:
+                    return StructureBreak(
+                        type='CISD',
+                        direction='bearish',
+                        price=close,
+                        level_broken=sweep_low,
+                        timestamp=timestamp,
+                        confirmed=True,
+                        metadata={'sweep_preceded': True, 'trigger': 'body_close_below_sweep_low'}
+                    )
+            else:
+                # Sweep of lows (bullish setup). We want a body close above the sweep candle's high.
+                if close > sweep_high:
+                    return StructureBreak(
+                        type='CISD',
+                        direction='bullish',
+                        price=close,
+                        level_broken=sweep_high,
+                        timestamp=timestamp,
+                        confirmed=True,
+                        metadata={'sweep_preceded': True, 'trigger': 'body_close_above_sweep_high'}
+                    )
 
         return None
 
