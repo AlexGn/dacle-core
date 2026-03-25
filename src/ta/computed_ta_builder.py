@@ -311,14 +311,14 @@ def _ohlcv_to_dicts(ohlcv: list[list]) -> list[dict]:
 # Individual analysis steps
 # ---------------------------------------------------------------------------
 
-def _compute_market_structure(symbol: str, timeframe: str, ohlcv: list[list] = None) -> dict:
+def _compute_market_structure(symbol: str, timeframe: str, ohlcv: list[list] = None, obi: float = None) -> dict:
     """Run MarketStructureAnalyzer for CHoCH/BOS/swing points."""
     try:
         from src.analysis.market_structure import MarketStructureAnalyzer
 
         analyzer = MarketStructureAnalyzer()
         if ohlcv is not None:
-            result = analyzer.analyze_from_ohlcv(ohlcv, timeframe=timeframe)
+            result = analyzer.analyze_from_ohlcv(ohlcv, timeframe=timeframe, obi=obi)
         else:
             result = analyzer.analyze(symbol, timeframe=timeframe)
         return result

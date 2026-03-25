@@ -34,6 +34,7 @@ class DiscoveryTAResult:
     bos_direction: Optional[str] = None    # bullish / bearish
     smc_fakeout_risk: bool = False
     smc_structural_confirmation: bool = False
+    obi_confirmed_sweep: bool = False      # Session 460: OBI alignment on recent sweep
     fvg_proximity_pct: Optional[float] = None
     rsi_divergence: Optional[str] = None  # bullish / bearish / none
 
@@ -59,10 +60,15 @@ class DiscoveryTAResult:
 
     # Volume
     volume_ratio: float = 1.0  # recent volume / avg volume (RVOL)
+    cvd_z_score: float = 0.0   # CVD spike magnitude (Vector Candle quality)
     atr_bps: Optional[float] = None # v1.5.1 volatility metric
 
-    # Volume profile
-    volume_profile_zone: str = "unknown"  # STRONG_BULLISH, WEAK_BULLISH, WEAK_BEARISH, STRONG_BEARISH
+    # Macro Context (Session 460)
+    usdt_d_value: Optional[float] = None
+    usdt_d_signal: str = "NEUTRAL" # BULLISH_FOR_ALTS, BEARISH_FOR_ALTS, NEUTRAL
+
+    # Choppiness
+    choppiness_index: float = 50.0 # 0-100, < 35 trending, > 61 choppy
 
     # TVEM signal
     tvem_signal: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL
@@ -82,6 +88,7 @@ class DiscoveryTAResult:
             "rsi_divergence": self.rsi_divergence,
             "smc_fakeout_risk": self.smc_fakeout_risk,
             "smc_structural_confirmation": self.smc_structural_confirmation,
+            "obi_confirmed_sweep": self.obi_confirmed_sweep,
             "fvg_proximity_pct": self.fvg_proximity_pct,
             "ema_alignment": self.ema_alignment,
             "ema_200_distance_pct": round(self.ema_200_distance_pct, 2),
@@ -94,6 +101,10 @@ class DiscoveryTAResult:
             "near_resistance": self.near_resistance,
             "sr_levels_count": self.sr_levels_count,
             "volume_ratio": round(self.volume_ratio, 2),
+            "cvd_z_score": round(self.cvd_z_score, 2),
+            "choppiness_index": round(self.choppiness_index, 1),
+            "usdt_d_value": round(self.usdt_d_value, 2) if self.usdt_d_value is not None else None,
+            "usdt_d_signal": self.usdt_d_signal,
             "atr_bps": round(self.atr_bps, 2) if self.atr_bps is not None else None,
             "volume_profile_zone": self.volume_profile_zone,
             "tvem_signal": self.tvem_signal,
@@ -102,7 +113,7 @@ class DiscoveryTAResult:
         }
 
 
-def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTAResult:
+def run_discovery_ta(token_symbol: str, timeframe: str = "4h", obi: float = None) -> DiscoveryTAResult:
     """
     Run lightweight TA for a discovered token.
 
@@ -112,6 +123,7 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
     Args:
         token_symbol: Token symbol (e.g., "BTC", "MONAD")
         timeframe: OHLCV timeframe (default "4h")
+        obi: Optional Order Book Imbalance (-1.0 to +1.0) (Session 460)
 
     Returns:
         DiscoveryTAResult with market context data
@@ -153,8 +165,19 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
     current_price = ohlcv[-1][4]  # Last close
 
     # Step 2: Run all analysis modules (each gracefully handles errors)
-    # Market structure (Refined SMC)
-    ms_data = _compute_market_structure(symbol, timeframe, ohlcv=ohlcv)
+    # 2a. Macro Context (Session 460)
+    try:
+        from src.data.indices_tracker import IndicesTracker
+        tracker = IndicesTracker(use_cache=True)
+        macro_data = tracker.fetch_all_indices()
+        usdt_d = macro_data.get("indices", {}).get("usdt_d", {})
+        result.usdt_d_value = usdt_d.get("value")
+        result.usdt_d_signal = usdt_d.get("signal", "NEUTRAL")
+    except Exception as e:
+        logger.warning(f"Macro indices fetch failed: {e}")
+
+    # 2b. Market structure (Refined SMC)
+    ms_data = _compute_market_structure(symbol, timeframe, ohlcv=ohlcv, obi=obi)
     if ms_data:
         # Fix contract bug: Analyzer returns 'current_structure' (Step 1 of checklist)
         result.market_structure = ms_data.get("current_structure", "ranging")
@@ -168,6 +191,12 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
         if bos:
             result.bos_direction = bos.get("direction")
             
+        # Session 460: OBI confirmed sweep
+        sweeps = ms_data.get("liquidity_sweeps", [])
+        if sweeps:
+            # Check if ANY recent sweep is OBI confirmed
+            result.obi_confirmed_sweep = any(s.get("obi_confirmed") for s in sweeps[:3])
+
         # FVG magnet strength
         fvg = ms_data.get("nearest_bearish_fvg") or ms_data.get("nearest_bullish_fvg")
         if fvg:
@@ -212,6 +241,21 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h") -> DiscoveryTARes
     # Relative Volume Analysis
     vol_data = _compute_volume_analysis(ohlcv)
     result.volume_ratio = vol_data.get("volume_ratio", 1.0)
+    
+    # Session 460: CVD Z-Score (Vector Candle / CVD Spike)
+    try:
+        from src.ta.indicators.cvd import calculate_cvd
+        cvd_res = calculate_cvd(ohlcv_dicts)
+        result.cvd_z_score = cvd_res.get("cvd_z_score", 0.0)
+    except Exception as e:
+        logger.warning(f"CVD Z-Score calculation failed: {e}")
+
+    # Session 460: Choppiness Index
+    try:
+        from src.ta.indicators.choppiness import calculate_choppiness
+        result.choppiness_index = calculate_choppiness(ohlcv)
+    except Exception as e:
+        logger.warning(f"Choppiness calculation failed: {e}")
     
     # Session 454 (v1.5.1): ATR calculation for volatility telemetry
     try:

@@ -48,6 +48,7 @@ def calculate_cvd(ohlcv_data: List[Dict], direction: str = "SHORT") -> Dict:
 
     # --- build CVD series ---
     cvd_values: list[float] = []
+    deltas: list[float] = []
     cumulative_cvd = 0.0
 
     for candle in ohlcv_data:
@@ -72,10 +73,25 @@ def calculate_cvd(ohlcv_data: List[Dict], direction: str = "SHORT") -> Dict:
 
         cumulative_cvd += delta
         cvd_values.append(cumulative_cvd)
+        deltas.append(delta)
 
     if len(cvd_values) < 5:
         empty["reason"] = "Insufficient CVD data points"
         return empty
+
+    # --- Z-Score Calculation (Session 460 Extension) ---
+    # Detects "CVD Spikes" (Vector Candles) using the most recent 20 deltas
+    cvd_z_score = 0.0
+    if len(deltas) >= 20:
+        recent_deltas = deltas[-20:]
+        mean_delta = sum(recent_deltas) / 20
+        # Sample standard deviation
+        variance = sum((d - mean_delta) ** 2 for d in recent_deltas) / 19
+        std_dev = variance ** 0.5
+        
+        if std_dev > 0:
+            # Z-score of the last candle's delta
+            cvd_z_score = (deltas[-1] - mean_delta) / std_dev
 
     # --- divergence detection ---
     mid = len(cvd_values) // 2
@@ -93,6 +109,7 @@ def calculate_cvd(ohlcv_data: List[Dict], direction: str = "SHORT") -> Dict:
 
     result = {
         "cvd_values": cvd_values,
+        "cvd_z_score": round(cvd_z_score, 2),
         "divergence_detected": False,
         "divergence_type": "none",
         "strength": "none",
