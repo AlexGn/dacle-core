@@ -57,10 +57,12 @@ class DiscoveryTAResult:
     near_support: bool = False
     near_resistance: bool = False
     sr_levels_count: int = 0
+    volume_profile_zone: str = "unknown"
 
     # Volume
     volume_ratio: float = 1.0  # recent volume / avg volume (RVOL)
     cvd_z_score: float = 0.0   # CVD spike magnitude (Vector Candle quality)
+    body_ratio: float = 0.0    # Candle body / candle range (Session 460)
     atr_bps: Optional[float] = None # v1.5.1 volatility metric
 
     # Macro Context (Session 460)
@@ -102,6 +104,7 @@ class DiscoveryTAResult:
             "sr_levels_count": self.sr_levels_count,
             "volume_ratio": round(self.volume_ratio, 2),
             "cvd_z_score": round(self.cvd_z_score, 2),
+            "body_ratio": round(self.body_ratio, 2),
             "choppiness_index": round(self.choppiness_index, 1),
             "usdt_d_value": round(self.usdt_d_value, 2) if self.usdt_d_value is not None else None,
             "usdt_d_signal": self.usdt_d_signal,
@@ -247,8 +250,9 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h", obi: float = None
         from src.ta.indicators.cvd import calculate_cvd
         cvd_res = calculate_cvd(ohlcv_dicts)
         result.cvd_z_score = cvd_res.get("cvd_z_score", 0.0)
+        result.body_ratio = cvd_res.get("body_ratio", 0.0)
     except Exception as e:
-        logger.warning(f"CVD Z-Score calculation failed: {e}")
+        logger.warning(f"CVD calculation failed: {e}")
 
     # Session 460: Choppiness Index
     try:

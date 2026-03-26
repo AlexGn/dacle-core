@@ -81,17 +81,7 @@ def calculate_cvd(ohlcv_data: List[Dict], direction: str = "SHORT") -> Dict:
 
     # --- Z-Score Calculation (Session 460 Extension) ---
     # Detects "CVD Spikes" (Vector Candles) using the most recent 20 deltas
-    cvd_z_score = 0.0
-    if len(deltas) >= 20:
-        recent_deltas = deltas[-20:]
-        mean_delta = sum(recent_deltas) / 20
-        # Sample standard deviation
-        variance = sum((d - mean_delta) ** 2 for d in recent_deltas) / 19
-        std_dev = variance ** 0.5
-        
-        if std_dev > 0:
-            # Z-score of the last candle's delta
-            cvd_z_score = (deltas[-1] - mean_delta) / std_dev
+    cvd_z_score = per_candle_delta_zscore(deltas)
 
     # --- divergence detection ---
     mid = len(cvd_values) // 2
@@ -107,9 +97,16 @@ def calculate_cvd(ohlcv_data: List[Dict], direction: str = "SHORT") -> Dict:
     cvd_change = second_half_avg - first_half_avg
     cvd_declining = cvd_change < 0
 
+    # Calculate body ratio of the last candle for vector quality
+    last_candle = ohlcv_data[-1]
+    body = abs(last_candle.get("close", 0) - last_candle.get("open", 0))
+    candle_range = last_candle.get("high", 0) - last_candle.get("low", 0)
+    body_ratio = body / candle_range if candle_range > 0 else 0.0
+
     result = {
         "cvd_values": cvd_values,
         "cvd_z_score": round(cvd_z_score, 2),
+        "body_ratio": round(body_ratio, 2),
         "divergence_detected": False,
         "divergence_type": "none",
         "strength": "none",
@@ -160,3 +157,29 @@ def calculate_cvd(ohlcv_data: List[Dict], direction: str = "SHORT") -> Dict:
         result["reason"] = "No CVD divergence (CVD confirms price action)"
 
     return result
+
+
+def per_candle_delta_zscore(deltas: List[float], window: int = 20) -> float:
+    """
+    Calculate the Z-score of the most recent CVD delta.
+    
+    Args:
+        deltas: List of volume-weighted deltas.
+        window: Lookback window for mean/std dev.
+        
+    Returns:
+        Z-score of the last delta.
+    """
+    if len(deltas) < window:
+        return 0.0
+        
+    recent_deltas = deltas[-window:]
+    mean_delta = sum(recent_deltas) / window
+    
+    # Sample standard deviation
+    variance = sum((d - mean_delta) ** 2 for d in recent_deltas) / (window - 1)
+    std_dev = variance ** 0.5
+    
+    if std_dev > 0:
+        return (deltas[-1] - mean_delta) / std_dev
+    return 0.0
