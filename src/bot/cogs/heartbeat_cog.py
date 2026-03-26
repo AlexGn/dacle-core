@@ -19,6 +19,7 @@ from discord.ext import commands, tasks
 
 from src.utils.logger import get_logger
 from src.utils.atomic_state import atomic_update
+from src.utils.path_access import permission_context
 from src.bot.views.heartbeat_actions import render_action_card_embed, select_view_for_card
 
 logger = get_logger(__name__)
@@ -118,6 +119,12 @@ class HeartbeatActionCog(commands.Cog):
                 extract_and_clear,
                 default={"cards": []},
             )
+        except PermissionError as e:
+            logger.error(
+                "Failed to read pending action cards: %s",
+                permission_context(self.PENDING_CARDS_PATH, operation="atomic_update", exc=e),
+            )
+            return []
         except Exception as e:
             logger.error(f"Failed to read pending action cards: {e}")
             return []
