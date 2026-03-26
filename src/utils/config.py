@@ -419,7 +419,12 @@ class AppConfig:
 _config: Optional[AppConfig] = None
 
 
-def load_config(root_path: Optional[Path] = None, force_reload: bool = False) -> AppConfig:
+def load_config(
+    root_path: Optional[Path] = None,
+    force_reload: bool = False,
+    *,
+    env_override: bool = True,
+) -> AppConfig:
     """
     Explicitly load configuration from environment files at application startup.
 
@@ -431,6 +436,8 @@ def load_config(root_path: Optional[Path] = None, force_reload: bool = False) ->
     Args:
         root_path: Path to project root directory. If None, auto-detects using __file__.
         force_reload: If True, reloads the configuration even if already loaded.
+        env_override: Whether runtime dotenv files should overwrite already
+            inherited environment variables.
 
     Returns:
         AppConfig: The loaded application configuration
@@ -441,7 +448,7 @@ def load_config(root_path: Optional[Path] = None, force_reload: bool = False) ->
         return _config
 
     root_path = _detect_root_path(root_path)
-    load_runtime_env_files(root_path=root_path, override=True)
+    load_runtime_env_files(root_path=root_path, override=env_override)
 
     _config = AppConfig.from_env()
     return _config
