@@ -272,3 +272,4 @@ data/macro/sherlock_macro_levels.json
 .env.lock
 data/polymarket/
 .env.secret.bin
+data/runtime/smc_signal_journal.jsonl
