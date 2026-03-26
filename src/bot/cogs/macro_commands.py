@@ -72,9 +72,7 @@ class MacroCommands(commands.Cog):
                     interaction,
                     command_name="macro",
                     logger=logger,
-                    content=(
-                    f"❌ Failed to fetch market direction: {error}",
-                    ),
+                    content=f"❌ Failed to fetch market direction: {error}",
                     ephemeral=True,
                 )
                 return

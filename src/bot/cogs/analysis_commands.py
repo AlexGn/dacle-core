@@ -1418,6 +1418,16 @@ class AnalysisCommands(commands.Cog):
             await self._deny_interaction(interaction)
             return
 
+        deferred = await safe_defer(
+            interaction,
+            ephemeral=True,
+            thinking=True,
+            command_name="analyze",
+            logger=logger,
+        )
+        if not deferred:
+            return
+
         symbol = symbol.upper()
         request_id = f"analyze-{interaction.id}"
         invoke_channel = interaction.channel
@@ -1449,15 +1459,15 @@ class AnalysisCommands(commands.Cog):
             getattr(analysis_channel, "mention", None) or "the analysis channel",
         ):
             duplicate_notice = self._duplicate_analyze_notice(interaction.user, symbol)
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 content=duplicate_notice or f"⏳ **{symbol}** is already being analyzed.",
                 ephemeral=True,
             )
             return
 
-        # 1. Immediately acknowledge the slash command with an ephemeral status ping.
+        # 1. Send ephemeral status ping via followup (interaction already deferred above).
         try:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 content=f"🔍 Analyzing **{symbol}**...",
                 ephemeral=True,
             )

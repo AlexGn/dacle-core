@@ -174,7 +174,7 @@ class TradeRouter(commands.Cog):
     ) -> bool:
         """Best-effort defer to avoid hard failures on expired interactions."""
         try:
-            await interaction.response.defer(ephemeral=ephemeral)
+            await interaction.response.defer(ephemeral=ephemeral, thinking=True)
             return True
         except discord.NotFound:
             logger.warning(
