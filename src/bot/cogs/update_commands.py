@@ -59,6 +59,9 @@ class UpdateCommands(commands.Cog):
         self.poll_timeout_seconds = self._parse_int(
             os.getenv("MANUAL_REFRESH_MAX_RUNTIME_SECONDS"), default=2400
         ) + 120
+        self.report_build_timeout_seconds = self._parse_float(
+            os.getenv("DISCOVERY_REPORT_BUILD_TIMEOUT_SECONDS"), default=30.0
+        )
         self._watcher_keys: set[str] = set()
 
     @staticmethod
@@ -440,7 +443,15 @@ class UpdateCommands(commands.Cog):
             f"Log: `{run.get('log_path') or 'unknown'}`"
         )
 
+    def _build_completion_message(self, run: Dict[str, Any]) -> str:
+        return (
+            f"✅ **/discovery completed**\n"
+            f"Run: `{run.get('run_id', '?')}` in {run.get('duration_seconds', '?')}s\n"
+            "Posting refreshed market snapshot..."
+        )
+
     async def _watch_run_completion(self, run_id: str, channel: discord.abc.Messageable) -> None:
+        logger.info("/discovery watcher started run_id=%s channel_id=%s", run_id, getattr(channel, "id", "unknown"))
         deadline = datetime.now(timezone.utc).timestamp() + float(self.poll_timeout_seconds)
         while datetime.now(timezone.utc).timestamp() < deadline:
             try:
@@ -455,16 +466,27 @@ class UpdateCommands(commands.Cog):
                 run = payload["run"]
                 status = str(run.get("status") or "").upper()
                 if status in TERMINAL_STATUSES:
+                    logger.info("/discovery watcher terminal run_id=%s status=%s", run_id, status)
                     if status == "COMPLETED":
-                        report = await self._build_discovery_report_message()
+                        await channel.send(self._build_completion_message(run))
+                        try:
+                            report = await asyncio.wait_for(
+                                self._build_discovery_report_message(),
+                                timeout=max(1.0, float(self.report_build_timeout_seconds)),
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "/discovery report render timed out run_id=%s timeout=%.1fs",
+                                run_id,
+                                self.report_build_timeout_seconds,
+                            )
+                            report = None
                         if report:
                             await self._send_report_chunks(channel, report)
                         else:
                             await channel.send(
-                                f"✅ **/discovery completed**\n"
-                                f"Run: `{run.get('run_id', '?')}` in {run.get('duration_seconds', '?')}s\n"
-                                "⚠️ Could not render full discovery report. "
-                                "Use `/scan` for current snapshot."
+                                "⚠️ Could not render full discovery report promptly. "
+                                "Use `/scan` for the current snapshot."
                             )
                     else:
                         await channel.send(self._build_failure_message(run))
@@ -488,6 +510,7 @@ class UpdateCommands(commands.Cog):
         if key in self._watcher_keys:
             return
         self._watcher_keys.add(key)
+        logger.info("/discovery watcher scheduled run_id=%s channel_id=%s", run_id, channel_id)
 
         async def _watch() -> None:
             try:
