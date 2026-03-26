@@ -1125,10 +1125,27 @@ class PolymarketClientWrapper:
                         "ok": True,
                     }
                 logger.error(f"get_usdc_balance_and_allowance HTTP {resp.status_code}: {resp.text[:200]}")
-                return {"balance_usdc": 0.0, "allowance_usdc": 0.0, "ok": False, "error": resp.text[:200]}
+                error_type = "auth" if resp.status_code in {401, 403} else "http"
+                return {
+                    "balance_usdc": 0.0,
+                    "allowance_usdc": 0.0,
+                    "ok": False,
+                    "error": resp.text[:200],
+                    "status_code": resp.status_code,
+                    "error_type": error_type,
+                }
         except Exception as e:
             logger.error(f"get_usdc_balance_and_allowance failed: {e}")
-            return {"balance_usdc": 0.0, "allowance_usdc": 0.0, "ok": False, "error": str(e)}
+            message = str(e)
+            error_type = "timeout" if "timed out" in message.lower() else "transport"
+            return {
+                "balance_usdc": 0.0,
+                "allowance_usdc": 0.0,
+                "ok": False,
+                "error": message,
+                "status_code": None,
+                "error_type": error_type,
+            }
 
     async def wait_for_balance(self, token_id: str, target_qty: float, timeout_sec: int = 60) -> bool:
         """
