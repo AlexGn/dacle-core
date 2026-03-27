@@ -33,10 +33,13 @@ class SyncCommands(commands.Cog):
 
     @staticmethod
     def _resolve_prop_channel_id() -> Optional[int]:
-        cid = os.getenv("DISCORD_PROP_FIRM_CHANNEL_ID")
-        if cid and cid.isdigit():
+        cid = os.getenv("DISCORD_PROP_FIRM_CHANNEL_ID", "").strip()
+        if cid.isdigit():
             return int(cid)
-        return None
+        try:
+            return int(get_discord_channel_contract().id_for("prop-firm"))
+        except Exception:
+            return None
 
     def _get_owner_id(self) -> Optional[int]:
         owner_id = os.getenv("DISCORD_OWNER_ID")

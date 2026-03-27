@@ -1,7 +1,7 @@
 import asyncio
-import logging
 import os
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -11,8 +11,9 @@ from discord import app_commands
 from discord.ext import commands
 
 from src.ops.discord_channel_contract import get_discord_channel_contract
+from src.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 class PropCommands(commands.Cog):
     """Prop firm commands."""
@@ -23,10 +24,13 @@ class PropCommands(commands.Cog):
         self.project_root = Path(__file__).resolve().parents[3]
 
     def _resolve_prop_channel_id(self) -> Optional[int]:
-        cid = os.getenv("DISCORD_PROP_FIRM_CHANNEL_ID")
-        if cid and cid.isdigit():
+        cid = os.getenv("DISCORD_PROP_FIRM_CHANNEL_ID", "").strip()
+        if cid.isdigit():
             return int(cid)
-        return None
+        try:
+            return int(get_discord_channel_contract().id_for("prop-firm"))
+        except Exception:
+            return None
 
     def _is_authorized(self, interaction: discord.Interaction) -> bool:
         # Allow owner always
@@ -44,12 +48,21 @@ class PropCommands(commands.Cog):
     def _report_dir(self) -> Path:
         return self.project_root / "reports" / "top_50_dacle"
 
+    def _fallback_report_dir(self) -> Path:
+        return self.project_root / "data" / "runtime" / "top_50_dacle"
+
+    def _scanner_script_path(self) -> Path:
+        return self.project_root / "scripts" / "scanners" / "top_50_dacle_scanner.py"
+
     def _latest_report_path(self) -> Optional[Path]:
-        report_dir = self._report_dir()
-        if not report_dir.exists():
+        candidates: list[Path] = []
+        for report_dir in (self._report_dir(), self._fallback_report_dir()):
+            if not report_dir.exists():
+                continue
+            candidates.extend(report_dir.glob("scan_*.json"))
+        if not candidates:
             return None
-        reports = sorted(report_dir.glob("scan_*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-        return reports[0] if reports else None
+        return max(candidates, key=lambda p: p.stat().st_mtime)
 
     @staticmethod
     def _chunk_discord_message(text: str, limit: int = 1900) -> list[str]:
@@ -168,16 +181,23 @@ class PropCommands(commands.Cog):
             await interaction.response.defer(thinking=True)
             
             logger.info("Executing top_50_dacle_scanner.py from /show command")
-            
-            # Execute the scanner using the virtual environment's python to ensure ccxt is available
-            venv_python = os.path.join(os.getcwd(), "venv/bin/python3")
+
+            scanner_script = self._scanner_script_path()
+            if not scanner_script.exists():
+                await interaction.followup.send(
+                    f"❌ **/show failed**\n```\nMissing scanner script: {scanner_script}\n```"
+                )
+                return
+
             child_env = os.environ.copy()
             child_env["DISABLE_PROP_FIRM_WEBHOOK"] = "1"
             process = await asyncio.create_subprocess_exec(
-                venv_python, "scripts/scanners/top_50_dacle_scanner.py",
+                sys.executable,
+                str(scanner_script),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=child_env,
+                cwd=str(self.project_root),
             )
             
             stdout, stderr = await process.communicate()

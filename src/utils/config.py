@@ -242,6 +242,7 @@ class DiscordConfig:
     trades_channel_id: Optional[int] = None
     macro_channel_id: Optional[int] = None
     focus_channel_id: Optional[int] = None
+    prop_firm_channel_id: Optional[int] = None
     logs_channel_id: Optional[int] = None
     heartbeat_pulse_symbol: str = "💓"
 
@@ -263,6 +264,7 @@ class DiscordConfig:
         trades_id = _to_int("DISCORD_TRADES_CHANNEL_ID", 1468948950412431598)
         macro_id = _to_int("DISCORD_MACRO_CHANNEL_ID", 1470361576237306058)
         focus_id = _to_int("DISCORD_FOCUS_CHANNEL_ID", 1470789144736174326)
+        prop_firm_id = _to_int("DISCORD_PROP_FIRM_CHANNEL_ID", 1483535011666722878)
         logs_id = _to_int("DISCORD_LOGS_CHANNEL_ID", 1468187517147939068)
         pulse_symbol = os.getenv("HEARTBEAT_PULSE_SYMBOL", "💓")
 
@@ -280,6 +282,7 @@ class DiscordConfig:
             trades_channel_id=trades_id,
             macro_channel_id=macro_id,
             focus_channel_id=focus_id,
+            prop_firm_channel_id=prop_firm_id,
             logs_channel_id=logs_id,
             heartbeat_pulse_symbol=pulse_symbol,
         )
