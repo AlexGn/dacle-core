@@ -90,6 +90,9 @@ class PolymarketClientWrapper:
             0, int(exec_cfg.get("gtd_expiration_safety_sec", 2) or 2)
         )
         self.max_retries = exec_cfg.get("max_retries", 3)
+        self.intent_max_age_sec = float(
+            exec_cfg.get("intent_max_age_sec", config.get("intent_max_age_sec", 0.0)) or 0.0
+        )
         self.qty_precision = max(0, int(exec_cfg.get("qty_precision", 4)))
         self.strict_signing_precision = bool(exec_cfg.get("strict_signing_precision", True))
         max_concurrent = int(exec_cfg.get("max_concurrent_requests", 5))
@@ -327,6 +330,27 @@ class PolymarketClientWrapper:
         if isinstance(configured, list) and configured:
             return {str(s).strip().lower() for s in configured if str(s).strip()}
         return {"maker", "fee_bearing_maker", "sniper", "combinatorial"}
+
+    def _validate_intent_freshness(
+        self,
+        intent_metadata: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        if self.intent_max_age_sec <= 0:
+            return None
+        metadata = intent_metadata if isinstance(intent_metadata, dict) else {}
+        last_update_ts = metadata.get("last_update_ts")
+        try:
+            issued_at = float(last_update_ts)
+        except (TypeError, ValueError):
+            return None
+        age_sec = time.time() - issued_at
+        if age_sec <= self.intent_max_age_sec:
+            return None
+        return {
+            "status": "error",
+            "error_code": "STALE_INTENT",
+            "error": f"intent age {age_sec:.3f}s exceeds max {self.intent_max_age_sec:.3f}s",
+        }
 
     def _resolve_allowed_token_ids(self) -> Set[str]:
         env_tokens = os.getenv("POLY_ORDER_GUARD_ALLOWED_TOKENS", "").strip()
@@ -697,6 +721,7 @@ class PolymarketClientWrapper:
         strategy: Optional[str] = None,
         entry_alert: bool = True,
         policy_context: Optional[Dict[str, Any]] = None,
+        intent_metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Create and post an order to Polymarket.
@@ -730,6 +755,10 @@ class PolymarketClientWrapper:
 
         norm_price = float(validation["normalized_price"])
         qty_norm = float(validation["normalized_qty"])
+
+        freshness_error = self._validate_intent_freshness(intent_metadata)
+        if freshness_error:
+            return freshness_error
 
         # 3. Idempotency Key (Client Order ID)
         if not client_order_id:
