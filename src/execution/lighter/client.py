@@ -112,9 +112,11 @@ class LighterRealClient:
         self.enable_order_deadline = bool(config.get("enable_order_deadline", False))
         self.order_deadline_sec = int(config.get("order_deadline_sec", 5))
 
-        self.api_key_index = self._to_int(config.get("api_key_index"))
+        # Runtime env must be able to override stale config so recovered venue slots
+        # take effect immediately without a config edit.
+        self.api_key_index = self._to_int(os.getenv("SCALPER_API_KEY_INDEX"))
         if self.api_key_index is None:
-            self.api_key_index = self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=2)
+            self.api_key_index = self._to_int(config.get("api_key_index"), default=2)
         
         # 5.11: API failover — primary + optional secondary URLs.
         self.api_urls: List[str] = config.get("api_urls") or [self.api_url]
