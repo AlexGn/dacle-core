@@ -1459,7 +1459,10 @@ class AnalysisCommands(commands.Cog):
             getattr(analysis_channel, "mention", None) or "the analysis channel",
         ):
             duplicate_notice = self._duplicate_analyze_notice(interaction.user, symbol)
-            await interaction.followup.send(
+            await safe_send(
+                interaction,
+                command_name="analyze",
+                logger=logger,
                 content=duplicate_notice or f"⏳ **{symbol}** is already being analyzed.",
                 ephemeral=True,
             )
@@ -1467,7 +1470,10 @@ class AnalysisCommands(commands.Cog):
 
         # 1. Send ephemeral status ping via followup (interaction already deferred above).
         try:
-            await interaction.followup.send(
+            await safe_send(
+                interaction,
+                command_name="analyze",
+                logger=logger,
                 content=f"🔍 Analyzing **{symbol}**...",
                 ephemeral=True,
             )
@@ -1483,7 +1489,10 @@ class AnalysisCommands(commands.Cog):
                 if msg.author.bot and f"**{symbol}** Analysis" in msg.content:
                     age = (now - msg.created_at).total_seconds()
                     if age < 60:
-                        await interaction.followup.send(
+                        await safe_send(
+                            interaction,
+                            command_name="analyze",
+                            logger=logger,
                             content=f"⏳ Analysis for **{symbol}** is already in progress.",
                             ephemeral=True
                         )
@@ -1499,7 +1508,13 @@ class AnalysisCommands(commands.Cog):
             )
         except Exception as e:
             self._finalize_analyze_request(interaction.user, symbol, request_id)
-            await interaction.followup.send(content=f"❌ Failed to post in analysis channel: {e}", ephemeral=True)
+            await safe_send(
+                interaction,
+                command_name="analyze",
+                logger=logger,
+                content=f"❌ Failed to post in analysis channel: {e}",
+                ephemeral=True,
+            )
             return
 
         # 4. Create Thread and first Status Message

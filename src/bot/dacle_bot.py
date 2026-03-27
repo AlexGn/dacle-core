@@ -41,8 +41,8 @@ try:
 except RuntimeError:
     pass
 
-# Logger will be initialized in run_bot() after config is loaded
-logger = None
+# Provide a usable module logger even before run_bot() initializes runtime logging.
+logger = get_logger(__name__)
 
 STOP_WORDS = {
     "the", "and", "for", "with", "that", "this", "from", "what", "when", "where",
