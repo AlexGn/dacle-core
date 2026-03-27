@@ -411,3 +411,8 @@ class UnifiedCapitalAllocator:
         except Exception as e:
             logger.error(f"Failed to fetch active leases: {e}")
             return []
+
+    async def get_active_lease_count(self, strategy_id: Optional[str] = None) -> int:
+        """Compatibility helper for callers expecting the legacy allocator API."""
+        leases = await self.get_active_leases(strategy_id=strategy_id)
+        return len(leases)
