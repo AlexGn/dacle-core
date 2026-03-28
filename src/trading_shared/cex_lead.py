@@ -219,6 +219,7 @@ class UnifiedCEXLead:
         self._active_idx = 0
         self._last_primary_probe = 0.0
         self._last_signal: Optional[LeadSignal] = None
+        self._last_health_log_ts = 0.0
 
         self._setup_providers()
 
@@ -240,6 +241,13 @@ class UnifiedCEXLead:
         
         if not self.providers:
             self.enabled = False
+            logger.warning("CEX_LEAD_STARTUP: No providers enabled. CEX lead is inactive.")
+        else:
+            health_info = {p: prov.health() for p, prov in zip(self.provider_names, self.providers)}
+            logger.info(
+                "CEX_LEAD_STARTUP: configured=%s enabled=%s active=%s provider_health=%s",
+                p_list, self.provider_names, self.provider_names[self._active_idx], health_info
+            )
 
     @property
     def poll_interval_sec(self) -> float:
@@ -299,12 +307,24 @@ class UnifiedCEXLead:
         active = self.providers[self._active_idx]
         
         sig = await active.poll_once()
+        now = time.monotonic()
         if sig:
             self._last_signal = sig
             return sig
         
         if active.is_suspended():
             self._try_failover(active.suspend_reason() or "suspended")
+
+        # Periodic health log if stale
+        last_sig_age = (now - self._last_signal.observed_at) if self._last_signal else -1.0
+        if (not self._last_signal or last_sig_age > self.signal_ttl_sec):
+            if now - self._last_health_log_ts > 60.0:  # Log at most once per minute
+                self._last_health_log_ts = now
+                health_info = {p: prov.health() for p, prov in zip(self.provider_names, self.providers)}
+                logger.info(
+                    "CEX_LEAD_STALE: active_provider=%s signal_age=%.1f health=%s",
+                    self.provider_names[self._active_idx], last_sig_age, health_info
+                )
         
         return None
 
