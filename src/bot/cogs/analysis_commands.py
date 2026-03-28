@@ -23,6 +23,7 @@ from src.bot.cogs.analysis_formatter import AnalysisFormatter
 from src.bot.cogs.analysis_views import TradeApprovalView
 from src.bot.utils.interaction_response import safe_defer, safe_send
 from src.bot.utils.safe_task import safe_create_task
+from src.bot.utils.api_client import api_request
 from src.bot.runtime_routing import get_bot_api_base_url, resolve_channel
 from api.routers.macro import get_btc_regime_widget
 from src.data.token_identity_lock import get_identity_lock
@@ -1248,6 +1249,54 @@ class AnalysisCommands(commands.Cog):
                 missing.append(label)
         return (len(missing) == 0), missing
 
+    async def _attach_execution_verdict(self, result: Any) -> None:
+        """Fetch canonical execution verdict when the workflow produced tradable levels."""
+        symbol = str(getattr(result, "symbol", "") or "").upper()
+        direction = str(getattr(result, "direction", "") or "").upper()
+        entry = getattr(result, "entry_price", None)
+        sl = getattr(result, "stop_loss", None)
+        tp = getattr(result, "take_profit_1", None)
+
+        if not symbol or direction not in {"LONG", "SHORT"}:
+            return
+        if not all(isinstance(value, (int, float)) for value in (entry, sl, tp)):
+            return
+
+        api_result = await api_request(
+            "POST",
+            "/api/execution/v2/full-analysis",
+            json={
+                "token": symbol,
+                "direction": direction,
+                "entry": float(entry),
+                "sl": float(sl),
+                "target": float(tp),
+            },
+            timeout=45,
+        )
+        if not api_result or "_status" in api_result:
+            logger.warning(
+                "ANALYZE_SLASH_WARN symbol=%s reason=execution_verdict_unavailable payload=%s",
+                symbol,
+                api_result,
+            )
+            return
+
+        payload = api_result.get("data") if isinstance(api_result.get("data"), dict) else api_result
+        approved = payload.get("pre_trade_check_approved")
+        if not isinstance(approved, bool):
+            approved = payload.get("approved")
+        if not isinstance(approved, bool):
+            return
+
+        setattr(result, "execution_verdict", "APPROVED" if approved else "BLOCKED")
+        setattr(result, "execution_context_signal", payload.get("signal"))
+        setattr(result, "execution_formatted_response", payload.get("formatted_response"))
+        setattr(result, "execution_score", payload.get("execution_score"))
+        setattr(result, "execution_threshold", payload.get("execution_threshold"))
+        setattr(result, "execution_score_source", payload.get("execution_score_source"))
+        setattr(result, "execution_decision_basis", payload.get("decision_basis"))
+
     def _resolve_analysis_channel(self) -> Optional[Any]:
         """Resolve /analyze destination, preferring the #analysis-updates text channel."""
         channel = resolve_channel(self.bot, "analysis-updates")
@@ -1929,6 +1978,11 @@ class AnalysisCommands(commands.Cog):
                 macro = await get_btc_regime_widget()
             except Exception as e:
                 logger.warning(f"Failed to fetch macro data: {e}")
+
+            try:
+                await self._attach_execution_verdict(result)
+            except Exception as e:
+                logger.warning(f"Failed to attach execution verdict for {symbol}: {e}")
 
             # Format the rich embed
             embed = AnalysisFormatter.format_candidate_embed(result, macro)

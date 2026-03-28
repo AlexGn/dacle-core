@@ -17,6 +17,13 @@ class AnalysisFormatter:
     COLOR_NEUTRAL = discord.Color.blue()
 
     @staticmethod
+    def _strip_duplicate_header(text: str) -> str:
+        lines = text.splitlines()
+        if lines and ("APPROVED" in lines[0] or "BLOCKED" in lines[0]):
+            return "\n".join(lines[1:]).lstrip("\n")
+        return text
+
+    @staticmethod
     def format_candidate_embed(result: Any, macro_data: Optional[Dict] = None) -> discord.Embed:
         """
         Create a rich embed for a trade candidate.
@@ -25,9 +32,15 @@ class AnalysisFormatter:
         is_long = getattr(result, 'direction', None) == "LONG"
         is_neutral = getattr(result, 'direction', None) == "NEUTRAL"
         is_skip = getattr(result, 'decision', None) == "SKIP"
+        execution_verdict = getattr(result, "execution_verdict", None)
+        has_authoritative_verdict = execution_verdict in {"APPROVED", "BLOCKED"}
+        authoritative_approved = execution_verdict == "APPROVED"
         
         # Color and Emoji
-        if is_neutral:
+        if has_authoritative_verdict:
+            color = AnalysisFormatter.COLOR_LONG if authoritative_approved else AnalysisFormatter.COLOR_SHORT
+            emoji = "✅" if authoritative_approved else "🛑"
+        elif is_neutral:
             color = AnalysisFormatter.COLOR_NEUTRAL
             emoji = "⚪"
         elif is_long:
@@ -37,21 +50,31 @@ class AnalysisFormatter:
             color = AnalysisFormatter.COLOR_SHORT
             emoji = "🔴"
         
-        # Title/Header: 📋 ZRO — NEUTRAL 3.2/10
-        title = f"📋 {result.symbol} — {getattr(result, 'direction', 'UNKNOWN')} {result.conviction_score or 0}/10"
+        # Title/Header: authoritative execution verdict when available, otherwise conviction view.
+        if has_authoritative_verdict:
+            title = f"{emoji} {result.symbol} {getattr(result, 'direction', 'UNKNOWN')} — {execution_verdict}"
+        else:
+            title = f"📋 {result.symbol} — {getattr(result, 'direction', 'UNKNOWN')} {result.conviction_score or 0}/10"
         
-        # Conviction Breakdown: Conviction: SHORT 0.0/10 | LONG 3.2/10
         long_s = float(getattr(result, 'long_score', 0) or 0.0)
         short_s = float(getattr(result, 'short_score', 0) or 0.0)
-        description = f"**Conviction**: SHORT {short_s:.1f}/10 | LONG {long_s:.1f}/10\n"
-        
-        # Decision: Decision: ❌ SKIP (Low conviction)
-        decision_emoji = "❌" if is_skip else "✅"
-        description += f"**Decision**: {decision_emoji} {result.decision}\n"
+        if has_authoritative_verdict:
+            execution_formatted = getattr(result, "execution_formatted_response", None)
+            if isinstance(execution_formatted, str) and execution_formatted.strip():
+                description = AnalysisFormatter._strip_duplicate_header(execution_formatted.strip())
+            else:
+                description = (
+                    f"**David should trade now**: {'YES' if authoritative_approved else 'NO'}\n"
+                    f"**Execution Verdict (authoritative)**: {execution_verdict}\n"
+                )
+        else:
+            description = f"**Conviction**: SHORT {short_s:.1f}/10 | LONG {long_s:.1f}/10\n"
+            decision_emoji = "❌" if is_skip else "✅"
+            description += f"**Decision**: {decision_emoji} {result.decision}\n"
         
         # Reasoning if available
         reasoning = getattr(result, 'reasoning', None)
-        if reasoning:
+        if reasoning and not has_authoritative_verdict:
             if isinstance(reasoning, list):
                 # Scorer returns list of flags — show top 5 as bullet points
                 for item in reasoning[:5]:
@@ -143,6 +166,13 @@ class AnalysisFormatter:
             inline=False
         )
 
+        if has_authoritative_verdict:
+            embed.add_field(
+                name="🧭 Conviction Context",
+                value=f"SHORT `{short_s:.1f}/10` | LONG `{long_s:.1f}/10`",
+                inline=False,
+            )
+
         # Macro Alignment (L088)
         if macro_data:
             alignment = macro_data.get("macro_alignment", {})
@@ -164,7 +194,7 @@ class AnalysisFormatter:
         # Warning if low conviction
         short_reasons = getattr(result, "short_reasons", None) or []
         long_reasons = getattr(result, "long_reasons", None) or []
-        if (is_neutral or is_skip) and (short_reasons or long_reasons):
+        if (is_neutral or is_skip) and (short_reasons or long_reasons) and not has_authoritative_verdict:
             def _fmt_reasons(items: list[str]) -> str:
                 if not items:
                     return "• (none captured)"
@@ -188,8 +218,10 @@ class AnalysisFormatter:
             )
 
         # Warning if low conviction
-        if is_skip and (result.conviction_score or 0) < 7.0:
+        if is_skip and (result.conviction_score or 0) < 7.0 and not has_authoritative_verdict:
             embed.set_footer(text=f"⚠️ Conviction {result.conviction_score or 0} < 7.0 threshold.")
+        elif has_authoritative_verdict:
+            embed.set_footer(text="Canonical execution verdict from full-analysis")
         else:
             embed.set_footer(text="DACLE Autonomous Analysis | Action Required")
         
