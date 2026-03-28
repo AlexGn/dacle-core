@@ -9,6 +9,21 @@ from src.utils.atomic_write import atomic_json_write
 
 logger = logging.getLogger(__name__)
 
+_LIFECYCLE_METADATA_KEYS = (
+    "command_id",
+    "candidate_id",
+    "feature_ts",
+    "setup_type",
+    "setup_bucket",
+    "order_type",
+    "planned_order_type",
+    "execution_route",
+    "macro_regime",
+    "macro_reason_code",
+    "macro_confidence",
+    "macro_bias",
+)
+
 class IntentLogger:
     """
     Persists TradeIntents to a centralized JSONL audit log.
@@ -25,6 +40,14 @@ class IntentLogger:
             # We use standard append here for performance; 
             # atomic_json_write is better for state files.
             entry = intent.model_dump(mode="json")
+            decision = entry.get("decision_snapshot") if isinstance(entry.get("decision_snapshot"), dict) else {}
+            metadata = decision.get("metadata") if isinstance(decision.get("metadata"), dict) else {}
+            for key in _LIFECYCLE_METADATA_KEYS:
+                value = metadata.get(key)
+                if value is not None and entry.get(key) in (None, "", 0, 0.0):
+                    entry[key] = value
+            if entry.get("planned_order_type") not in (None, "", "unknown") and entry.get("order_type") in (None, "", "unknown"):
+                entry["order_type"] = entry.get("planned_order_type")
             
             with open(self.log_path, "a") as f:
                 f.write(json.dumps(entry) + "\n")
