@@ -11,6 +11,7 @@ import math
 import os
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
@@ -2081,12 +2082,31 @@ class LighterRealClient:
                     limit=1,
                 )
                 if trades.get("status") != "success":
+                    detail = str(trades.get("error", "trades auth check failed") or "trades auth check failed")
+                    if self._trades_auth_failure_is_degradable(detail):
+                        permission = await self._infer_account_trade_permission(
+                            session=session,
+                            account_index=int(account_index),
+                        )
+                        can_trade = bool(permission.get("can_trade", True))
+                        permission_detail = str(permission.get("detail", "ok"))
+                        return _finalize(
+                            {
+                                "status": "success" if can_trade else "error",
+                                "auth_ok": True,
+                                "can_trade": can_trade,
+                                "detail": f"trades_auth_degraded:{detail}; permission={permission_detail}",
+                                "account_index": int(account_index),
+                                "degraded": True,
+                                "degraded_reason": "invalid_signature_trades_auth",
+                            }
+                        )
                     return _finalize(
                         {
                             "status": "error",
                             "auth_ok": False,
                             "can_trade": False,
-                            "detail": trades.get("error", "trades auth check failed"),
+                            "detail": detail,
                         }
                     )
 
@@ -2108,6 +2128,30 @@ class LighterRealClient:
         except Exception as e:
             detail = str(e).strip() or f"{type(e).__name__}"
             return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": detail})
+
+    def _trades_auth_failure_is_degradable(self, detail: str) -> bool:
+        if "invalid signature" not in str(detail or "").lower():
+            return False
+        return self._execution_probe_is_submit_ready()
+
+    def _execution_probe_is_submit_ready(self) -> bool:
+        report_path = Path(
+            os.getenv(
+                "LIGHTER_EXECUTION_PROBE_REPORT",
+                str(Path("data") / "audit" / "lighter_execution_probe.json"),
+            )
+        )
+        max_age_minutes = float(os.getenv("LIGHTER_MAX_PROBE_AGE_MINUTES", "1440") or 1440)
+        try:
+            from src.lighter.status_report import parse_execution_probe_status
+
+            probe = parse_execution_probe_status(
+                report_path,
+                max_age_minutes=max_age_minutes,
+            )
+        except Exception:
+            return False
+        return bool(probe.submit_ready)
 
     async def _infer_account_trade_permission(
         self,
