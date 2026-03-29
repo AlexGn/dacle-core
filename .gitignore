@@ -269,6 +269,7 @@ data/macro/sherlock_macro_levels.json
 # Only allow root CLAUDE.md (project changelog)
 **/CLAUDE.md
 !/CLAUDE.md
+!/scripts/ops/CLAUDE.md
 .env.lock
 data/polymarket/
 .env.secret.bin
