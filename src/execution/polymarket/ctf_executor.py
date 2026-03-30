@@ -259,9 +259,7 @@ class PolymarketCTFExecutor:
         key = f"polygon:{self.address.lower()}"
 
         async def _fetch_chain_nonce() -> int:
-            return int(
-                await self._call_with_rpc_retry(self.w3.eth.get_transaction_count, self.address)
-            )
+            return int(await self._call_with_rpc_retry(lambda: self.w3.eth.get_transaction_count(self.address)))
 
         return await NonceRegistry.next_nonce(key, _fetch_chain_nonce)
 
@@ -324,29 +322,30 @@ class PolymarketCTFExecutor:
             
             # Prepare transaction
             tx = await self._call_with_rpc_retry(
-                self.ctf_contract.functions.splitPosition(
+                lambda: self.ctf_contract.functions.splitPosition(
                     self.USDC_E,
                     parent_collection_id,
                     condition_id,
                     partition,
                     amount_raw
-                ).build_transaction,
-                {
-                    'from': self.address,
-                    'nonce': nonce,
-                    'gas': 300000,
-                    'gasPrice': gas_price
-                }
+                ).build_transaction(
+                    {
+                        'from': self.address,
+                        'nonce': nonce,
+                        'gas': 300000,
+                        'gasPrice': gas_price
+                    }
+                )
             )
 
             # Sign and send
             signed_tx = self.account.sign_transaction(tx)
-            tx_hash = await self._call_with_rpc_retry(self.w3.eth.send_raw_transaction, signed_tx.rawTransaction)
+            tx_hash = await self._call_with_rpc_retry(lambda: self.w3.eth.send_raw_transaction(signed_tx.rawTransaction))
             
             logger.info(f"splitPosition sent: {tx_hash.hex()}")
             
             # Wait for receipt
-            receipt = await self._call_with_rpc_retry(self.w3.eth.wait_for_transaction_receipt, tx_hash, timeout=60)
+            receipt = await self._call_with_rpc_retry(lambda: self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60))
 
             if int(self._receipt_value(receipt, "status", 0) or 0) == 1:
                 return {"status": "success", "tx_hash": tx_hash.hex(), "receipt": receipt}
@@ -382,27 +381,28 @@ class PolymarketCTFExecutor:
             gas_price = await self._call_with_rpc_retry(lambda: self.w3.eth.gas_price)
             
             tx = await self._call_with_rpc_retry(
-                self.ctf_contract.functions.mergePositions(
+                lambda: self.ctf_contract.functions.mergePositions(
                     self.USDC_E,
                     parent_collection_id,
                     condition_id,
                     partition,
                     amount_raw
-                ).build_transaction,
-                {
-                    'from': self.address,
-                    'nonce': nonce,
-                    'gas': 300000,
-                    'gasPrice': gas_price
-                }
+                ).build_transaction(
+                    {
+                        'from': self.address,
+                        'nonce': nonce,
+                        'gas': 300000,
+                        'gasPrice': gas_price
+                    }
+                )
             )
 
             signed_tx = self.account.sign_transaction(tx)
-            tx_hash = await self._call_with_rpc_retry(self.w3.eth.send_raw_transaction, signed_tx.rawTransaction)
+            tx_hash = await self._call_with_rpc_retry(lambda: self.w3.eth.send_raw_transaction(signed_tx.rawTransaction))
             
             logger.info(f"mergePositions sent: {tx_hash.hex()}")
             
-            receipt = await self._call_with_rpc_retry(self.w3.eth.wait_for_transaction_receipt, tx_hash, timeout=60)
+            receipt = await self._call_with_rpc_retry(lambda: self.w3.eth.wait_for_transaction_receipt(tx_hash, timeout=60))
 
             tx_hash_hex = tx_hash.hex()
             if int(self._receipt_value(receipt, "status", 0) or 0) == 1:
@@ -420,7 +420,7 @@ class PolymarketCTFExecutor:
         if not self._ensure_account() or not self.address:
             return None
         try:
-            wei = await self._call_with_rpc_retry(self.w3.eth.get_balance, self.address)
+            wei = await self._call_with_rpc_retry(lambda: self.w3.eth.get_balance(self.address))
             return float(self.w3.from_wei(wei, "ether"))
         except Exception as e:
             logger.warning(f"Failed to fetch MATIC balance: {e}")
@@ -434,12 +434,12 @@ class PolymarketCTFExecutor:
     ) -> int:
         """Calculate the ERC1155 token ID for a specific conditional outcome."""
         return await self._call_with_rpc_retry(
-            self.ctf_contract.functions.getPositionId(
+            lambda: self.ctf_contract.functions.getPositionId(
                 self.USDC_E,
                 parent_collection_id,
                 condition_id,
                 [index_set]
-            ).call
+            ).call()
         )
 
     async def get_conditional_balance(
@@ -455,10 +455,10 @@ class PolymarketCTFExecutor:
         try:
             pos_id = await self.get_position_id(condition_id, index_set, parent_collection_id)
             raw_bal = await self._call_with_rpc_retry(
-                self.ctf_contract.functions.balanceOf(
+                lambda: self.ctf_contract.functions.balanceOf(
                     self.address,
                     pos_id
-                ).call
+                ).call()
             )
             return float(raw_bal) / 1_000_000
         except Exception as e:
@@ -482,7 +482,7 @@ class PolymarketCTFExecutor:
         try:
             pos_id = await self.get_position_id(condition_id, index_set, parent_collection_id)
             raw_bal = await self._call_with_rpc_retry(
-                self.ctf_contract.functions.balanceOf(self.address, pos_id).call
+                lambda: self.ctf_contract.functions.balanceOf(self.address, pos_id).call()
             )
             return {
                 "status": "OK",
