@@ -500,7 +500,14 @@ class LighterRealClient:
                 code = int(payload.get("code") or 0)
                 if code == 200:
                     tx_hash = str(payload.get("tx_hash") or "")
-                    return True, {"status": "success", "order_id": tx_hash, "raw": payload}
+                    return True, {
+                        "status": "success",
+                        "order_id": tx_hash,
+                        "tx_hash": tx_hash,
+                        "client_order_id": str(submit_client_order_index),
+                        "client_order_index": int(submit_client_order_index),
+                        "raw": payload,
+                    }
 
                 last_error = str(payload.get("message") or f"code={code}")
             except Exception as exc:
@@ -1466,6 +1473,71 @@ class LighterRealClient:
         except (TypeError, ValueError):
             return default
 
+    def _extract_order_index_from_ref(self, order_ref: Any) -> Optional[int]:
+        if isinstance(order_ref, dict):
+            for key in ("order_index", "orderIndex", "index", "id", "orderId", "order_id"):
+                value = self._to_int(order_ref.get(key))
+                if value is not None:
+                    return value
+            return None
+        return self._to_int(order_ref)
+
+    def _extract_client_order_index_from_ref(self, order_ref: Any, nonce: int) -> Optional[int]:
+        if isinstance(order_ref, dict):
+            for key in ("client_order_index", "clientOrderIndex", "client_order_id", "clientOrderId"):
+                value = self._to_int(order_ref.get(key))
+                if value is not None:
+                    return value
+        return self._to_int(nonce)
+
+    def _extract_tx_hash_from_ref(self, order_ref: Any) -> str:
+        if isinstance(order_ref, dict):
+            for key in ("tx_hash", "txHash", "order_id", "orderId"):
+                value = str(order_ref.get(key) or "").strip()
+                if value:
+                    return value
+            raw = order_ref.get("raw")
+            if isinstance(raw, dict):
+                value = str(raw.get("tx_hash") or "").strip()
+                if value:
+                    return value
+            return ""
+        return str(order_ref or "").strip()
+
+    async def _resolve_cancel_order_index(
+        self,
+        session: aiohttp.ClientSession,
+        order_ref: Any,
+        nonce: int,
+    ) -> Tuple[Optional[int], Optional[str]]:
+        direct_index = self._extract_order_index_from_ref(order_ref)
+        if direct_index is not None:
+            return direct_index, None
+
+        client_order_index = self._extract_client_order_index_from_ref(order_ref, nonce)
+        tx_hash = self._extract_tx_hash_from_ref(order_ref)
+        if client_order_index is None and not tx_hash:
+            return None, "cancel_order_index_unavailable"
+
+        orders = await self._fetch_open_orders(session)
+        if orders is None:
+            return None, "open_orders_unavailable"
+
+        for order in orders:
+            order_index = self._extract_order_index_from_ref(order)
+            if order_index is None:
+                continue
+            if client_order_index is not None:
+                open_client_index = self._extract_client_order_index_from_ref(order, nonce=0)
+                if open_client_index == client_order_index:
+                    return order_index, None
+            if tx_hash:
+                for key in ("tx_hash", "txHash", "order_id", "orderId"):
+                    if str(order.get(key) or "").strip() == tx_hash:
+                        return order_index, None
+
+        return None, "open_order_match_not_found"
+
     def _to_bool(self, value: Any) -> Optional[bool]:
         if isinstance(value, bool):
             return value
@@ -2389,7 +2461,9 @@ class LighterRealClient:
         try:
             # V2: Use sign_cancel_order with correct parameters
             market_index_int = int(self.market_id)
-            order_index_int = int(order_id)
+            order_index_int, resolve_error = await self._resolve_cancel_order_index(session, order_id, nonce)
+            if order_index_int is None:
+                return {"status": "error", "error": resolve_error or "cancel_order_index_unavailable", "error_code": "CLIENT_ERROR"}
             
             signature = self.signer.sign_cancel_order({
                 "subAccountIndex": int(self._resolved_account_index or 0),
