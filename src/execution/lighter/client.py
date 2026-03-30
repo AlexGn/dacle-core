@@ -2382,6 +2382,17 @@ class LighterRealClient:
         primary_url = f"{self.api_url}/accountActiveOrders"
         legacy_url = f"{self.api_url}/orders"
         account_idx = self._resolved_account_index
+        if account_idx is None:
+            try:
+                resolved_idx, idx_err = await self.resolve_account_index(session)
+            except Exception as exc:
+                logger.error("resolve_account_index failed before open-orders lookup: %s", exc)
+                return None
+            if idx_err:
+                logger.error("resolve_account_index unavailable before open-orders lookup: %s", idx_err)
+                return None
+            account_idx = resolved_idx
+            self._resolved_account_index = self._to_int(account_idx)
 
         def _build_params() -> Dict[str, Any]:
             params: Dict[str, Any] = {"market_id": self.market_id}
