@@ -2378,8 +2378,9 @@ class LighterRealClient:
             return None
 
     async def _fetch_open_orders(self, session: aiohttp.ClientSession) -> Optional[List[Dict[str, Any]]]:
-        """Fetch open orders via GET /orders."""
-        url = f"{self.api_url}/orders"
+        """Fetch open orders via GET /accountActiveOrders."""
+        primary_url = f"{self.api_url}/accountActiveOrders"
+        legacy_url = f"{self.api_url}/orders"
         account_idx = self._resolved_account_index
 
         def _build_params() -> Dict[str, Any]:
@@ -2391,26 +2392,36 @@ class LighterRealClient:
                 params["auth"] = token
             return params
 
-        status, payload, err_text = await self._get_json(session, url, params=_build_params())
-        if status in (401, 403):
-            refreshed = await self._reactive_auth_refresh_once("fetch_open_orders_401_403")
-            if refreshed:
-                status, payload, err_text = await self._get_json(session, url, params=_build_params())
-        if status != 200:
-            logger.error(f"_fetch_open_orders HTTP {status}: {err_text}")
-            return None
+        last_status = 0
+        last_err = ""
+        for url in (primary_url, legacy_url):
+            status, payload, err_text = await self._get_json(session, url, params=_build_params())
+            if status in (401, 403):
+                refreshed = await self._reactive_auth_refresh_once("fetch_open_orders_401_403")
+                if refreshed:
+                    status, payload, err_text = await self._get_json(session, url, params=_build_params())
+            if status != 404:
+                last_status = status
+                last_err = err_text
+            if status != 200:
+                if status == 404 and url == primary_url:
+                    continue
+                logger.error(f"_fetch_open_orders HTTP {status} via {url}: {err_text}")
+                continue
 
-        if isinstance(payload, dict):
-            orders = payload.get("orders")
-            if isinstance(orders, list):
-                return orders
-            # Some API shapes return data directly.
-            data = payload.get("data")
-            if isinstance(data, list):
-                return data
-        if isinstance(payload, list):
-            return payload
-        return []
+            if isinstance(payload, dict):
+                orders = payload.get("orders")
+                if isinstance(orders, list):
+                    return orders
+                # Some API shapes return data directly.
+                data = payload.get("data")
+                if isinstance(data, list):
+                    return data
+            if isinstance(payload, list):
+                return payload
+            return []
+        logger.error(f"_fetch_open_orders HTTP {last_status}: {last_err}")
+        return None
 
     def _snapshot_from_recent_trades_payload(
         self,
