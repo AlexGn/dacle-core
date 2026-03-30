@@ -16,6 +16,7 @@ from web3.middleware import ExtraDataToPOAMiddleware
 from eth_account import Account
 from decimal import Decimal
 from src.execution.polymarket.nonce_registry import NonceRegistry
+from src.polymarket.credentials import resolve_private_key
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,8 @@ class PolymarketCTFExecutor:
         self.account = None
         self.address = None
         # Best-effort eager load for valid keys; invalid values are ignored until first use.
-        pk = os.getenv("POLY_WALLET_PRIVATE_KEY")
+        resolved_key = resolve_private_key(os.getenv("POLY_WALLET_PRIVATE_KEY"))
+        pk = resolved_key.value
         if pk:
             try:
                 self.account = Account.from_key(pk)
@@ -233,8 +235,11 @@ class PolymarketCTFExecutor:
             self.address = self.address or getattr(self.account, "address", None)
             if self.address is not None:
                 return True
-        pk = os.getenv("POLY_WALLET_PRIVATE_KEY")
+        resolved_key = resolve_private_key(os.getenv("POLY_WALLET_PRIVATE_KEY"))
+        pk = resolved_key.value
         if not pk:
+            if resolved_key.error:
+                logger.error("Failed to resolve POLY_WALLET_PRIVATE_KEY: %s", resolved_key.error)
             return False
         try:
             self.account = Account.from_key(pk)
