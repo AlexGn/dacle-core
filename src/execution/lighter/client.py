@@ -1457,6 +1457,14 @@ class LighterRealClient:
             return payload
         return ""
 
+    def _is_auth_refreshable_error(self, status: int, payload: Any, err_text: str = "") -> bool:
+        if status in (401, 403):
+            return True
+        if status != 400:
+            return False
+        detail = f"{self._extract_error_message(payload)} {err_text}".lower()
+        return "invalid signature" in detail or "invalid auth" in detail
+
     def _to_float(self, value: Any, default: Optional[float] = None) -> Optional[float]:
         try:
             if value is None:
@@ -2407,7 +2415,9 @@ class LighterRealClient:
         last_err = ""
         for url in (primary_url, legacy_url):
             status, payload, err_text = await self._get_json(session, url, params=_build_params())
-            if status in (401, 403):
+            if self._is_auth_refreshable_error(status, payload, err_text):
+                if status == 400:
+                    await self._handle_auth_failure(status, url)
                 refreshed = await self._reactive_auth_refresh_once("fetch_open_orders_401_403")
                 if refreshed:
                     status, payload, err_text = await self._get_json(session, url, params=_build_params())
