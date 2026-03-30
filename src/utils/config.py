@@ -57,7 +57,15 @@ def load_runtime_env_files(
         resolved_root / ".env.secret",
     ):
         if path.exists() and path not in loaded:
-            load_dotenv(path, override=override)
+            try:
+                load_dotenv(path, override=override)
+            except PermissionError:
+                # Systemd may already have loaded EnvironmentFile values into the
+                # process env even when the file itself is unreadable here.
+                # Skip the unreadable dotenv file and continue with later sources
+                # so startup can still use inherited variables and readable
+                # higher-priority secrets.
+                continue
             loaded.append(path)
 
     return tuple(loaded)
