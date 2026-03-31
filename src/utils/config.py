@@ -71,6 +71,34 @@ def load_runtime_env_files(
     return tuple(loaded)
 
 
+def resolve_polymarket_config_path(root_path: Optional[Path] = None) -> Path:
+    """
+    Resolve the canonical Polymarket config file path.
+
+    Precedence:
+    1. ``POLYMARKET_CONFIG``
+    2. ``SCALPER_CONFIG_PATH``
+    3. ``config/scalper.yaml``
+    4. ``config/polymarket.yaml``
+    """
+    resolved_root = _detect_root_path(root_path)
+    candidates = [
+        os.getenv("POLYMARKET_CONFIG"),
+        os.getenv("SCALPER_CONFIG_PATH"),
+        str(resolved_root / "config" / "scalper.yaml"),
+        str(resolved_root / "config" / "polymarket.yaml"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if not path.is_absolute():
+            path = resolved_root / path
+        if path.exists():
+            return path
+    return resolved_root / "config" / "polymarket.yaml"
+
+
 # =============================================================================
 # Timeout Configuration (Session 302)
 # =============================================================================
