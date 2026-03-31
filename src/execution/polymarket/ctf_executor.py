@@ -97,14 +97,34 @@ class PolymarketCTFExecutor:
     # Constants for Polymarket on Polygon
     CTF_EXCHANGE = "0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E"
     USDC_E = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174"
+
+    DISALLOWED_RPC_MARKERS = (
+        "rpc.ankr.com",
+        "polygon-rpc.com",
+        "public.blastapi.io",
+    )
     
     # Stable public RPC fallbacks (unauthenticated endpoints).
     RPC_FALLBACKS = [
         "https://polygon.llamarpc.com",
         "https://1rpc.io/polygon",
         "https://polygon-bor-rpc.publicnode.com",
-        "https://polygon-mainnet.public.blastapi.io",
     ]
+
+    @classmethod
+    def _sanitize_rpc_urls(cls, urls: List[str]) -> List[str]:
+        sanitized: List[str] = []
+        for url in urls:
+            candidate = (url or "").strip()
+            if not candidate:
+                continue
+            candidate_lc = candidate.lower()
+            if any(marker in candidate_lc for marker in cls.DISALLOWED_RPC_MARKERS):
+                logger.warning("Skipping disallowed Polygon RPC provider: %s", candidate)
+                continue
+            if candidate not in sanitized:
+                sanitized.append(candidate)
+        return sanitized
 
     def __init__(self, config: dict):
         self.config = config
@@ -115,8 +135,8 @@ class PolymarketCTFExecutor:
         else:
             fallback_urls = list(self.RPC_FALLBACKS)
 
-        self.rpc_urls = [primary_rpc] if primary_rpc else []
-        for url in fallback_urls:
+        self.rpc_urls = self._sanitize_rpc_urls([primary_rpc] if primary_rpc else [])
+        for url in self._sanitize_rpc_urls(fallback_urls):
             if url and url not in self.rpc_urls:
                 self.rpc_urls.append(url)
         if not self.rpc_urls:
