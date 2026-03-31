@@ -101,13 +101,13 @@ class PolymarketCTFExecutor:
     DISALLOWED_RPC_MARKERS = (
         "rpc.ankr.com",
         "polygon-rpc.com",
+        "polygon.llamarpc.com",
+        "1rpc.io/polygon",
         "public.blastapi.io",
     )
     
     # Stable public RPC fallbacks (unauthenticated endpoints).
     RPC_FALLBACKS = [
-        "https://polygon.llamarpc.com",
-        "https://1rpc.io/polygon",
         "https://polygon-bor-rpc.publicnode.com",
     ]
 
@@ -140,7 +140,7 @@ class PolymarketCTFExecutor:
             if url and url not in self.rpc_urls:
                 self.rpc_urls.append(url)
         if not self.rpc_urls:
-            self.rpc_urls = ["https://polygon.llamarpc.com"]
+            self.rpc_urls = list(self.RPC_FALLBACKS)
         
         self.current_rpc_index = 0
         self.w3 = Web3(Web3.HTTPProvider(self.rpc_urls[0]))
