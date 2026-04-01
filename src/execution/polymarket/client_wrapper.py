@@ -13,6 +13,7 @@ from pathlib import Path
 from decimal import Decimal, ROUND_DOWN, InvalidOperation
 from typing import Any, Dict, Optional, List, Set, Tuple
 from src.monitoring.heartbeat_discord import post_to_discord
+from src.polymarket.micro_live_session import can_admit_order, load_active_session, record_order_attempt
 
 try:
     from py_clob_client.client import ClobClient
@@ -122,6 +123,18 @@ class PolymarketClientWrapper:
                 "data/audit/polymarket_order_submissions.jsonl",
             )
         )
+        self._micro_live_session_path = Path(
+            str(
+                config.get(
+                    "micro_live_session_path",
+                    os.getenv("POLY_MICRO_LIVE_SESSION_PATH", ""),
+                )
+                or Path(__file__).resolve().parents[3] / "data" / "runtime" / "polymarket" / "micro_live_session.json"
+            )
+        )
+        self._micro_live_session_cache: Optional[Dict[str, Any]] = None
+        self._micro_live_session_cache_ts = 0.0
+        self._micro_live_session_ttl_sec = 2.0
 
     def _is_shadow_mode(self) -> bool:
         return self.mode == "SHADOW"
@@ -174,6 +187,49 @@ class PolymarketClientWrapper:
             return "LIVE_POLICY_REJECT"
         return "ORDER_POLICY_REJECT"
 
+    def _load_active_micro_live_session(self) -> Optional[Any]:
+        now = time.time()
+        cached = self._micro_live_session_cache
+        if cached and (now - self._micro_live_session_cache_ts) <= self._micro_live_session_ttl_sec:
+            return cached.get("session")
+        try:
+            session = load_active_session(self._micro_live_session_path, now_ts=now)
+        except Exception:
+            session = None
+        self._micro_live_session_cache = {"session": session}
+        self._micro_live_session_cache_ts = now
+        return session
+
+    def _is_authorized_micro_live_order(
+        self,
+        *,
+        token_id: str,
+        price: float,
+        qty: float,
+        policy_context: Optional[Dict[str, Any]],
+    ) -> bool:
+        ctx = policy_context if isinstance(policy_context, dict) else {}
+        if str(ctx.get("approval_mode") or "").strip().lower() != "diagnostic":
+            return False
+        intent_source = str(ctx.get("intent_source") or "").strip().lower()
+        if intent_source not in {"micro_live_runner", "micro_live_daemon"}:
+            return False
+        if not str(ctx.get("micro_live_session_id") or "").strip():
+            return False
+        if intent_source == "micro_live_daemon" and not bool(ctx.get("micro_live_authorized")):
+            return False
+        session = self._load_active_micro_live_session()
+        if session is None or session.session_id != str(ctx.get("micro_live_session_id")):
+            return False
+        market_id = str(ctx.get("market_id") or ctx.get("micro_live_market_id") or "").strip() or None
+        allowed, _ = can_admit_order(
+            session,
+            token_id=token_id,
+            market_id=market_id,
+            notional_usd=float(price) * float(qty),
+        )
+        return allowed
+
     def _resolve_policy_allowed_token_ids(self, key: str) -> Set[str]:
         configured = self._live_execution_policy_cfg.get(key)
         if isinstance(configured, list) and configured:
@@ -210,6 +266,14 @@ class PolymarketClientWrapper:
         intent_source = str(ctx.get("intent_source") or "").strip().lower()
         approval_mode = str(ctx.get("approval_mode") or "").strip().lower()
         notional = float(price) * float(qty)
+        micro_live_authorized = self._is_authorized_micro_live_order(
+            token_id=token_id,
+            price=price,
+            qty=qty,
+            policy_context=ctx,
+        )
+        if micro_live_authorized:
+            mode = "soak_only"
 
         if self._legacy_execution_policy_cfg:
             legacy_cfg = self._legacy_execution_policy_cfg
@@ -792,7 +856,13 @@ class PolymarketClientWrapper:
             return policy_error
 
         # 4. Shadow Mode Bypass
-        if self._is_execution_shadowed():
+        micro_live_authorized = self._is_authorized_micro_live_order(
+            token_id=token_id,
+            price=norm_price,
+            qty=qty_norm,
+            policy_context=policy_context,
+        )
+        if self._is_execution_shadowed() and not micro_live_authorized:
             execution_mode = "DRY_RUN_ADMIT" if self._dry_run_admit_enabled() else "SHADOW"
             order_prefix = "dryrun" if self._dry_run_admit_enabled() else "shadow"
             logger.info(
@@ -901,6 +971,21 @@ class PolymarketClientWrapper:
 
             if resp and resp.get("success"):
                 order_id = resp.get("orderID")
+                if micro_live_authorized:
+                    session = self._load_active_micro_live_session()
+                    session_id = str((policy_context or {}).get("micro_live_session_id") or "").strip()
+                    if session is None or session.session_id != session_id:
+                        return {
+                            "status": "error",
+                            "error": "micro-live session missing during order recording",
+                            "error_code": "LIVE_POLICY_REJECT",
+                        }
+                    record_order_attempt(
+                        session,
+                        notional_usd=float(norm_price) * float(qty_norm),
+                        path=self._micro_live_session_path,
+                    )
+                    self._micro_live_session_cache = None
                 strategy_for_audit = str(strategy or "unknown")
                 self._append_order_submission_audit(
                     token_id=token_id,
