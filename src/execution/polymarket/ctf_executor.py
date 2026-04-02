@@ -143,6 +143,9 @@ class PolymarketCTFExecutor:
             self.rpc_urls = list(self.RPC_FALLBACKS)
         
         self.current_rpc_index = 0
+        self._last_rpc_failure_class = None
+        self._last_rpc_failure_message = None
+        self._rpc_degraded = False
         self.w3 = Web3(Web3.HTTPProvider(self.rpc_urls[0]))
         self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         
@@ -183,19 +186,37 @@ class PolymarketCTFExecutor:
     async def _call_with_rpc_retry(self, func, *args, **kwargs):
         """Execute a web3 call with automatic RPC rotation on failure."""
         max_retries = len(self.rpc_urls)
+        last_failure_class = None
         for attempt in range(max_retries):
             try:
                 if asyncio.iscoroutinefunction(func):
-                    return await func(*args, **kwargs)
+                    result = await func(*args, **kwargs)
                 else:
-                    return await asyncio.to_thread(func, *args, **kwargs)
+                    result = await asyncio.to_thread(func, *args, **kwargs)
+                self._rpc_degraded = False
+                self._last_rpc_failure_class = None
+                self._last_rpc_failure_message = None
+                return result
             except Exception as e:
                 msg = str(e)
+                failure_class = self._classify_rpc_error(msg)
+                self._last_rpc_failure_class = failure_class
+                self._last_rpc_failure_message = msg
+                last_failure_class = failure_class
                 if attempt < max_retries - 1 and self._should_rotate_rpc_on_error(msg):
                     self._rotate_rpc()
                     continue
-                logger.error(f"CTF Executor RPC call failed after {attempt+1} attempts: {e}")
+                self._rpc_degraded = failure_class == "missing_block"
+                if failure_class == "missing_block":
+                    logger.warning(
+                        "CTF Executor RPC missing-block drift after %d attempts: %s",
+                        attempt + 1,
+                        e,
+                    )
+                else:
+                    logger.error(f"CTF Executor RPC call failed after {attempt+1} attempts: {e}")
                 raise e
+        self._rpc_degraded = last_failure_class == "missing_block"
 
     @staticmethod
     def _should_rotate_rpc_on_error(message: str) -> bool:
@@ -216,6 +237,9 @@ class PolymarketCTFExecutor:
             return False
 
         recoverable_markers = (
+            "block with id",
+            "header not found",
+            "block not found",
             "401",
             "429",
             "unauthorized",
@@ -236,6 +260,47 @@ class PolymarketCTFExecutor:
             "504",
         )
         return any(marker in msg for marker in recoverable_markers)
+
+    @staticmethod
+    def _classify_rpc_error(message: str) -> str:
+        msg = (message or "").lower()
+        if any(marker in msg for marker in ("block with id", "header not found", "block not found")):
+            return "missing_block"
+        if any(
+            marker in msg
+            for marker in (
+                "401",
+                "429",
+                "unauthorized",
+                "too many requests",
+                "ssl",
+                "timed out",
+                "connection aborted",
+                "connection reset",
+                "temporary failure",
+                "service unavailable",
+                "bad gateway",
+                "gateway timeout",
+                "502",
+                "503",
+                "504",
+            )
+        ):
+            return "transport"
+        if any(
+            marker in msg
+            for marker in (
+                "execution reverted",
+                "insufficient funds",
+                "nonce too low",
+                "replacement transaction underpriced",
+                "already known",
+                "invalid signature",
+                "invalid sender",
+            )
+        ):
+            return "deterministic"
+        return "unknown"
 
     @staticmethod
     def _normalize_checked_error_message(message: str) -> str:
