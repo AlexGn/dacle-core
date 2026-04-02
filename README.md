@@ -86,8 +86,8 @@ For branch-driven release flows, use the release-worktree wrappers in `scripts/o
 
 ## Documentation Rules
 
-- Treat the root canonical docs as authoritative for AI sessions.
-- Treat `.claude/rules.md`, `.claude/flow.md`, and `.claude/clean.md` as compatibility surfaces only.
+- Treat the root canonical docs (`techstack.md`, `code_conventions.md`, `skills.md`, `memory.md`) as authoritative for AI sessions.
+- The legacy `.claude/rules.md`, `.claude/flow.md`, and `.claude/clean.md` are deprecated and exist as compatibility surfaces only.
 - Prefer updating focused docs over appending session logs to `README.md`.
 
 ## Known Operational Gaps
