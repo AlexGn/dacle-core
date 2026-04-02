@@ -1,9 +1,12 @@
-# DACLE - David's Automated Crypto Learning Engine
+# DACLE - Deep-Alpha Cryptoeconomic Leverage Engine
 
 [![Tests](https://github.com/AlexGn/dacle/actions/workflows/test.yml/badge.svg)](https://github.com/AlexGn/dacle/actions/workflows/test.yml)
 [![codecov](https://codecov.io/gh/AlexGn/dacle/branch/main/graph/badge.svg)](https://codecov.io/gh/AlexGn/dacle)
 
-**AI-powered TGE analysis system with 5-agent pipeline, multi-platform OTC tracking, and knowledge base integration**
+Adaptive cross-venue trading engine with three active pillars:
+- Lighter: low-latency scalper
+- Polymarket: binary arbitrage and market-microstructure research
+- Swing / Blofin: slower execution and portfolio workflows
 
 ---
 
@@ -21,7 +24,14 @@ This displays:
 - Recent git activity
 - Ready-to-copy context prompt for Claude Code
 
-See [CLAUDE.md](CLAUDE.md) for current system status.
+Canonical AI context:
+- [CLAUDE.md](CLAUDE.md)
+- [memory.md](memory.md)
+- [techstack.md](techstack.md)
+- [code_conventions.md](code_conventions.md)
+- [skills.md](skills.md)
+
+Operational note: much of the README below is historical and may describe older TGE-centric or transitional architecture. Prefer the canonical root docs above for current session context.
 
 ---
 
@@ -1005,7 +1015,11 @@ python scripts/test_connection.py
 ## 📚 Key Documentation
 
 ### Getting Started
-- **[CLAUDE.md](CLAUDE.md)** - Current system status and session context
+- **[CLAUDE.md](CLAUDE.md)** - Session entrypoint and non-negotiable rules
+- **[memory.md](memory.md)** - Current truths, hazards, and active operating context
+- **[techstack.md](techstack.md)** - Environment, services, APIs, and deployment surfaces
+- **[code_conventions.md](code_conventions.md)** - Coding standards, testing, and architecture boundaries
+- **[skills.md](skills.md)** - Index of reusable Claude workflows
 
 ### TGE Analysis System
 - **[.claude/agents/README.md](.claude/agents/README.md)** - Agent system overview
