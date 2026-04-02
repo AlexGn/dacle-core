@@ -54,6 +54,7 @@ class BinanceAggressionStream:
         self._suspend_backoff_sec = 0.0
         self._suspend_reason = ""
         self._last_http_status: Optional[int] = None
+        self._last_poll_success_ts: float = 0.0
         
         # Session 491: Heat Shield State Machine
         self.throttle_state = "NORMAL" # NORMAL | STEALTH | RECOVERY
@@ -146,6 +147,9 @@ class BinanceAggressionStream:
     def last_http_status(self) -> Optional[int]:
         return self._last_http_status
 
+    def last_poll_success_ts(self) -> float:
+        return self._last_poll_success_ts
+
     def get_active_signal(self, now: Optional[float] = None) -> Optional[AggressionSignal]:
         if not self.enabled or self._last_signal is None:
             return None
@@ -167,6 +171,7 @@ class BinanceAggressionStream:
                     return []
                 payload = json.loads(resp.read().decode("utf-8", errors="replace"))
             self._last_http_status = 200
+            self._last_poll_success_ts = time.monotonic()
             self._suspend_backoff_sec = 0.0
             self._suspend_until_monotonic = 0.0
             self._suspend_reason = ""

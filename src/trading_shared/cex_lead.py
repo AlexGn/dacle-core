@@ -25,8 +25,14 @@ class LeadSignal:
     signal_id: int = 0
     meta: Dict[str, Any] = field(default_factory=dict)
 
+
+@dataclass
+class PollResult:
+    signal: Optional[LeadSignal]
+    poll_healthy: bool
+
 class LeadProvider(Protocol):
-    async def poll_once(self) -> Optional[LeadSignal]:
+    async def poll_once(self) -> PollResult:
         ...
 
     def is_suspended(self) -> bool:
@@ -44,6 +50,9 @@ class LeadProvider(Protocol):
     def update_symbol(self, symbol: str):
         ...
 
+    def last_http_status(self) -> Optional[int]:
+        ...
+
 class BinanceLeadAdapter:
     def __init__(self, symbol: str, config: dict):
         from src.trading_shared.binance_aggression import BinanceAggressionStream
@@ -54,11 +63,11 @@ class BinanceLeadAdapter:
     def poll_interval_sec(self) -> float:
         return self.stream.poll_interval_sec
 
-    async def poll_once(self) -> Optional[LeadSignal]:
+    async def poll_once(self) -> PollResult:
         signal = await self.stream.poll_once()
         if not signal:
-            return None
-        return LeadSignal(
+            return PollResult(signal=None, poll_healthy=self.stream.last_http_status() == 200)
+        return PollResult(signal=LeadSignal(
             side=signal.side,
             strength=signal.sweep_qty,
             source="binance",
@@ -66,7 +75,7 @@ class BinanceLeadAdapter:
             observed_at=signal.observed_at,
             signal_id=signal.signal_id,
             meta={"buy_qty": signal.buy_qty, "sell_qty": signal.sell_qty}
-        )
+        ), poll_healthy=True)
 
     def is_suspended(self) -> bool:
         return self.stream.is_temporarily_suspended()
@@ -80,7 +89,10 @@ class BinanceLeadAdapter:
     def health(self) -> dict:
         return {
             "status": "suspended" if self.is_suspended() else "ok",
-            "reason": self.suspend_reason()
+            "reason": self.suspend_reason(),
+            "last_http_status": self.last_http_status(),
+            "last_poll_success_ts": self.stream.last_poll_success_ts(),
+            "last_signal_ts": self.stream.get_active_signal().observed_at if self.stream.get_active_signal() else None,
         }
 
     def update_symbol(self, symbol: str):
@@ -90,6 +102,9 @@ class BinanceLeadAdapter:
         # Reset last signal to avoid stale comparisons
         if hasattr(self.stream, "_last_signal"):
             self.stream._last_signal = None
+
+    def last_http_status(self) -> Optional[int]:
+        return self.stream.last_http_status()
 
 class BlofinLeadAdapter:
     def __init__(self, symbol: str, config: dict):
@@ -104,6 +119,8 @@ class BlofinLeadAdapter:
         self.min_delta_bps = float(config.get("min_delta_bps", 3.0))
         self.enabled = bool(config.get("enabled", True))
         self._signal_seq = 0
+        self._last_http_status: Optional[int] = None
+        self._last_poll_success_ts: float = 0.0
 
     @property
     def poll_interval_sec(self) -> float:
@@ -121,7 +138,9 @@ class BlofinLeadAdapter:
     def health(self) -> dict:
         return {
             "status": "suspended" if self.is_suspended() else "ok",
-            "reason": self.suspend_reason()
+            "reason": self.suspend_reason(),
+            "last_http_status": self.last_http_status(),
+            "last_poll_success_ts": self._last_poll_success_ts,
         }
 
     def update_symbol(self, symbol: str):
@@ -130,39 +149,41 @@ class BlofinLeadAdapter:
         self.blofin_symbol = f"{base.upper()}-USDT"
         self._last_price = None
 
-    async def poll_once(self) -> Optional[LeadSignal]:
+    async def poll_once(self) -> PollResult:
         if not self.enabled or self.is_suspended():
-            return None
+            return PollResult(signal=None, poll_healthy=False)
         
         try:
             url = f"https://openapi.blofin.com/api/v1/market/tickers?instId={self.blofin_symbol}"
             def fetch():
                 req = urllib.request.Request(url, headers={"User-Agent": "dacle-scalper/1.0"})
                 with urllib.request.urlopen(req, timeout=self.request_timeout) as resp:
+                    self._last_http_status = int(getattr(resp, "status", 200) or 200)
                     return json.loads(resp.read().decode("utf-8"))
-            
+
             payload = await asyncio.to_thread(fetch)
+            self._last_poll_success_ts = time.monotonic()
             data = payload.get("data", [])
             if not data:
-                return None
+                return PollResult(signal=None, poll_healthy=True)
             
             ticker = data[0]
             last_price = float(ticker.get("last", 0.0))
             if last_price <= 0:
-                return None
+                return PollResult(signal=None, poll_healthy=True)
             
             if self._last_price is None:
                 self._last_price = last_price
-                return None
+                return PollResult(signal=None, poll_healthy=True)
             
             delta_bps = ((last_price - self._last_price) / self._last_price) * 10000.0
             self._last_price = last_price
             
             if abs(delta_bps) < self.min_delta_bps:
-                return None
+                return PollResult(signal=None, poll_healthy=True)
             
             self._signal_seq += 1
-            return LeadSignal(
+            return PollResult(signal=LeadSignal(
                 side="BUY" if delta_bps > 0 else "SELL",
                 strength=abs(delta_bps),
                 source="blofin",
@@ -170,12 +191,21 @@ class BlofinLeadAdapter:
                 observed_at=time.monotonic(),
                 signal_id=self._signal_seq,
                 meta={"delta_bps": delta_bps}
-            )
+            ), poll_healthy=True)
+        except urllib.error.HTTPError as e:
+            self._last_http_status = int(getattr(e, "code", 0) or 0)
+            logger.warning("Blofin poll error: %s", e)
+            self._suspended_until = time.monotonic() + 30.0
+            self._suspend_reason = str(e)
+            return PollResult(signal=None, poll_healthy=False)
         except Exception as e:
             logger.warning("Blofin poll error: %s", e)
             self._suspended_until = time.monotonic() + 30.0
             self._suspend_reason = str(e)
-            return None
+            return PollResult(signal=None, poll_healthy=False)
+
+    def last_http_status(self) -> Optional[int]:
+        return self._last_http_status
 
 class LocalLeadAdapter:
     def __init__(self, config: dict):
@@ -201,8 +231,11 @@ class LocalLeadAdapter:
     def update_symbol(self, symbol: str):
         pass
 
-    async def poll_once(self) -> Optional[LeadSignal]:
+    async def poll_once(self) -> PollResult:
         # Local logic would go here if needed
+        return PollResult(signal=None, poll_healthy=False)
+
+    def last_http_status(self) -> Optional[int]:
         return None
 
 class UnifiedCEXLead:
@@ -271,8 +304,9 @@ class UnifiedCEXLead:
         return self.providers[self._active_idx].suspend_remaining_sec()
 
     def last_http_status(self) -> Optional[int]:
-        # Placeholder for compatibility
-        return None
+        if not self.enabled:
+            return None
+        return self.providers[self._active_idx].last_http_status()
 
     def _try_failover(self, reason: str):
         if self._active_idx < len(self.providers) - 1:
@@ -299,19 +333,19 @@ class UnifiedCEXLead:
         else:
             logger.debug("CEX_LEAD_RECOVER_PROBE: primary still suspended.")
 
-    async def poll_once(self) -> Optional[LeadSignal]:
+    async def poll_once(self) -> PollResult:
         if not self.enabled:
-            return None
+            return PollResult(signal=None, poll_healthy=False)
         
         self._try_recover_primary()
         active = self.providers[self._active_idx]
         
-        sig = await active.poll_once()
+        result = await active.poll_once()
         now = time.monotonic()
-        if sig:
-            self._last_signal = sig
-            return sig
-        
+        if result.signal:
+            self._last_signal = result.signal
+            return result
+
         if active.is_suspended():
             self._try_failover(active.suspend_reason() or "suspended")
 
@@ -325,8 +359,8 @@ class UnifiedCEXLead:
                     "CEX_LEAD_STALE: active_provider=%s signal_age=%.1f health=%s",
                     self.provider_names[self._active_idx], last_sig_age, health_info
                 )
-        
-        return None
+
+        return result
 
     def get_active_signal(self, now: Optional[float] = None) -> Optional[LeadSignal]:
         if not self.enabled or not self._last_signal:
