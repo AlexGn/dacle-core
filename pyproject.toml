@@ -81,13 +81,13 @@ python_functions = ["test_*"]
 asyncio_mode = "auto"
 
 [tool.black]
-line-length = 100
+line-length = 88
 target-version = ['py311']
 include = '\.pyi?$'
 
 [tool.isort]
 profile = "black"
-line_length = 100
+line_length = 88
 
 [tool.mypy]
 python_version = "3.11"
