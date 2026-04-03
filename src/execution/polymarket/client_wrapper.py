@@ -212,11 +212,11 @@ class PolymarketClientWrapper:
         if str(ctx.get("approval_mode") or "").strip().lower() != "diagnostic":
             return False
         intent_source = str(ctx.get("intent_source") or "").strip().lower()
-        if intent_source not in {"micro_live_runner", "micro_live_daemon"}:
+        if intent_source not in {"micro_live_runner", "micro_live_daemon", "mercury_semantic"}:
             return False
         if not str(ctx.get("micro_live_session_id") or "").strip():
             return False
-        if intent_source == "micro_live_daemon" and not bool(ctx.get("micro_live_authorized")):
+        if intent_source in {"micro_live_daemon", "mercury_semantic"} and not bool(ctx.get("micro_live_authorized")):
             return False
         session = self._load_active_micro_live_session()
         if session is None or session.session_id != str(ctx.get("micro_live_session_id")):
@@ -337,6 +337,8 @@ class PolymarketClientWrapper:
                 for s in (self._live_execution_policy_cfg.get("diagnostic_allowed_sources") or [])
                 if str(s).strip()
             }
+            if micro_live_authorized:
+                allowed_sources.update({"micro_live_runner", "micro_live_daemon", "mercury_semantic"})
             if allowed_sources and intent_source not in allowed_sources:
                 return {
                     "status": "error",
