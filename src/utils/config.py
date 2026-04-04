@@ -78,15 +78,17 @@ def resolve_polymarket_config_path(root_path: Optional[Path] = None) -> Path:
     Precedence:
     1. ``POLYMARKET_CONFIG``
     2. ``SCALPER_CONFIG_PATH``
-    3. ``config/scalper.yaml``
+    3. ``SCALPER_CONFIG``
     4. ``config/polymarket.yaml``
+    5. ``config/scalper.yaml``
     """
     resolved_root = _detect_root_path(root_path)
     candidates = [
         os.getenv("POLYMARKET_CONFIG"),
         os.getenv("SCALPER_CONFIG_PATH"),
-        str(resolved_root / "config" / "scalper.yaml"),
+        os.getenv("SCALPER_CONFIG"),
         str(resolved_root / "config" / "polymarket.yaml"),
+        str(resolved_root / "config" / "scalper.yaml"),
     ]
     for candidate in candidates:
         if not candidate:
