@@ -179,7 +179,7 @@ class PolymarketCTFExecutor:
         self.current_rpc_index = (self.current_rpc_index + 1) % len(self.rpc_urls)
         new_rpc = self.rpc_urls[self.current_rpc_index]
         logger.warning(f"RPC failure detected. Rotating to fallback provider: {new_rpc}")
-        self.w3 = Web3(Web3.HTTPProvider(new_rpc))
+        self.w3 = Web3(Web3.HTTPProvider(new_rpc, request_kwargs={"timeout": 3.0}))
         self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         self._init_contracts()
 
