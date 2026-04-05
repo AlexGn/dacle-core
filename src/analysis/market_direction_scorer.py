@@ -1394,7 +1394,7 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     # ---- Apply correlation discount (Phase 4.2) ----
     signals = apply_correlation_discount(signals)
 
-    # ---- Optional signals (External Macro + Liquidity Fuel) ----
+    # ---- Optional signals (External Macro + Liquidity Fuel + Cipher Composite) ----
     external_snapshot = _load_external_indices_snapshot()
     external_macro = await _score_external_macro(use_realism=use_realism)
     if external_macro:
@@ -1403,6 +1403,10 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     liquidity_fuel = await _score_liquidity_fuel(btc_price, cp_global, use_realism=use_realism)
     if liquidity_fuel:
         signals.append(liquidity_fuel)
+
+    cipher_composite = _score_cipher_composite()
+    if cipher_composite:
+        signals.append(cipher_composite)
 
     # ---- Context indicators (weight=0, informational) ----
     context_signals = [
@@ -1510,20 +1514,28 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
         "available": liquidity_fuel is not None,
         "stale": False,
     }
+    signal_quality["Cipher Composite"] = {
+        "available": cipher_composite is not None,
+        "stale": False,
+    }
 
     core_available = sum(
         1
         for s in signals
         if s.name in core_signal_names and s.label != "N/A"
     )
-    optional_live = int(external_macro is not None) + int(liquidity_fuel is not None)
+    optional_live = (
+        int(external_macro is not None)
+        + int(liquidity_fuel is not None)
+        + int(cipher_composite is not None)
+    )
     data_quality = {
         "mode": "realism" if use_realism else "baseline",
         "core_signals_total": len(core_signal_names),
         "core_signals_available": core_available,
-        "optional_signals_total": 2,
+        "optional_signals_total": 3,
         "optional_signals_live": optional_live,
-        "optional_signals_missing": 2 - optional_live,
+        "optional_signals_missing": 3 - optional_live,
     }
 
     return DirectionUpdate(
@@ -1575,6 +1587,39 @@ def _trend_from_change(change_pct: Optional[float], threshold: float = 0.2) -> s
     if change_pct < -threshold:
         return "DOWNTREND"
     return "NEUTRAL"
+
+
+def _score_cipher_composite() -> Optional[SignalResult]:
+    """
+    Cipher Composite — aggregate WaveTrend/MFI momentum across Tier 1 macro indices.
+
+    Reads from cipher_cache_service (populated by cipher_rotation_monitor every 4H).
+    Returns None if cache is empty or too few indices are available.
+    """
+    try:
+        from src.data.cipher_cache_service import get_cipher_composite_score
+        w = load_weights().get("cipher_composite", 0.06)
+        score = get_cipher_composite_score(resolution="4H")
+        if score == 0.0:
+            # Could be neutral OR could be no data — only return if cache has content
+            from src.data.cipher_cache_service import get_all_cipher_snapshots
+            snaps = get_all_cipher_snapshots(resolution="4H")
+            if not snaps:
+                return None
+        score = max(-1.0, min(1.0, score))
+        if score > 0.2:
+            label = f"Bullish momentum across indices ({score:+.2f})"
+            emoji = "🟢"
+        elif score < -0.2:
+            label = f"Bearish momentum across indices ({score:+.2f})"
+            emoji = "🔴"
+        else:
+            label = f"Neutral cipher momentum ({score:+.2f})"
+            emoji = "🟡"
+        return SignalResult("Cipher Composite", w, round(score, 3), None, label, emoji)
+    except Exception as e:
+        logger.debug(f"Cipher composite signal unavailable: {e}")
+        return None
 
 
 async def _score_external_macro(use_realism: bool = False) -> Optional[SignalResult]:

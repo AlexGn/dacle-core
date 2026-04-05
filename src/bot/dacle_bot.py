@@ -117,6 +117,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load macro_commands cog: {e}")
 
+        # Load cipher + rotation commands (/cipher, /rotation)
+        try:
+            await self.load_extension("src.bot.cogs.cipher_commands")
+            logger.info("✅ Loaded cipher_commands cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load cipher_commands cog: {e}")
+
         # Load Analysis commands (Python-native analyze command)
         try:
             await self.load_extension("src.bot.cogs.analysis_commands")
