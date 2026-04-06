@@ -7,7 +7,11 @@ import logging
 import time
 from typing import Optional, Dict, Any, Tuple
 from enum import Enum
-import redis.asyncio as aioredis
+
+try:
+    import redis.asyncio as aioredis
+except ModuleNotFoundError:  # pragma: no cover - allows import in test envs without redis installed
+    aioredis = None
 from src.utils.logger import get_logger
 
 class RiskState(Enum):
@@ -17,7 +21,7 @@ class RiskState(Enum):
     HARD_STOP = "HARD_STOP"
 
 class RealTimeRiskLedger:
-    def __init__(self, redis: aioredis.Redis, venue: str, symbol: str,
+    def __init__(self, redis: Any, venue: str, symbol: str,
                  max_open_notional_usd: float = 25.0,
                  daily_loss_limit_usd: float = 10.0,
                  catastrophic_loss_limit_usd: float = 20.0,

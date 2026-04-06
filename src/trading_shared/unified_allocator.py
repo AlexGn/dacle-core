@@ -4,7 +4,11 @@ import time
 import uuid
 import asyncio
 from typing import Dict, Optional, Any, List
-from redis.asyncio import Redis
+
+try:
+    from redis.asyncio import Redis
+except ModuleNotFoundError:  # pragma: no cover - allows import in test envs without redis installed
+    Redis = Any
 from src.trading_shared.capital_models import (
     get_config_key,
     get_allocated_key,

@@ -3,7 +3,10 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict
 
-from redis.asyncio import Redis
+try:
+    from redis.asyncio import Redis
+except ModuleNotFoundError:  # pragma: no cover - allows import in test envs without redis installed
+    Redis = Any
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,11 @@ import asyncio
 import time
 import json
 from typing import Dict, Optional, Any
-from redis.asyncio import Redis
+
+try:
+    from redis.asyncio import Redis
+except ModuleNotFoundError:  # pragma: no cover - allows import in test envs without redis installed
+    Redis = Any
 
 class RateLimitManager:
     """

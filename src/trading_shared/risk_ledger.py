@@ -4,8 +4,12 @@ Redis-backed atomic exposure ledger using integer cents.
 """
 
 import logging
-from typing import Optional
-import redis.asyncio as aioredis
+from typing import Any, Optional
+
+try:
+    import redis.asyncio as aioredis
+except ModuleNotFoundError:  # pragma: no cover - allows import in test envs without redis installed
+    aioredis = None
 from src.lighter.contracts import KEY_GLOBAL_EXPOSURE_CENTS_V1, GateRejectCode
 from src.utils.logger import get_logger
 
@@ -32,7 +36,7 @@ class GlobalRiskLedger:
     Thread-safe via Redis Lua atomicity.
     """
 
-    def __init__(self, redis: aioredis.Redis, cap_usd: float, enabled: bool = True):
+    def __init__(self, redis: Any, cap_usd: float, enabled: bool = True):
         self._redis = redis
         self._cap_cents = int(round(cap_usd * 100))
         self._enabled = enabled
