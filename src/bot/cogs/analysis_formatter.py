@@ -7,6 +7,8 @@ import discord
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+from src.bot.formatters.cipher_context import normalize_cipher_context
+
 class AnalysisFormatter:
     """
     Creates rich embeds for trade candidates in #analysis-updates.
@@ -190,6 +192,37 @@ class AnalysisFormatter:
                 ),
                 inline=False
             )
+
+            cipher = normalize_cipher_context(macro_data)
+            if cipher.get("available"):
+                if cipher.get("confidence_pct") is not None:
+                    confidence_text = f"{cipher['confidence_pct']:.0f}%"
+                elif cipher.get("score") is not None:
+                    confidence_text = f"score {cipher['score']:+.2f}"
+                else:
+                    confidence_text = "n/a"
+                timeframe_text = cipher.get("timeframe") or "n/a"
+                embed.add_field(
+                    name="🌀 Market Cipher",
+                    value=(
+                        f"• Signal: `{cipher['label']}`\n"
+                        f"• Confidence: `{confidence_text}`\n"
+                        f"• Timeframe: `{timeframe_text}`\n"
+                        f"• Read: `{cipher['interpretation']}`"
+                    ),
+                    inline=False,
+                )
+            else:
+                embed.add_field(
+                    name="🌀 Market Cipher",
+                    value=(
+                        "• Signal: `UNAVAILABLE`\n"
+                        "• Confidence: `n/a`\n"
+                        "• Timeframe: `n/a`\n"
+                        "• Read: `Market Cipher unavailable or stale`"
+                    ),
+                    inline=False,
+                )
         
         # Warning if low conviction
         short_reasons = getattr(result, "short_reasons", None) or []

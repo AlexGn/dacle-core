@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from src.bot.formatters.cipher_context import normalize_cipher_context
+
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
     """Safely convert a value to float."""
@@ -228,6 +230,29 @@ def build_ta_card_embed(data: dict[str, Any]) -> dict[str, Any]:
 
     macro_text = "\n".join(macro_lines)
 
+    cipher = normalize_cipher_context(data)
+    cipher_lines = []
+    if cipher.get("available"):
+        cipher_lines.append(f"Signal: {cipher['label']}")
+        if cipher.get("confidence_pct") is not None:
+            cipher_lines.append(f"Confidence: {cipher['confidence_pct']:.0f}%")
+        elif cipher.get("score") is not None:
+            cipher_lines.append(f"Score: {cipher['score']:+.2f}")
+        else:
+            cipher_lines.append("Confidence: N/A")
+        cipher_lines.append(f"Timeframe: {cipher.get('timeframe') or 'N/A'}")
+        cipher_lines.append(f"Read: {cipher['interpretation']}")
+    else:
+        cipher_lines.extend(
+            [
+                "Signal: UNAVAILABLE",
+                "Confidence: N/A",
+                "Timeframe: N/A",
+                "Read: Market Cipher unavailable or stale",
+            ]
+        )
+    cipher_text = "\n".join(cipher_lines)
+
     # --- Reasoning (compact) ---
     reasoning = data.get("reasoning") or []
     if reasoning:
@@ -271,6 +296,11 @@ def build_ta_card_embed(data: dict[str, Any]) -> dict[str, Any]:
         {
             "name": "--- Macro ---",
             "value": macro_text[:1024],
+            "inline": True,
+        },
+        {
+            "name": "--- Market Cipher ---",
+            "value": cipher_text[:1024],
             "inline": True,
         },
     ]
