@@ -75,6 +75,11 @@ class DiscoveryTAResult:
     # TVEM signal
     tvem_signal: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL
 
+    # Cipher context
+    cipher_signal: str = "UNAVAILABLE"
+    cipher_confidence: float = 0.0
+    cipher_timeframe: str = "4h"
+
     # Derived fields
     ta_bias: str = "NEUTRAL"  # SHORT_ALIGNED / LONG_ALIGNED / NEUTRAL
     ta_confidence: float = 0.0  # 0.0-1.0 based on # of aligned factors
@@ -111,6 +116,9 @@ class DiscoveryTAResult:
             "atr_bps": round(self.atr_bps, 2) if self.atr_bps is not None else None,
             "volume_profile_zone": self.volume_profile_zone,
             "tvem_signal": self.tvem_signal,
+            "cipher_signal": self.cipher_signal,
+            "cipher_confidence": round(self.cipher_confidence, 2),
+            "cipher_timeframe": self.cipher_timeframe,
             "ta_bias": self.ta_bias,
             "ta_confidence": round(self.ta_confidence, 2),
         }
@@ -270,6 +278,26 @@ def run_discovery_ta(token_symbol: str, timeframe: str = "4h", obi: float = None
     # TVEM
     tvem_data = _compute_tvem(ohlcv)
     result.tvem_signal = tvem_data.get("signal", "NEUTRAL")
+
+    # Cipher snapshot
+    try:
+        from src.ta.cipher_engine import compute_cipher_snapshot
+
+        cipher = compute_cipher_snapshot(
+            symbol,
+            timeframe.upper(),
+            opens=[float(row[1]) for row in ohlcv],
+            highs=[float(row[2]) for row in ohlcv],
+            lows=[float(row[3]) for row in ohlcv],
+            closes=[float(row[4]) for row in ohlcv],
+            volumes=[float(row[5]) for row in ohlcv],
+            timestamps=[str(row[0]) for row in ohlcv],
+        )
+        result.cipher_signal = cipher.signal
+        result.cipher_confidence = cipher.confidence
+        result.cipher_timeframe = timeframe
+    except Exception as e:
+        logger.warning(f"Cipher snapshot failed for {symbol}: {e}")
 
     # Step 3: Derive ta_bias and ta_confidence (SMC-Hardened)
     _compute_bias_and_confidence(result)

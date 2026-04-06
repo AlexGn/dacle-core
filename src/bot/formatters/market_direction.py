@@ -105,6 +105,7 @@ def build_market_direction_embed(
     btc_signal = next((s for s in signals if isinstance(s, dict) and s.get("name") == "BTC Trend"), None)
     btcdom_signal = next((s for s in signals if isinstance(s, dict) and s.get("name") == "BTCDOM"), None)
     total3_signal = next((s for s in signals if isinstance(s, dict) and s.get("name") == "TOTAL3"), None)
+    cipher_signal = next((s for s in signals if isinstance(s, dict) and s.get("name") == "Cipher Composite"), None)
     btc_price = _to_num((btc_signal or {}).get("value"))
     btcdom_val = _to_num((btcdom_signal or {}).get("value"))
     total3_val = _to_num((total3_signal or {}).get("value"))
@@ -219,6 +220,20 @@ def build_market_direction_embed(
 
     if context_text:
         fields.append({"name": "\u2501\u2501\u2501\u2501 Market Context \u2501\u2501\u2501\u2501", "value": context_text[:1024], "inline": False})
+    if cipher_signal:
+        cipher_score = _to_num(cipher_signal.get("score"))
+        cipher_weight = int(cipher_signal.get("weight_pct", 0) or 0)
+        cipher_lines = [
+            f"{cipher_signal.get('emoji', '⚪')} **{cipher_signal.get('label', 'N/A')}**",
+            f"Weight: {cipher_weight}%",
+        ]
+        if cipher_score is not None:
+            cipher_lines.append(f"Score: {cipher_score:+.2f}")
+        fields.append({
+            "name": "\u2501\u2501\u2501\u2501 Market Cipher \u2501\u2501\u2501\u2501",
+            "value": "\n".join(cipher_lines)[:1024],
+            "inline": False,
+        })
     staleness_badge = _get_levels_staleness_badge(btc_levels_path)
     key_levels_header = f"\u2501\u2501\u2501\u2501 Key Levels{staleness_badge} \u2501\u2501\u2501\u2501"
     fields.extend([
@@ -257,4 +272,3 @@ def build_market_direction_embed(
         "footer": {"text": " | ".join(footer_parts)},
         "timestamp": timestamp,
     }
-
