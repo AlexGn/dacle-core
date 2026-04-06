@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 class FeatureFlag:
     """Feature flag constants"""
     ENHANCED_CONFLUENCE_DISPLAY = "enhanced_confluence_display"
+    MARKET_CIPHER_EXECUTION_ENABLED = "market_cipher_execution_enabled"
     POLYMARKET_UNIVERSE_SCANNER = "polymarket_universe_scanner"
     POLYMARKET_COMBINATORIAL = "polymarket_combinatorial"
     POLYMARKET_MAKER = "polymarket_maker"
@@ -93,6 +94,7 @@ def _load_config(force_reload: bool = False) -> dict:
         # Return default config (all flags disabled)
         default_config = {
             "enhanced_confluence_display": False,
+            "market_cipher_execution_enabled": False,
             "user_overrides_enabled": False
         }
         _config_cache = default_config

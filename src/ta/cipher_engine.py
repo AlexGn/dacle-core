@@ -25,6 +25,7 @@ from typing import Dict, List, Optional
 
 from src.ta.indicators.wavetrend import calculate_wavetrend
 from src.ta.indicators.mfi import calculate_dacle_mfi
+from src.ta.indicators.vwap_oscillator import calculate_vwap_oscillator
 from src.ta.indicators.cvd import calculate_cvd
 from src.ta.indicators.choppiness import calculate_choppiness
 from src.analysis.momentum_indicators import calculate_macd, calculate_stochastic
@@ -64,6 +65,18 @@ class WaveTrendSnapshot:
 class MFISnapshot:
     value: float
     is_bullish: bool
+    previous_value: Optional[float] = None
+    crossed_above_zero: bool = False
+    crossed_below_zero: bool = False
+
+
+@dataclass
+class VWAPSnapshot:
+    value: float
+    above_zero: bool
+    previous_value: Optional[float] = None
+    crossed_above_zero: bool = False
+    crossed_below_zero: bool = False
 
 
 @dataclass
@@ -89,6 +102,18 @@ class StochasticSnapshot:
 
 
 @dataclass
+class MomentumSnapshot:
+    wt_delta: float
+    previous_wt_delta: Optional[float]
+    curved_up: bool
+    curved_down: bool
+    green_dot: bool
+    red_dot: bool
+    oversold_reversal: bool
+    overbought_reversal: bool
+
+
+@dataclass
 class CipherSnapshot:
     index_key: str
     resolution: str
@@ -97,9 +122,11 @@ class CipherSnapshot:
     # Individual indicators (None if insufficient data)
     wavetrend: Optional[WaveTrendSnapshot] = None
     mfi: Optional[MFISnapshot] = None
+    vwap: Optional[VWAPSnapshot] = None
     cvd: Optional[CVDSnapshot] = None
     macd: Optional[MACDSnapshot] = None
     stochastic: Optional[StochasticSnapshot] = None
+    momentum: Optional[MomentumSnapshot] = None
     choppiness: Optional[float] = None
 
     # Composite output
@@ -137,6 +164,7 @@ def compute_cipher_snapshot(
         return snap
 
     # --- WaveTrend ---
+    wt = None
     try:
         wt = calculate_wavetrend(highs, lows, closes)
         snap.wavetrend = WaveTrendSnapshot(
@@ -153,9 +181,29 @@ def compute_cipher_snapshot(
     if n >= MIN_BARS_MFI:
         try:
             mfi = calculate_dacle_mfi(highs, lows, closes)
-            snap.mfi = MFISnapshot(value=mfi["latest_mfi"], is_bullish=mfi["is_bullish"])
+            snap.mfi = MFISnapshot(
+                value=mfi["latest_mfi"],
+                is_bullish=mfi["is_bullish"],
+                previous_value=mfi.get("previous_mfi"),
+                crossed_above_zero=mfi.get("crossed_above_zero", False),
+                crossed_below_zero=mfi.get("crossed_below_zero", False),
+            )
         except Exception as e:
             logger.warning(f"[cipher_engine] MFI failed for {index_key}/{resolution}: {e}")
+
+    # --- VWAP oscillator ---
+    try:
+        vwap = calculate_vwap_oscillator(highs, lows, closes, volumes)
+        if vwap["latest_value"] is not None:
+            snap.vwap = VWAPSnapshot(
+                value=vwap["latest_value"],
+                above_zero=vwap["above_zero"],
+                previous_value=vwap.get("previous_value"),
+                crossed_above_zero=vwap.get("crossed_above_zero", False),
+                crossed_below_zero=vwap.get("crossed_below_zero", False),
+            )
+    except Exception as e:
+        logger.warning(f"[cipher_engine] VWAP oscillator failed for {index_key}/{resolution}: {e}")
 
     # --- CVD ---
     has_volume = any(v != 0.0 for v in volumes)
@@ -216,8 +264,39 @@ def compute_cipher_snapshot(
             logger.warning(f"[cipher_engine] Choppiness failed for {index_key}/{resolution}: {e}")
 
     # --- Composite Signal ---
+    if wt is not None:
+        snap.momentum = _build_momentum_snapshot(wt)
     snap.signal, snap.confidence, snap.reasons = _compute_composite(snap)
     return snap
+
+
+def _build_momentum_snapshot(wt: dict) -> Optional[MomentumSnapshot]:
+    """Build explicit momentum-turn state from WaveTrend output."""
+    wt1_series = wt.get("wt1_series") or []
+    wt2_series = wt.get("wt2_series") or []
+    if len(wt1_series) < 3 or len(wt2_series) < 2:
+        return None
+
+    latest = wt1_series[-1]
+    prev = wt1_series[-2]
+    prev2 = wt1_series[-3]
+    wt_delta = latest - prev
+    prev_delta = prev - prev2
+    curved_up = wt_delta > 0 and wt_delta >= prev_delta
+    curved_down = wt_delta < 0 and wt_delta <= prev_delta
+    green_dot = bool(wt.get("long_signal"))
+    red_dot = bool(wt.get("short_signal"))
+
+    return MomentumSnapshot(
+        wt_delta=round(wt_delta, 4),
+        previous_wt_delta=round(prev_delta, 4),
+        curved_up=curved_up,
+        curved_down=curved_down,
+        green_dot=green_dot,
+        red_dot=red_dot,
+        oversold_reversal=bool((prev <= WT_OVERSOLD or prev2 <= WT_OVERSOLD) and curved_up),
+        overbought_reversal=bool((prev >= WT_OVERBOUGHT or prev2 >= WT_OVERBOUGHT) and curved_down),
+    )
 
 
 def _compute_composite(snap: CipherSnapshot):

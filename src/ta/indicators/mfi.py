@@ -35,7 +35,10 @@ def calculate_dacle_mfi(
     Returns:
         {
             "latest_mfi": float | None,   # Latest MFI value
+            "previous_mfi": float | None, # Previous MFI value
             "is_bullish": bool,           # True when latest_mfi > 0
+            "crossed_above_zero": bool,   # True when MFI crossed from <=0 to >0
+            "crossed_below_zero": bool,   # True when MFI crossed from >=0 to <0
             "mfi_series": list[float],    # Full MFI series (same length as input)
         }
     """
@@ -43,7 +46,10 @@ def calculate_dacle_mfi(
     if n < length or len(highs) < n or len(lows) < n:
         return {
             "latest_mfi": None,
+            "previous_mfi": None,
             "is_bullish": False,
+            "crossed_above_zero": False,
+            "crossed_below_zero": False,
             "mfi_series": [],
         }
 
@@ -65,15 +71,34 @@ def calculate_dacle_mfi(
 
     # Latest valid value
     latest_mfi: Optional[float] = None
+    previous_mfi: Optional[float] = None
     for v in reversed(mfi_series):
         if v is not None:
             latest_mfi = v
             break
 
+    if latest_mfi is not None:
+        latest_idx = len(mfi_series) - 1 - list(reversed(mfi_series)).index(latest_mfi)
+        for i in range(latest_idx - 1, -1, -1):
+            if mfi_series[i] is not None:
+                previous_mfi = mfi_series[i]
+                break
+
     valid_series = [round(v, 4) for v in mfi_series if v is not None]
+    crossed_above_zero = (
+        previous_mfi is not None and latest_mfi is not None
+        and previous_mfi <= 0 < latest_mfi
+    )
+    crossed_below_zero = (
+        previous_mfi is not None and latest_mfi is not None
+        and previous_mfi >= 0 > latest_mfi
+    )
 
     return {
         "latest_mfi": round(latest_mfi, 4) if latest_mfi is not None else None,
+        "previous_mfi": round(previous_mfi, 4) if previous_mfi is not None else None,
         "is_bullish": (latest_mfi is not None and latest_mfi > 0),
+        "crossed_above_zero": crossed_above_zero,
+        "crossed_below_zero": crossed_below_zero,
         "mfi_series": valid_series,
     }

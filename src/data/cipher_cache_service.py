@@ -142,9 +142,11 @@ def _dict_to_snapshot(d: dict) -> CipherSnapshot:
     from src.ta.cipher_engine import (
         WaveTrendSnapshot,
         MFISnapshot,
+        VWAPSnapshot,
         CVDSnapshot,
         MACDSnapshot,
         StochasticSnapshot,
+        MomentumSnapshot,
     )
 
     def _maybe(cls, val):
@@ -158,9 +160,11 @@ def _dict_to_snapshot(d: dict) -> CipherSnapshot:
         timestamp=d["timestamp"],
         wavetrend=_maybe(WaveTrendSnapshot, d.get("wavetrend")),
         mfi=_maybe(MFISnapshot, d.get("mfi")),
+        vwap=_maybe(VWAPSnapshot, d.get("vwap")),
         cvd=_maybe(CVDSnapshot, d.get("cvd")),
         macd=_maybe(MACDSnapshot, d.get("macd")),
         stochastic=_maybe(StochasticSnapshot, d.get("stochastic")),
+        momentum=_maybe(MomentumSnapshot, d.get("momentum")),
         choppiness=d.get("choppiness"),
         signal=d.get("signal", "NEUTRAL"),
         confidence=d.get("confidence", 0.0),
