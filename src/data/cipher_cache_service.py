@@ -205,14 +205,16 @@ def get_cipher_snapshot(
     index_key: str,
     resolution: str = "4H",
     allow_stale: bool = True,
+    compute_on_miss: bool = True,
 ) -> Optional[CipherSnapshot]:
     """
-    Return the cached CipherSnapshot for an index.
+    Return the cached CipherSnapshot for an index or token.
 
     Args:
-        index_key: e.g. "BTC.D", "MEME.C"
+        index_key: e.g. "BTC.D", "MEME.C", "BTC", "ETH"
         resolution: "4H" or "1D"
         allow_stale: If False, returns None when cache age > CACHE_TTL_SECONDS.
+        compute_on_miss: If True and cache miss, compute from OHLCV and cache.
 
     Returns:
         CipherSnapshot or None if not available.
@@ -223,7 +225,13 @@ def get_cipher_snapshot(
             return None
 
     cache = _load_cache(resolution)
-    return cache.get(index_key)
+    snapshot = cache.get(index_key)
+
+    # Cache miss - compute on-the-fly if requested
+    if snapshot is None and compute_on_miss:
+        snapshot = compute_and_cache_token_snapshot(index_key, resolution)
+
+    return snapshot
 
 
 def get_all_cipher_snapshots(
@@ -241,6 +249,49 @@ def get_all_cipher_snapshots(
             return {}
 
     return _load_cache(resolution)
+
+
+def compute_and_cache_token_snapshot(
+    token_symbol: str,
+    resolution: str = "4H",
+) -> Optional[CipherSnapshot]:
+    """
+    Compute Cipher snapshot for a token (not just indices) and cache it.
+
+    This is used by the Entry Model to get cipher snapshots for tokens like
+    BTC, ETH, SOL, etc. that have OHLCV data in the rolling cache.
+
+    Args:
+        token_symbol: Token symbol (e.g., "BTC", "ETH")
+        resolution: Timeframe ("4H" or "1D")
+
+    Returns:
+        CipherSnapshot or None if insufficient data
+    """
+    # Load OHLCV series from rolling cache
+    series = load_ohlcv_series(token_symbol, resolution, limit=500)
+    if not series or len(series.get("closes", [])) < MIN_BARS_FOR_CIPHER:
+        logger.debug(
+            f"[cipher_cache] {token_symbol}/{resolution}: insufficient bars for cipher"
+        )
+        return None
+
+    try:
+        snap = run_cipher_on_series(token_symbol, resolution, series)
+
+        # Write to cache (merge with existing)
+        existing = _load_cache(resolution)
+        existing[token_symbol] = snap
+        _write_cache(existing, resolution)
+
+        logger.debug(
+            f"[cipher_cache] {token_symbol}/{resolution}: "
+            f"signal={snap.signal} conf={snap.confidence:.2f} bars={snap.bars_used}"
+        )
+        return snap
+    except Exception as e:
+        logger.warning(f"[cipher_cache] Cipher computation failed for {token_symbol}/{resolution}: {e}")
+        return None
 
 
 def get_cipher_composite_score(resolution: str = "4H") -> float:
