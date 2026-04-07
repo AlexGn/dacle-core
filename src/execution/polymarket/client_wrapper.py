@@ -1296,7 +1296,10 @@ class PolymarketClientWrapper:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(url, params=params)
                 if resp.status_code == 200:
-                    return resp.json()
+                    data = resp.json()
+                    # API returns {"data": [...]} or {"markets": [...]}
+                    markets = data.get("data") or data.get("markets") or []
+                    return {"markets": markets}
                 logger.error(f"get_markets HTTP {resp.status_code}: {resp.text[:200]}")
                 return {"markets": []}
         except Exception as e:
