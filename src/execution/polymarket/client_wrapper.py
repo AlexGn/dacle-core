@@ -1275,3 +1275,64 @@ class PolymarketClientWrapper:
                 return True
             await asyncio.sleep(5)
         return False
+
+    async def get_markets(self, status: str = "active", limit: int = 100) -> dict:
+        """
+        Fetch active markets from Polymarket API.
+
+        Args:
+            status: Market status filter (active, closed, resolved)
+            limit: Max number of markets to return
+
+        Returns:
+            dict with "markets" key containing list of market objects
+        """
+        import httpx
+
+        url = f"{self.base_url}/markets"
+        params = {"status": status, "limit": limit}
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    return resp.json()
+                logger.error(f"get_markets HTTP {resp.status_code}: {resp.text[:200]}")
+                return {"markets": []}
+        except Exception as e:
+            logger.error(f"get_markets failed: {e}")
+            return {"markets": []}
+
+    async def get_orderbook(self, market_id: str) -> dict:
+        """
+        Fetch orderbook for a specific market.
+
+        Args:
+            market_id: The market condition ID
+
+        Returns:
+            dict with "yes" and "no" keys, each containing "bids" and "asks" arrays
+        """
+        import httpx
+
+        url = f"{self.base_url}/orderbook"
+        params = {"token_id": market_id}
+
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(url, params=params)
+                if resp.status_code == 200:
+                    return resp.json()
+                logger.error(f"get_orderbook HTTP {resp.status_code}: {resp.text[:200]}")
+                return {}
+        except Exception as e:
+            logger.error(f"get_orderbook failed for {market_id}: {e}")
+            return {}
+
+    async def connect(self):
+        """Initialize connection (no-op for httpx-based client)."""
+        pass
+
+    async def disconnect(self):
+        """Cleanup connections (no-op for httpx-based client)."""
+        pass

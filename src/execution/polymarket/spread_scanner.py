@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 
-from src.execution.polymarket.client_wrapper import PolymarketClient
+from src.execution.polymarket.client_wrapper import PolymarketClientWrapper as PolymarketClient
 from src.execution.polymarket.ctf_executor import PolymarketCTFExecutor
 
 logger = logging.getLogger(__name__)
@@ -94,8 +94,28 @@ class SpreadScanner:
 
     async def connect(self):
         """Initialize client and executor."""
-        self.client = PolymarketClient()
-        await self.client.connect()
+        from py_clob_client.client import ClobClient
+        from py_clob_client.clob_types import ApiCreds
+        import os
+
+        # Build CLOB client
+        api_key = os.getenv("POLY_API_KEY")
+        api_secret = os.getenv("POLY_API_SECRET")
+        api_passphrase = os.getenv("POLY_API_PASSPHRASE")
+
+        host = os.getenv("POLY_CLOB_API_BASE_URL", "https://clob.polymarket.com")
+
+        clob_client = ClobClient(
+            host=host,
+            api_key=api_key,
+            secret=api_secret,
+            passphrase=api_passphrase,
+        )
+
+        self.client = PolymarketClient(
+            config={"mode": os.getenv("POLY_MODE", "SHADOW").upper()},
+            client=clob_client,
+        )
 
         mode = os.getenv("POLY_MODE", "SHADOW").upper()
         self.executor = PolymarketCTFExecutor({"mode": mode})
