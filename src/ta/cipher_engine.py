@@ -9,12 +9,12 @@ Designed to run on macro indices (BTC.D, TOTAL, MEME.C, etc.) via the rolling
 OHLCV cache built by `src/data/indices_ohlcv_fetcher.py`.
 
 Composite signal rules:
-  REVERSAL_UP    — WT long_signal (cross up from oversold <-60) + MFI bullish
-  REVERSAL_DOWN  — WT short_signal (cross down from overbought >60) + MFI bearish
-  BULLISH_MOMENTUM — WT1 > WT2, MACD histogram positive, no chop
-  BEARISH_MOMENTUM — WT1 < WT2, MACD histogram negative, no chop
-  CHOPPY         — Choppiness > 61.8 (unreliable / avoid trading)
-  NEUTRAL        — No clear confluence
+  REVERSAL_UP      — WT long_signal (cross up from oversold <-60) + MFI bullish + VWAP cross above zero
+  REVERSAL_DOWN    — WT short_signal (cross down from overbought >60) + MFI bearish + VWAP cross below zero
+  BULLISH_MOMENTUM — WT1 > WT2, MACD histogram positive, VWAP above zero, no chop
+  BEARISH_MOMENTUM — WT1 < WT2, MACD histogram negative, VWAP below zero, no chop
+  CHOPPY           — Choppiness > 61.8 (unreliable / avoid trading)
+  NEUTRAL          — No clear confluence
 """
 
 from __future__ import annotations
@@ -310,6 +310,7 @@ def _compute_composite(snap: CipherSnapshot):
 
     wt = snap.wavetrend
     mfi = snap.mfi
+    vwap = snap.vwap
     cvd = snap.cvd
     macd = snap.macd
     chop = snap.choppiness
@@ -333,6 +334,9 @@ def _compute_composite(snap: CipherSnapshot):
             if macd is not None and macd.direction == "bullish":
                 reasons.append(f"macd_bullish (hist={macd.histogram:.4f})")
                 confidence += 0.15
+            if vwap is not None and vwap.crossed_above_zero:
+                reasons.append(f"vwap_crossed_above_zero (value={vwap.value:.4f})")
+                confidence += 0.15
             signal = CompositeSignal.REVERSAL_UP
 
         elif wt.short_signal:
@@ -347,6 +351,9 @@ def _compute_composite(snap: CipherSnapshot):
             if macd is not None and macd.direction == "bearish":
                 reasons.append(f"macd_bearish (hist={macd.histogram:.4f})")
                 confidence += 0.15
+            if vwap is not None and vwap.crossed_below_zero:
+                reasons.append(f"vwap_crossed_below_zero (value={vwap.value:.4f})")
+                confidence += 0.15
             signal = CompositeSignal.REVERSAL_DOWN
 
         else:
@@ -356,26 +363,32 @@ def _compute_composite(snap: CipherSnapshot):
             macd_bearish = macd is not None and macd.direction == "bearish"
             mfi_bullish = mfi is not None and mfi.is_bullish
             mfi_bearish = mfi is not None and not mfi.is_bullish
+            vwap_bullish = vwap is not None and vwap.above_zero
+            vwap_bearish = vwap is not None and not vwap.above_zero
 
-            bull_votes = sum([wt_bullish, macd_bullish, mfi_bullish])
-            bear_votes = sum([not wt_bullish, macd_bearish, mfi_bearish])
+            bull_votes = sum([wt_bullish, macd_bullish, mfi_bullish, vwap_bullish])
+            bear_votes = sum([not wt_bullish, macd_bearish, mfi_bearish, vwap_bearish])
 
             if bull_votes >= 2:
+                vwap_status = f"vwap_above_zero ({vwap.value:.4f})" if vwap_bullish else "vwap_neutral"
                 reasons.append(
                     f"wt_trend_up (wt1={wt.wt1:.1f}>{wt.wt2:.1f}), "
                     f"macd={'bullish' if macd_bullish else 'neutral'}, "
-                    f"mfi={'bullish' if mfi_bullish else 'neutral'}"
+                    f"mfi={'bullish' if mfi_bullish else 'neutral'}, "
+                    f"{vwap_status}"
                 )
                 signal = CompositeSignal.BULLISH_MOMENTUM
-                confidence = 0.25 + (bull_votes - 2) * 0.15
+                confidence = 0.25 + (bull_votes - 2) * 0.12
             elif bear_votes >= 2:
+                vwap_status = f"vwap_below_zero ({vwap.value:.4f})" if vwap_bearish else "vwap_neutral"
                 reasons.append(
                     f"wt_trend_down (wt1={wt.wt1:.1f}<{wt.wt2:.1f}), "
                     f"macd={'bearish' if macd_bearish else 'neutral'}, "
-                    f"mfi={'bearish' if mfi_bearish else 'neutral'}"
+                    f"mfi={'bearish' if mfi_bearish else 'neutral'}, "
+                    f"{vwap_status}"
                 )
                 signal = CompositeSignal.BEARISH_MOMENTUM
-                confidence = 0.25 + (bear_votes - 2) * 0.15
+                confidence = 0.25 + (bear_votes - 2) * 0.12
             else:
                 reasons.append("no_confluence")
                 signal = CompositeSignal.NEUTRAL
