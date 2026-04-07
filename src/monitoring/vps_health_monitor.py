@@ -491,9 +491,9 @@ class VPSHealthMonitor:
         # Convert to dict
         health_dict = asdict(health)
 
-        # Save
-        with open(filepath, 'w') as f:
-            json.dump(health_dict, f, indent=2)
+        # Save atomically
+        from src.utils.atomic_write import atomic_json_write
+        atomic_json_write(filepath, health_dict)
 
         logger.info(f"Health status saved: {filepath}")
 

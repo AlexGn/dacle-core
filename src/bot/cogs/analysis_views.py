@@ -578,7 +578,8 @@ class AuditExecutionView(discord.ui.View):
                             "target_1": ta_data.get("target_price")
                         }
                     }
-                except: pass
+                except (KeyError, TypeError, ValueError) as e:
+                    logger.warning("Failed to build exec_state for %s: %s", self.symbol, e)
 
         if not exec_state:
             await interaction.followup.send(f"❌ Cannot execute: No technical setup found for ${self.symbol}.")
@@ -613,7 +614,8 @@ class AuditExecutionView(discord.ui.View):
                     }
                     async with session.post(url, data=payload, headers=_api_headers()) as resp:
                         pass
-            except: pass
+            except Exception as e:
+                logger.warning("Failed to post execution to webhook: %s", e)
 
             await interaction.followup.send(
                 f"✅ **Trade Executed!** Setup posted to <#{trades_channel_id}> and Watcher engaged."

@@ -35,7 +35,9 @@ class TheWatcher:
         if self.state_file.exists():
             try:
                 self.state = json.loads(self.state_file.read_text())
-            except: self.state = {"active_alerts": {}}
+            except (json.JSONDecodeError, OSError) as e:
+                logger.warning("Failed to load watcher state, using defaults: %s", e)
+                self.state = {"active_alerts": {}}
         else:
             self.state = {"active_alerts": {}}
 
