@@ -94,30 +94,16 @@ class SpreadScanner:
 
     async def connect(self):
         """Initialize client and executor."""
-        from py_clob_client.client import ClobClient
-        from py_clob_client.clob_types import ApiCreds
         import os
 
-        # Build CLOB client
-        api_key = os.getenv("POLY_API_KEY")
-        api_secret = os.getenv("POLY_API_SECRET")
-        api_passphrase = os.getenv("POLY_API_PASSPHRASE")
-
-        host = os.getenv("POLY_CLOB_API_BASE_URL", "https://clob.polymarket.com")
-
-        clob_client = ClobClient(
-            host=host,
-            api_key=api_key,
-            secret=api_secret,
-            passphrase=api_passphrase,
-        )
-
-        self.client = PolymarketClient(
-            config={"mode": os.getenv("POLY_MODE", "SHADOW").upper()},
-            client=clob_client,
-        )
-
         mode = os.getenv("POLY_MODE", "SHADOW").upper()
+
+        # Initialize PolymarketClient wrapper (uses httpx for public endpoints)
+        self.client = PolymarketClient(
+            config={"mode": mode},
+            client=None,  # Not needed for public endpoints
+        )
+
         self.executor = PolymarketCTFExecutor({"mode": mode})
         logger.info(f"SpreadScanner connected (mode={mode})")
 
