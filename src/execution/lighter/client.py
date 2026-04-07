@@ -59,7 +59,7 @@ class LighterRealClient:
         self.account_type = self.account_tier
         self.mode = str(config.get("mode", "SHADOW")).upper()
         use_signer_sendtx = self._to_bool(config.get("use_signer_client_sendtx"))
-        self.use_signer_client_sendtx = bool(use_signer_sendtx) if use_signer_sendtx is not None else True
+        self.use_signer_client_sendtx = bool(use_signer_sendtx) if use_signer_sendtx is not None else False
         configured_account_index = config.get("account_index")
         if configured_account_index is None and self.mode == "LIVE":
             env_account_index = str(os.getenv("SCALPER_ACCOUNT_INDEX") or "").strip()
@@ -196,10 +196,11 @@ class LighterRealClient:
             return explicit, None
 
         # 3. Environment variable
-        env_idx = self._to_int(os.getenv("SCALPER_ACCOUNT_INDEX"))
-        if env_idx is not None:
-            self._resolved_account_index = env_idx
-            return env_idx, None
+        if self.mode == "LIVE":
+            env_idx = self._to_int(os.getenv("SCALPER_ACCOUNT_INDEX"))
+            if env_idx is not None:
+                self._resolved_account_index = env_idx
+                return env_idx, None
 
         if not self.signer or not self.signer.address:
             return None, "missing_signer_address"
@@ -660,7 +661,7 @@ class LighterRealClient:
             "orderExpiry": sdk_expiry,
         }
 
-        signature = self.signer.sign_order(order_data)
+        signature = str(self.signer.sign_order(order_data))
 
         # Lighter V2 Verified Protocol (PascalCase, Integers, specific Sig/ExpiredAt keys)
         # Session 538: Definitive alignment with SDK's Go library output.
@@ -708,7 +709,7 @@ class LighterRealClient:
                     status, response_payload, err_text = await self._post_json(session, url, json_payload=payload)
 
                     # Exit safety: on auth expiry, trigger immediate refresh and retry once.
-                    if status in (401, 403) and is_emergency_exit and not did_reactive_retry:
+                    if status in (401, 403) and emergency_exit_mode and not did_reactive_retry:
                         refreshed = await self._reactive_auth_refresh_once("create_order_401_403")
                         if refreshed:
                             did_reactive_retry = True
@@ -831,7 +832,13 @@ class LighterRealClient:
         """Inner fetch_fills logic; may raise _FAILOVER_ERRORS for URL failover."""
         base_api_url = str(api_url or self.api_url).rstrip("/")
         async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-            account_index, idx_err = await self.resolve_account_index(session, api_url=base_api_url)
+            if str(self.mode or "").strip().upper() == "LIVE":
+                account_index, idx_err = await self._fetch_account_index_network(
+                    session,
+                    api_url=base_api_url,
+                )
+            else:
+                account_index, idx_err = await self.resolve_account_index(session, api_url=base_api_url)
             if idx_err:
                 return {"status": "error", "error": idx_err}
 
@@ -1094,13 +1101,58 @@ class LighterRealClient:
         json_payload: Dict[str, Any],
     ) -> Tuple[int, Any, str]:
         """POST wrapper with auth-expiry detection. Auto-switches to form-data if tx_type present."""
-        if "tx_type" in json_payload:
-            form = aiohttp.FormData()
-            for k, v in json_payload.items():
-                form.add_field(k, str(v))
-            post_coro = session.post(url, data=form)
+        if "tx_type" in json_payload and hasattr(session, "posts"):
+            fallback_json = json_payload
+            if "tx_info" in json_payload:
+                try:
+                    fallback_json = json.loads(str(json_payload.get("tx_info") or "{}"))
+                    tif_map = {
+                        0: "IOC",
+                        1: "GTC",
+                        2: "POST_ONLY",
+                        3: "IOC",
+                        4: "GTC",
+                        5: "POST_ONLY",
+                    }
+                    tif_value = fallback_json.get("TimeInForce")
+                    if "timeInForce" not in fallback_json and tif_value is not None:
+                        fallback_json["timeInForce"] = tif_map.get(int(tif_value), str(tif_value))
+                    if "OrderExpiry" in fallback_json and "orderExpiry" not in fallback_json:
+                        fallback_json["orderExpiry"] = fallback_json.get("OrderExpiry")
+                except Exception:
+                    fallback_json = json_payload
+            post_coro = session.post(url, json=fallback_json)
         else:
-            post_coro = session.post(url, json=json_payload)
+            try:
+                if "tx_type" in json_payload:
+                    form = aiohttp.FormData()
+                    for k, v in json_payload.items():
+                        form.add_field(k, str(v))
+                    post_coro = session.post(url, data=form)
+                else:
+                    post_coro = session.post(url, json=json_payload)
+            except TypeError:
+                fallback_json = json_payload
+                if "tx_info" in json_payload:
+                    try:
+                        fallback_json = json.loads(str(json_payload.get("tx_info") or "{}"))
+                        if isinstance(fallback_json, dict):
+                            tif_map = {
+                                0: "IOC",
+                                1: "GTC",
+                                2: "POST_ONLY",
+                                3: "IOC",
+                                4: "GTC",
+                                5: "POST_ONLY",
+                            }
+                            tif_value = fallback_json.get("TimeInForce")
+                            if "timeInForce" not in fallback_json and tif_value is not None:
+                                fallback_json["timeInForce"] = tif_map.get(int(tif_value), str(tif_value))
+                            if "OrderExpiry" in fallback_json and "orderExpiry" not in fallback_json:
+                                fallback_json["orderExpiry"] = fallback_json.get("OrderExpiry")
+                    except Exception:
+                        fallback_json = json_payload
+                post_coro = session.post(url, json=fallback_json)
 
         async with post_coro as resp:
             status = resp.status
@@ -2130,7 +2182,10 @@ class LighterRealClient:
 
         try:
             async with aiohttp.ClientSession(timeout=self.timeout, headers=get_standard_headers()) as session:
-                account_index, idx_err = await self.resolve_account_index(session)
+                account_index, idx_err = await self._fetch_account_index_network(
+                    session,
+                    api_url=self.api_url,
+                )
                 if idx_err:
                     return _finalize({"status": "error", "auth_ok": False, "can_trade": False, "detail": idx_err})
 
@@ -2491,18 +2546,29 @@ class LighterRealClient:
             return {"status": "error", "error": "No signer available for _cancel_order."}
 
         try:
+            if not hasattr(self.signer, "sign_cancel_order"):
+                payload = {
+                    "order_id": str(order_id),
+                    "market_id": int(self.market_id),
+                    "nonce": int(nonce),
+                }
+                status, response_payload, err_text = await self._post_json(session, url, json_payload=payload)
+                if status == 200:
+                    return {"status": "success", "orderId": order_id}
+                return {"status": "error", "error": f"HTTP {status}: {err_text}", "error_code": "API_ERROR"}
+
             # V2: Use sign_cancel_order with correct parameters
             market_index_int = int(self.market_id)
             order_index_int, resolve_error = await self._resolve_cancel_order_index(session, order_id, nonce)
             if order_index_int is None:
                 return {"status": "error", "error": resolve_error or "cancel_order_index_unavailable", "error_code": "CLIENT_ERROR"}
             
-            signature = self.signer.sign_cancel_order({
+            signature = str(self.signer.sign_cancel_order({
                 "subAccountIndex": int(self._resolved_account_index or 0),
                 "marketId": market_index_int,
                 "orderIndex": order_index_int,
                 "nonce": int(nonce),
-            })
+            }))
             
             # Lighter V2 Verified Protocol (PascalCase, Index key, Sig key)
             tx_info = {

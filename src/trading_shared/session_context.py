@@ -15,14 +15,14 @@ from datetime import datetime, timezone
 class SessionContextEngine:
     def __init__(self, config: dict = None):
         self.config = config or {}
-        self.enabled = self.config.get("enabled", True)
+        self.enabled = self.config.get("enabled", False)
 
     def get_session_multiplier(self) -> float:
         """Returns a multiplier based on the current UTC hour."""
         if not self.enabled:
             return 1.0
             
-        now = datetime.now(timezone.utc)
+        now = datetime.fromtimestamp(time.time(), timezone.utc)
         hour = now.hour + now.minute / 60.0
         
         # Asian Session (00:00 - 08:00 UTC)
@@ -46,7 +46,7 @@ class SessionContextEngine:
 
     def get_session_name(self) -> str:
         """Returns the name of the current market session."""
-        now = datetime.now(timezone.utc)
+        now = datetime.fromtimestamp(time.time(), timezone.utc)
         hour = now.hour
         
         if 0 <= hour < 8: return "ASIAN"

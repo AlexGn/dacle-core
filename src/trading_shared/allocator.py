@@ -13,6 +13,20 @@ except ModuleNotFoundError:  # pragma: no cover - allows import in test envs wit
 
 logger = logging.getLogger(__name__)
 
+
+class _ImmediateFloat(float):
+    """Float value that can also be awaited for backward-compatible allocator APIs."""
+
+    def __new__(cls, value: float):
+        return super().__new__(cls, value)
+
+    def __await__(self):
+        async def _coro():
+            return float(self)
+
+        return _coro().__await__()
+
+
 class CapitalAllocator:
     """
     Manages global capital leases across concurrent strategies.
@@ -24,16 +38,25 @@ class CapitalAllocator:
     - Automatic TTL cleanup
     """
 
-    def __init__(self, redis: Redis, total_cap: float, namespace: str = "dacle:capital"):
+    def __init__(
+        self,
+        redis: Optional[Redis] = None,
+        total_cap: float = 0.0,
+        namespace: str = "dacle:capital",
+    ):
         self.redis = redis
         self.total_cap = total_cap
         self.namespace = namespace
         self.key_allocated = f"{namespace}:allocated"
         self.key_leases = f"{namespace}:active_leases"
         self.key_config_cap = f"{namespace}:config:total_cap"
+        self._local_allocated = 0.0
+        self._local_leases: Dict[str, Dict[str, Any]] = {}
 
     async def sync_global_config(self):
         """Ensure all pillars use the same global cap. First one sets it."""
+        if self.redis is None:
+            return
         lua_script = """
         local cap_key = KEYS[1]
         local local_cap = tonumber(ARGV[1])
@@ -55,10 +78,20 @@ class CapitalAllocator:
 
     async def get_active_lease_count(self) -> int:
         """Returns the number of globally active capital leases (proxy for concurrent positions)."""
+        if self.redis is None:
+            await self._cleanup_expired_leases()
+            return len(self._local_leases)
         await self._cleanup_expired_leases()
         return await self.redis.hlen(self.key_leases)
 
-    async def get_available(self) -> float:
+    def get_available(self):
+        """Return available capital; awaitable under Redis, immediate in local mode."""
+        if self.redis is None:
+            self._cleanup_expired_leases_sync()
+            return _ImmediateFloat(max(0.0, self.total_cap - self._local_allocated))
+        return self._get_available_async()
+
+    async def _get_available_async(self) -> float:
         """Returns the current available (unallocated) capital from global Redis state."""
         await self.sync_global_config()
         await self._cleanup_expired_leases()
@@ -71,6 +104,26 @@ class CapitalAllocator:
         Requests a new capital lease from the global pool.
         Uses Lua for ATOMIC check, reserve, and metadata storage.
         """
+        if self.redis is None:
+            await self._cleanup_expired_leases()
+            if self._local_allocated + amount > self.total_cap:
+                return None
+
+            lease_id = str(uuid.uuid4())
+            expires_at_ts = time.time() + ttl_sec
+            lease_info = {
+                "lease_id": lease_id,
+                "strategy_id": strategy_id,
+                "session_id": session_id,
+                "granted_amount": amount,
+                "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=ttl_sec)).isoformat(),
+                "expires_at_ts": expires_at_ts,
+                "status": "ACTIVE",
+            }
+            self._local_allocated += amount
+            self._local_leases[lease_id] = lease_info
+            return lease_info
+
         await self.sync_global_config()
         await self._cleanup_expired_leases()
         
@@ -128,6 +181,16 @@ class CapitalAllocator:
         """
         Releases an active lease globally. Atomic decrement and metadata removal.
         """
+        if self.redis is None:
+            lease = self._local_leases.pop(lease_id, None)
+            if not lease:
+                return
+            self._local_allocated = max(
+                0.0,
+                self._local_allocated - float(lease.get("granted_amount", 0.0) or 0.0),
+            )
+            return
+
         lua_script = """
         local allocated_key = KEYS[1]
         local leases_key = KEYS[2]
@@ -159,6 +222,17 @@ class CapitalAllocator:
         Force-reclaims all active leases for a specific strategy.
         Useful for boot-time cleanup after a crash.
         """
+        if self.redis is None:
+            reclaimed = 0.0
+            for lease_id, lease in list(self._local_leases.items()):
+                if lease.get("strategy_id") != strategy_id:
+                    continue
+                reclaimed += float(lease.get("granted_amount", 0.0) or 0.0)
+                self._local_leases.pop(lease_id, None)
+            if reclaimed > 0:
+                self._local_allocated = max(0.0, self._local_allocated - reclaimed)
+            return reclaimed
+
         lua_script = """
         local allocated_key = KEYS[1]
         local leases_key = KEYS[2]
@@ -210,6 +284,9 @@ class CapitalAllocator:
 
     async def _cleanup_expired_leases(self) -> None:
         """Reclaim stale lease reservations whose TTL has elapsed."""
+        if self.redis is None:
+            self._cleanup_expired_leases_sync()
+            return
         lua_script = """
         local allocated_key = KEYS[1]
         local leases_key = KEYS[2]
@@ -253,3 +330,15 @@ class CapitalAllocator:
                 )
         except Exception as e:
             logger.error(f"Expired lease cleanup failed: {e}")
+
+    def _cleanup_expired_leases_sync(self) -> None:
+        now_ts = time.time()
+        reclaimed = 0.0
+        for lease_id, lease in list(self._local_leases.items()):
+            expires_at_ts = float(lease.get("expires_at_ts", 0.0) or 0.0)
+            if expires_at_ts <= 0 or expires_at_ts > now_ts:
+                continue
+            reclaimed += float(lease.get("granted_amount", 0.0) or 0.0)
+            self._local_leases.pop(lease_id, None)
+        if reclaimed > 0:
+            self._local_allocated = max(0.0, self._local_allocated - reclaimed)

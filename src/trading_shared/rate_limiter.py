@@ -18,10 +18,17 @@ class RateLimitManager:
     - Centralized budget enforcement via Lua.
     """
 
-    def __init__(self, redis: Redis, strategy_budgets: Dict[str, float], capacity_multiplier: float = 10.0, emergency_pool_size: int = 10, emergency_refill_rate: float = 1/3600):
+    def __init__(
+        self,
+        redis: Optional[Redis] = None,
+        strategy_budgets: Optional[Dict[str, float]] = None,
+        capacity_multiplier: float = 10.0,
+        emergency_pool_size: int = 10,
+        emergency_refill_rate: float = 1 / 3600,
+    ):
         self.redis = redis
         # strategy_budgets: Dict[strategy_id, refill_rate_per_sec]
-        self.strategy_budgets = strategy_budgets
+        self.strategy_budgets = dict(strategy_budgets or {})
         if "GLOBAL" not in self.strategy_budgets:
             self.strategy_budgets["GLOBAL"] = 5.0 # Institutional default: 5 req/sec aggregate
             
@@ -29,6 +36,7 @@ class RateLimitManager:
         self.emergency_pool_size = float(emergency_pool_size)
         self.emergency_refill_rate = emergency_refill_rate
         self.key_buckets = "dacle:rate_limit:buckets"
+        self._local_buckets: Dict[str, Dict[str, float]] = {}
 
     async def request_quota(self, strategy_id: str, is_emergency: bool = False) -> bool:
         """
@@ -58,6 +66,31 @@ class RateLimitManager:
         # Override capacity for background tasks like scanner to allow large initial scan
         if "scanner" in strategy_id:
             capacity = max(capacity, 100.0)
+
+        if self.redis is None:
+            capacity = refill_rate
+            bucket = self._local_buckets.get(strategy_id)
+            now = time.time()
+            if bucket is None:
+                bucket = {
+                    "tokens": capacity,
+                    "emergency_tokens": self.emergency_pool_size,
+                    "last_refill": now,
+                }
+            elapsed = max(0.0, now - float(bucket.get("last_refill", now)))
+            bucket["tokens"] = min(capacity, float(bucket.get("tokens", 0.0)) + (elapsed * refill_rate))
+            bucket["emergency_tokens"] = min(
+                self.emergency_pool_size,
+                float(bucket.get("emergency_tokens", 0.0)) + (elapsed * self.emergency_refill_rate),
+            )
+            bucket["last_refill"] = now
+            key = "emergency_tokens" if is_emergency else "tokens"
+            if float(bucket.get(key, 0.0)) < 1.0:
+                self._local_buckets[strategy_id] = bucket
+                return False
+            bucket[key] = float(bucket.get(key, 0.0)) - 1.0
+            self._local_buckets[strategy_id] = bucket
+            return True
 
         lua_script = """
         local buckets_key = KEYS[1]
@@ -124,6 +157,21 @@ class RateLimitManager:
         refill_rate = self.strategy_budgets.get(strategy_id, 1.0)
         capacity = refill_rate * self.capacity_multiplier
         if "scanner" in strategy_id: capacity = max(capacity, 100.0)
+
+        if self.redis is None:
+            now = time.time()
+            bucket = self._local_buckets.get(
+                strategy_id,
+                {
+                    "tokens": 0.0,
+                    "emergency_tokens": self.emergency_pool_size,
+                    "last_refill": now,
+                },
+            )
+            bucket["tokens"] = min(capacity, float(bucket.get("tokens", 0.0)) + 1.0)
+            bucket["last_refill"] = now
+            self._local_buckets[strategy_id] = bucket
+            return
 
         lua_script = """
         local buckets_key = KEYS[1]
