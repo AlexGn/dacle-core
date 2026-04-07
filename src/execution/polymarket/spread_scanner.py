@@ -170,25 +170,40 @@ class SpreadScanner:
                 if market_category not in cfg.categories:
                     continue
 
-            # Gamma API provides outcomePrices array directly: ["YES_price", "NO_price"]
-            outcome_prices = market.get("outcomePrices") or market.get("outcome_prices") or []
+            # CLOB API provides tokens array with outcome prices
+            tokens = market.get("tokens", [])
 
-            if not outcome_prices or len(outcome_prices) < 2:
+            if not tokens or len(tokens) < 2:
                 continue
 
-            try:
-                yes_bid = float(outcome_prices[0]) if outcome_prices[0] else 0
-                no_bid = float(outcome_prices[1]) if outcome_prices[1] else 0
-            except (ValueError, TypeError):
+            # Extract prices from tokens (order may vary)
+            yes_price = None
+            no_price = None
+
+            for token in tokens:
+                outcome = token.get("outcome", "").lower()
+                price = token.get("price", 0) or token.get("last_price", 0)
+                if "yes" in outcome or "for" in outcome or "true" in outcome:
+                    yes_price = float(price) if price else None
+                elif "no" in outcome or "against" in outcome or "false" in outcome:
+                    no_price = float(price) if price else None
+
+            if yes_price is None or no_price is None:
                 continue
 
-            if not yes_bid or not no_bid:
-                continue
+            yes_bid = yes_price
+            no_bid = no_price
 
-            # Estimate liquidity from market liquidity field
-            liquidity = float(market.get("liquidity", 0) or market.get("liquidityNum", 0))
-            yes_size = liquidity / 2  # Estimate split between outcomes
-            no_size = liquidity / 2
+            # Estimate liquidity from market's top bid sizes
+            # CLOB tokens have size/remaining fields
+            yes_size = sum(t.get("size", 0) or t.get("remaining", 0) for t in tokens if "yes" in t.get("outcome", "").lower())
+            no_size = sum(t.get("size", 0) or t.get("remaining", 0) for t in tokens if "no" in t.get("outcome", "").lower())
+
+            # Fallback to market liquidity if token sizes unavailable
+            if not yes_size and not no_size:
+                liquidity = float(market.get("liquidity", 0) or market.get("liquidityNum", 0))
+                yes_size = liquidity / 2
+                no_size = liquidity / 2
 
             # Calculate edge
             combined_cost = yes_bid + no_bid
