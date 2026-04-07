@@ -156,15 +156,17 @@ class SystemDoctor:
     def report_health_to_discord(self, actions: list[str]):
         """Post a summary of healing actions to the focus channel."""
         if not actions: return
-        
+
         from src.monitoring.heartbeat_discord import post_to_discord
         import asyncio
-        
+
         msg = """🩺 **System Doctor Update**
 
 I detected and resolved the following issues:
 """
         msg += "\n".join([f"• {a}" for a in actions])
         msg += "\n\n_Everything is back to normal._"
-        
-        asyncio.create_task(post_to_discord("focus", msg))
+
+        # Fire-and-forget alert (non-critical, no tracking needed)
+        task = asyncio.create_task(post_to_discord("focus", msg))
+        task.add_done_callback(lambda t: None if t.cancelled() or t.exception() is None else logger.warning("Health report alert failed: %s", t.exception()))
