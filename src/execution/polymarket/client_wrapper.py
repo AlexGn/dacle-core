@@ -1278,7 +1278,7 @@ class PolymarketClientWrapper:
 
     async def get_markets(self, status: str = "active", limit: int = 100) -> dict:
         """
-        Fetch active markets from Polymarket API.
+        Fetch active markets from Polymarket gamma API.
 
         Args:
             status: Market status filter (active, closed, resolved)
@@ -1289,7 +1289,8 @@ class PolymarketClientWrapper:
         """
         import httpx
 
-        url = f"{self.base_url}/markets"
+        # Use gamma API which has better market discovery
+        url = "https://gamma-api.polymarket.com/markets"
         params = {"status": status, "limit": limit}
 
         try:
@@ -1297,7 +1298,9 @@ class PolymarketClientWrapper:
                 resp = await client.get(url, params=params)
                 if resp.status_code == 200:
                     data = resp.json()
-                    # API returns {"data": [...]} or {"markets": [...]}
+                    # Gamma API returns array directly
+                    if isinstance(data, list):
+                        return {"markets": data}
                     markets = data.get("data") or data.get("markets") or []
                     return {"markets": markets}
                 logger.error(f"get_markets HTTP {resp.status_code}: {resp.text[:200]}")

@@ -153,9 +153,15 @@ class SpreadScanner:
 
         for market in markets:
             markets_scanned += 1
-            market_id = market.get("id") or market.get("condition_id")
+
+            # Gamma API uses conditionId, clob API uses condition_id
+            market_id = market.get("conditionId") or market.get("condition_id") or market.get("id")
 
             if not market_id:
+                continue
+
+            # Only scan active, non-closed markets
+            if market.get("closed") or market.get("archived") or not market.get("active"):
                 continue
 
             # Filter by category if specified
@@ -164,28 +170,25 @@ class SpreadScanner:
                 if market_category not in cfg.categories:
                     continue
 
-            # Get orderbook
+            # Gamma API provides outcomePrices array directly: ["YES_price", "NO_price"]
+            outcome_prices = market.get("outcomePrices") or market.get("outcome_prices") or []
+
+            if not outcome_prices or len(outcome_prices) < 2:
+                continue
+
             try:
-                orderbook = await self.client.get_orderbook(market_id)
-                if not orderbook:
-                    continue
-            except Exception:
+                yes_bid = float(outcome_prices[0]) if outcome_prices[0] else 0
+                no_bid = float(outcome_prices[1]) if outcome_prices[1] else 0
+            except (ValueError, TypeError):
                 continue
-
-            # Extract best bids
-            yes_bids = orderbook.get("yes", {}).get("bids", [])
-            no_bids = orderbook.get("no", {}).get("bids", [])
-
-            if not yes_bids or not no_bids:
-                continue
-
-            yes_bid = yes_bids[0].get("price", 0)
-            no_bid = no_bids[0].get("price", 0)
-            yes_size = yes_bids[0].get("size", 0)
-            no_size = no_bids[0].get("size", 0)
 
             if not yes_bid or not no_bid:
                 continue
+
+            # Estimate liquidity from market liquidity field
+            liquidity = float(market.get("liquidity", 0) or market.get("liquidityNum", 0))
+            yes_size = liquidity / 2  # Estimate split between outcomes
+            no_size = liquidity / 2
 
             # Calculate edge
             combined_cost = yes_bid + no_bid
@@ -215,8 +218,8 @@ class SpreadScanner:
 
             opp = SpreadOpportunity(
                 market_id=market_id,
-                condition_id=market.get("condition_id", market_id),
-                title=market.get("question", market.get("title", "")),
+                condition_id=market.get("conditionId") or market.get("condition_id", market_id),
+                title=market.get("question", market.get("title", market.get("eventTitle", ""))),
                 yes_bid=yes_bid,
                 no_bid=no_bid,
                 combined_cost=combined_cost,
