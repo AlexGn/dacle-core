@@ -819,21 +819,30 @@ class PolymarketCTFExecutor:
         order: Dict[str, Any],
         signature: str,
         is_ioc: bool = True,
+        price_limit: Optional[float] = None,
+        current_price: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Submit a signed order directly to the CTF Exchange contract.
-
-        Uses fillOrder for single order execution or matchOrders for
-        crossing multiple orders atomically.
 
         Args:
             order: Signed order dict
             signature: Hex-encoded EIP-712 signature
             is_ioc: If True, use Immediate-Or-Cancel (no resting order)
-
-        Returns:
-            Transaction result dict with tx_hash, status, gas_used
+            price_limit: The maximum acceptable price (for BUY) or minimum (for SELL)
+            current_price: The observed price at the time of the signal
         """
+        if price_limit is not None and current_price is not None:
+            side = order.get("side") # 0=BUY, 1=SELL
+            if side == 0: # BUY
+                if current_price > price_limit:
+                    logger.warning(f"Slippage Veto: current_price {current_price} > limit {price_limit}")
+                    return {"status": "error", "error": f"Slippage limit exceeded: {current_price} > {price_limit}"}
+            elif side == 1: # SELL
+                if current_price < price_limit:
+                    logger.warning(f"Slippage Veto: current_price {current_price} < limit {price_limit}")
+                    return {"status": "error", "error": f"Slippage limit exceeded: {current_price} < {price_limit}"}
+
         if self._is_shadow_mode():
             logger.info(f"[SHADOW] submit_order: side={order['side']}, makerAmount={order['makerAmount']}")
             return {"status": "success", "tx_hash": "shadow_tx", "shadow": True}
