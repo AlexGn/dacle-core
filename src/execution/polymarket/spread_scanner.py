@@ -252,7 +252,7 @@ class SpreadScanner:
         logger.info(
             f"Scan complete: {markets_scanned} markets, "
             f"{len(opportunities)} opportunities, "
-            f"best edge={best.net_edge:.2%} if best else 'N/A'"
+            f"best edge={best.net_edge:.2%}" if best else "best edge=N/A"
         )
 
         return result
