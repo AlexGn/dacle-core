@@ -20,7 +20,7 @@ from src.polymarket.credentials import resolve_private_key
 
 logger = logging.getLogger(__name__)
 
-# CTF Exchange ABI (minimal for split/merge)
+# CTF Exchange ABI (minimal for split/merge + order book operations)
 CTF_EXCHANGE_ABI = [
     {
         "inputs": [
@@ -69,6 +69,85 @@ CTF_EXCHANGE_ABI = [
         "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
         "stateMutability": "pure",
         "type": "function"
+    },
+    # Order book functions for direct chain submission (EIP-712 signed orders)
+    {
+        "inputs": [
+            {"internalType": "bytes32", "name": "orderHash", "type": "bytes32"}
+        ],
+        "name": "cancelOrder",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {"internalType": "bytes32[]", "name": "orderHashes", "type": "bytes32[]"}
+        ],
+        "name": "cancelOrders",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "components": [
+                    {"internalType": "uint256", "name": "salt", "type": "uint256"},
+                    {"internalType": "address", "name": "maker", "type": "address"},
+                    {"internalType": "address", "name": "signer", "type": "address"},
+                    {"internalType": "address", "name": "taker", "type": "address"},
+                    {"internalType": "uint256", "name": "tokenId", "type": "uint256"},
+                    {"internalType": "uint256", "name": "makerAmount", "type": "uint256"},
+                    {"internalType": "uint256", "name": "takerAmount", "type": "uint256"},
+                    {"internalType": "uint256", "name": "expiration", "type": "uint256"},
+                    {"internalType": "uint256", "name": "nonce", "type": "uint256"},
+                    {"internalType": "uint256", "name": "feeRateBps", "type": "uint256"},
+                    {"internalType": "uint8", "name": "side", "type": "uint8"},
+                    {"internalType": "uint8", "name": "signatureType", "type": "uint8"},
+                    {"internalType": "bytes", "name": "signature", "type": "bytes"}
+                ],
+                "internalType": "struct Order",
+                "name": "order",
+                "type": "tuple"
+            },
+            {"internalType": "bool", "name": "invert", "type": "bool"}
+        ],
+        "name": "fillOrder",
+        "outputs": [
+            {"internalType": "uint256", "name": "", "type": "uint256"}
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function"
+    },
+    {
+        "inputs": [
+            {
+                "components": [
+                    {"internalType": "uint256", "name": "salt", "type": "uint256"},
+                    {"internalType": "address", "name": "maker", "type": "address"},
+                    {"internalType": "address", "name": "signer", "type": "address"},
+                    {"internalType": "address", "name": "taker", "type": "address"},
+                    {"internalType": "uint256", "name": "tokenId", "type": "uint256"},
+                    {"internalType": "uint256", "name": "makerAmount", "type": "uint256"},
+                    {"internalType": "uint256", "name": "takerAmount", "type": "uint256"},
+                    {"internalType": "uint256", "name": "expiration", "type": "uint256"},
+                    {"internalType": "uint256", "name": "nonce", "type": "uint256"},
+                    {"internalType": "uint256", "name": "feeRateBps", "type": "uint256"},
+                    {"internalType": "uint8", "name": "side", "type": "uint8"},
+                    {"internalType": "uint8", "name": "signatureType", "type": "uint8"},
+                    {"internalType": "bytes", "name": "signature", "type": "bytes"}
+                ],
+                "internalType": "struct Order[]",
+                "name": "orders",
+                "type": "tuple[]"
+            },
+            {"internalType": "bytes32", "name": "matchers", "type": "bytes32"}
+        ],
+        "name": "matchOrders",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function"
     }
 ]
 
@@ -110,6 +189,11 @@ class PolymarketCTFExecutor:
     RPC_FALLBACKS = [
         "https://polygon-bor-rpc.publicnode.com",
     ]
+
+    # Polygon Private Mempool RPC (MEV protection, launched April 2026)
+    # Submits transactions directly to validator set, bypassing public mempool
+    POLYGON_PRIVATE_MEMPOOL = "https://polygon-priv-mainnet.g.alchemy.com/v2/demo"
+    PRIVATE_MEMPOOL_ENABLED = False
 
     @classmethod
     def _sanitize_rpc_urls(cls, urls: List[str]) -> List[str]:
@@ -581,3 +665,350 @@ class PolymarketCTFExecutor:
                 "balance": 0.0,
                 "error": self._normalize_checked_error_message(str(e)),
             }
+
+    def enable_private_mempool(self, api_key: Optional[str] = None):
+        """
+        Enable Polygon Private Mempool for MEV protection.
+
+        Private mempool submits transactions directly to validator set,
+        bypassing the public mempool where MEV bots can front-run.
+
+        Requires: POLYGON_PRIVATE_MEMPOOL_API_KEY env var or api_key param
+
+        Args:
+            api_key: Optional Alchemy/Infura API key for private mempool access
+        """
+        if api_key:
+            self.PRIVATE_MEMPOOL_ENABLED = True
+            self.POLYGON_PRIVATE_MEMPOOL = f"https://polygon-priv-mainnet.g.alchemy.com/v2/{api_key}"
+            logger.info(f"Private mempool enabled with API key")
+        elif os.getenv("POLYGON_PRIVATE_MEMPOOL_API_KEY"):
+            api_key = os.getenv("POLYGON_PRIVATE_MEMPOOL_API_KEY")
+            self.PRIVATE_MEMPOOL_ENABLED = True
+            self.POLYGON_PRIVATE_MEMPOOL = f"https://polygon-priv-mainnet.g.alchemy.com/v2/{api_key}"
+            logger.info(f"Private mempool enabled from env var")
+        else:
+            logger.warning("Private mempool requested but no API key provided")
+
+    def _use_private_mempool(self) -> bool:
+        """Check if private mempool should be used for next transaction."""
+        return self.PRIVATE_MEMPOOL_ENABLED and self._rpc_degraded
+
+    def _get_w3_for_submission(self) -> Web3:
+        """Get Web3 instance for transaction submission."""
+        if self._use_private_mempool():
+            logger.info("Using private mempool for MEV-protected submission")
+            return Web3(Web3.HTTPProvider(self.POLYGON_PRIVATE_MEMPOOL))
+        return self.w3
+
+    # EIP-712 domain and order types for Polymarket CTF Exchange
+    ORDER_TYPES = {
+        "Order": [
+            {"name": "salt", "type": "uint256"},
+            {"name": "maker", "type": "address"},
+            {"name": "signer", "type": "address"},
+            {"name": "taker", "type": "address"},
+            {"name": "tokenId", "type": "uint256"},
+            {"name": "makerAmount", "type": "uint256"},
+            {"name": "takerAmount", "type": "uint256"},
+            {"name": "expiration", "type": "uint256"},
+            {"name": "nonce", "type": "uint256"},
+            {"name": "feeRateBps", "type": "uint256"},
+            {"name": "side", "type": "uint8"},
+            {"name": "signatureType", "type": "uint8"},
+        ]
+    }
+
+    CTF_EXCHANGE_DOMAIN = {
+        "name": "Polymarket CTF Exchange",
+        "version": "1",
+        "chainId": 137,  # Polygon mainnet
+        "verifyingContract": CTF_EXCHANGE,
+    }
+
+    def create_eip712_order(
+        self,
+        salt: int,
+        maker: str,
+        signer: str,
+        taker: str,
+        token_id: int,
+        maker_amount: int,
+        taker_amount: int,
+        expiration: int,
+        nonce: int,
+        fee_rate_bps: int,
+        side: int,  # 0=BUY, 1=SELL
+        signature_type: int = 0,  # 0=EOA, 2=POLY_PROXY
+    ) -> Dict[str, Any]:
+        """
+        Create an EIP-712 signed order for Polymarket CTF Exchange.
+
+        Args:
+            salt: Random salt for order uniqueness
+            maker: Maker address (wallet address)
+            signer: Signer address (may differ for proxy signing)
+            taker: Taker address (0x0 for open orders)
+            token_id: ERC1155 token ID for the outcome share
+            maker_amount: Amount maker is selling (in USDC.e * 1e6)
+            taker_amount: Amount taker is buying (in USDC.e * 1e6)
+            expiration: Unix timestamp for order expiry
+            nonce: Order nonce (prevents replay)
+            fee_rate_bps: Fee rate in basis points (e.g., 315 = 3.15%)
+            side: 0 for BUY, 1 for SELL
+            signature_type: 0 for EOA, 2 for Poly Proxy
+
+        Returns:
+            Order dict ready for signing
+        """
+        return {
+            "salt": salt,
+            "maker": maker,
+            "signer": signer,
+            "taker": taker,
+            "tokenId": token_id,
+            "makerAmount": maker_amount,
+            "takerAmount": taker_amount,
+            "expiration": expiration,
+            "nonce": nonce,
+            "feeRateBps": fee_rate_bps,
+            "side": side,
+            "signatureType": signature_type,
+        }
+
+    def sign_order_eip712(self, order: Dict[str, Any]) -> str:
+        """
+        Sign an order using EIP-712 typed data.
+
+        Args:
+            order: Order dict from create_eip712_order()
+
+        Returns:
+            Hex-encoded signature
+        """
+        if not self.account:
+            raise RuntimeError("Signing account not configured")
+
+        # Convert camelCase keys to snake_case for eth_account
+        order_data = {
+            "salt": order["salt"],
+            "maker": order["maker"],
+            "signer": order["signer"],
+            "taker": order["taker"],
+            "tokenId": order["tokenId"],
+            "makerAmount": order["makerAmount"],
+            "takerAmount": order["takerAmount"],
+            "expiration": order["expiration"],
+            "nonce": order["nonce"],
+            "feeRateBps": order["feeRateBps"],
+            "side": order["side"],
+            "signatureType": order["signatureType"],
+        }
+
+        # Sign using eth_account's sign_typed_data
+        signature = self.account.sign_typed_data(
+            domain=self.CTF_EXCHANGE_DOMAIN,
+            message_types=self.ORDER_TYPES,
+            message=order_data,
+        )
+
+        return signature.signature.hex()
+
+    async def submit_order_to_chain(
+        self,
+        order: Dict[str, Any],
+        signature: str,
+        is_ioc: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Submit a signed order directly to the CTF Exchange contract.
+
+        Uses fillOrder for single order execution or matchOrders for
+        crossing multiple orders atomically.
+
+        Args:
+            order: Signed order dict
+            signature: Hex-encoded EIP-712 signature
+            is_ioc: If True, use Immediate-Or-Cancel (no resting order)
+
+        Returns:
+            Transaction result dict with tx_hash, status, gas_used
+        """
+        if self._is_shadow_mode():
+            logger.info(f"[SHADOW] submit_order: side={order['side']}, makerAmount={order['makerAmount']}")
+            return {"status": "success", "tx_hash": "shadow_tx", "shadow": True}
+
+        if not self._ensure_account():
+            return {"status": "error", "error": "Private key not configured"}
+
+        try:
+            # Prepare order tuple for contract call
+            # Note: signature is appended to order struct
+            order_tuple = (
+                order["salt"],
+                order["maker"],
+                order["signer"],
+                order["taker"],
+                order["tokenId"],
+                order["makerAmount"],
+                order["takerAmount"],
+                order["expiration"],
+                order["nonce"],
+                order["feeRateBps"],
+                order["side"],
+                order["signatureType"],
+                Web3.to_bytes(hexstr=signature),
+            )
+
+            # Get Web3 instance (may use private mempool)
+            w3_submit = self._get_w3_for_submission()
+            contract = w3_submit.eth.contract(address=self.CTF_EXCHANGE, abi=CTF_EXCHANGE_ABI)
+
+            # Prepare fillOrder call
+            # invert=False means we're the taker accepting the maker's price
+            invert = False
+
+            # Estimate gas
+            gas_estimate = await self._call_with_rpc_retry(
+                lambda: contract.functions.fillOrder(order_tuple, invert).estimate_gas({
+                    "from": self.address,
+                })
+            )
+
+            # Get nonce
+            nonce = await self._get_next_nonce()
+
+            # Build transaction
+            tx = contract.functions.fillOrder(order_tuple, invert).build_transaction({
+                "from": self.address,
+                "nonce": nonce,
+                "gas": int(gas_estimate * 1.2),  # 20% buffer
+                "gasPrice": await self._call_with_rpc_retry(lambda: w3_submit.eth.gas_price),
+            })
+
+            # Sign and send
+            signed_tx = self.account.sign_transaction(tx)
+            tx_hash = await self._call_with_rpc_retry(
+                lambda: w3_submit.eth.send_raw_transaction(signed_tx.raw_transaction)
+            )
+
+            logger.info(f"Order submitted: tx_hash={tx_hash.hex()}")
+
+            # Wait for receipt if not IOC
+            if not is_ioc:
+                receipt = await self._call_with_rpc_retry(
+                    lambda: w3_submit.eth.wait_for_transaction_receipt(tx_hash)
+                )
+                if receipt["status"] == 1:
+                    return {
+                        "status": "success",
+                        "tx_hash": tx_hash.hex(),
+                        "gas_used": receipt["gasUsed"],
+                        "block_number": receipt["blockNumber"],
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "tx_hash": tx_hash.hex(),
+                        "error": "Transaction reverted",
+                        "receipt": receipt,
+                    }
+
+            return {
+                "status": "pending",
+                "tx_hash": tx_hash.hex(),
+            }
+
+        except Exception as e:
+            logger.error(f"Order submission failed: {e}")
+            return {"status": "error", "error": str(e)}
+
+    async def match_orders_atomic(
+        self,
+        order_a: Dict[str, Any],
+        signature_a: str,
+        order_b: Dict[str, Any],
+        signature_b: str,
+    ) -> Dict[str, Any]:
+        """
+        Atomically match two opposing orders using matchOrders().
+
+        This is the preferred method for cross-platform arbitrage:
+        1. Detect price discrepancy between venues
+        2. Create opposing orders (buy low, sell high)
+        3. Submit atomically - both legs execute or neither does
+
+        Args:
+            order_a: First order (e.g., BUY)
+            signature_a: Signature for order_a
+            order_b: Second order (e.g., SELL, opposing side)
+            signature_b: Signature for order_b
+
+        Returns:
+            Transaction result dict
+        """
+        if self._is_shadow_mode():
+            logger.info(f"[SHADOW] match_orders: {order_a['makerAmount']} vs {order_b['makerAmount']}")
+            return {"status": "success", "tx_hash": "shadow_tx", "shadow": True}
+
+        if not self._ensure_account():
+            return {"status": "error", "error": "Private key not configured"}
+
+        try:
+            # Convert orders to tuples
+            order_a_tuple = (
+                order_a["salt"], order_a["maker"], order_a["signer"], order_a["taker"],
+                order_a["tokenId"], order_a["makerAmount"], order_a["takerAmount"],
+                order_a["expiration"], order_a["nonce"], order_a["feeRateBps"],
+                order_a["side"], order_a["signatureType"],
+                Web3.to_bytes(hexstr=signature_a),
+            )
+            order_b_tuple = (
+                order_b["salt"], order_b["maker"], order_b["signer"], order_b["taker"],
+                order_b["tokenId"], order_b["makerAmount"], order_b["takerAmount"],
+                order_b["expiration"], order_b["nonce"], order_b["feeRateBps"],
+                order_b["side"], order_b["signatureType"],
+                Web3.to_bytes(hexstr=signature_b),
+            )
+
+            # matchers: bytes32 indicating which orders to match
+            # For 2 orders, we use 0x01 to match first pair
+            matchers = "0x01" + "00" * 31
+
+            w3_submit = self._get_w3_for_submission()
+            contract = w3_submit.eth.contract(address=self.CTF_EXCHANGE, abi=CTF_EXCHANGE_ABI)
+
+            gas_estimate = await self._call_with_rpc_retry(
+                lambda: contract.functions.matchOrders(
+                    [order_a_tuple, order_b_tuple],
+                    matchers
+                ).estimate_gas({"from": self.address})
+            )
+
+            nonce = await self._get_next_nonce()
+
+            tx = contract.functions.matchOrders(
+                [order_a_tuple, order_b_tuple],
+                matchers
+            ).build_transaction({
+                "from": self.address,
+                "nonce": nonce,
+                "gas": int(gas_estimate * 1.2),
+                "gasPrice": await self._call_with_rpc_retry(lambda: w3_submit.eth.gas_price),
+            })
+
+            signed_tx = self.account.sign_transaction(tx)
+            tx_hash = await self._call_with_rpc_retry(
+                lambda: w3_submit.eth.send_raw_transaction(signed_tx.raw_transaction)
+            )
+
+            logger.info(f"Atomic match submitted: tx_hash={tx_hash.hex()}")
+
+            return {
+                "status": "pending",
+                "tx_hash": tx_hash.hex(),
+            }
+
+        except Exception as e:
+            logger.error(f"Atomic match failed: {e}")
+            return {"status": "error", "error": str(e)}
