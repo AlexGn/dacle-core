@@ -313,7 +313,22 @@ class PolymarketClientWrapper:
             
         return None
 
+    async def get_usdc_balance_and_allowance(self) -> Dict[str, Any]:
+        """Fetch USDC balance and allowance from the ClobClient."""
+        try:
+            # Proxy to the underlying ClobClient
+            res = await self.client.get_balance()
+            return {
+                "ok": True,
+                "balance_usdc": float(res.get("balance", 0.0)),
+                "allowance_usdc": float(res.get("allowance", 0.0)),
+            }
+        except Exception as e:
+            logger.error(f"Failed to get USDC balance and allowance: {e}")
+            return {"ok": False, "error": str(e)}
+
     async def get_balance(self, asset_id: Optional[str] = None) -> float:
+
         """Fetch balance for collateral (default) or a specific asset ID."""
         if self.mode == "SHADOW":
             return 1000.0 # Standard shadow balance
