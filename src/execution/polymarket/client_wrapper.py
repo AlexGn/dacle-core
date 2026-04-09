@@ -317,7 +317,7 @@ class PolymarketClientWrapper:
         """Fetch USDC balance and allowance from the ClobClient."""
         try:
             # Proxy to the underlying ClobClient
-            res = await self.client.get_balance()
+            res = await self.client.get_balance_allowance()
             return {
                 "ok": True,
                 "balance_usdc": float(res.get("balance", 0.0)),
