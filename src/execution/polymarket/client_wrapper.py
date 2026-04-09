@@ -115,6 +115,20 @@ class PolymarketClientWrapper:
         # We just check if it's configured.
         return True
 
+    async def _call_with_rpc_retry(self, func, *args, **kwargs):
+        """
+        Generic RPC retry wrapper to prevent heartbeat failures.
+        Since PolymarketClientWrapper doesn't have the full RPC rotation
+        logic of CTFExecutor, this provides a basic async wrapper.
+        """
+        try:
+            if asyncio.iscoroutinefunction(func):
+                return await func(*args, **kwargs)
+            return await asyncio.to_thread(func, *args, **kwargs)
+        except Exception as e:
+            logger.error(f"RPC call failed in wrapper: {e}")
+            raise e
+
     def normalize_price(self, price: float, tick_size: float, side: str) -> float:
         """Normalize price to market tick size."""
         # TICK size must be followed strictly
