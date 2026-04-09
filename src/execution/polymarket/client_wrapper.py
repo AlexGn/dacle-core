@@ -540,7 +540,7 @@ class PolymarketClientWrapper:
             return {
                 "status": "error",
                 "error_code": "ORDER_GUARD_REJECT",
-                "error": f"order guard reject: notional {notional} exceeds {max_notional}",
+                "error": f"order guard reject: notional {notional} below min {min_notional}",
             }
 
         return None
