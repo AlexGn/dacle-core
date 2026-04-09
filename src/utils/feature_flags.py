@@ -201,6 +201,12 @@ def is_enabled(
     return flag_value
 
 
+def is_feature_enabled(flag_name: str, default: bool = False) -> bool:
+    """Legacy alias for is_enabled(..., default=False) returning strictly bool."""
+    res = is_enabled(flag_name, default=default)
+    return bool(res)
+
+
 def is_variant(flag_name: str, variant: str, request: Optional[object] = None) -> bool:
     """
     Check if a specific variant of a multivariate flag is enabled
@@ -269,28 +275,7 @@ def reload_config():
     logger.info("Feature flags configuration reloaded")
 
 
-# Example usage and testing
-if __name__ == "__main__":
-    import sys
-    logging.basicConfig(level=logging.DEBUG)
-
-    print("Feature Flags Test\n" + "="*50)
-
-    # Test config loading
-    config = _load_config()
-    print(f"Loaded config: {json.dumps(config, indent=2)}")
-
-    # Test flag checking
-    print(f"\nEnhanced Confluence: {is_enabled(FeatureFlag.ENHANCED_CONFLUENCE_DISPLAY)}")
-
-    # Test variant checking
-    if isinstance(is_enabled(FeatureFlag.ENHANCED_CONFLUENCE_DISPLAY), str):
-        print(f"Confluence is variant: {is_enabled(FeatureFlag.ENHANCED_CONFLUENCE_DISPLAY)}")
-        print(f"Is v1? {is_variant(FeatureFlag.ENHANCED_CONFLUENCE_DISPLAY, 'v1')}")
-        print(f"Is v2? {is_variant(FeatureFlag.ENHANCED_CONFLUENCE_DISPLAY, 'v2')}")
-
-    # Test get all flags
-    print(f"\nAll flags: {json.dumps(get_all_flags(), indent=2)}")
-
-    print("\n" + "="*50)
-    print("✅ Feature flags system working correctly")
+def is_feature_enabled(flag_name: str, default: bool = False) -> bool:
+    """Legacy alias for is_enabled(..., default=False) returning strictly bool."""
+    res = is_enabled(flag_name, default=default)
+    return bool(res)
