@@ -92,9 +92,20 @@ def load_polymarket_config(project_root: Path, config_path: Path) -> Dict[str, A
 async def build_wrapper(poly_cfg: Dict[str, Any]):
     from src.execution.polymarket.client_wrapper import ApiCreds, ClobClient, PolymarketClientWrapper
 
+    mode = str(os.getenv("POLY_MODE") or poly_cfg.get("mode") or "SHADOW").strip().upper()
+    if mode == "SHADOW":
+        # Return a mock wrapper that doesn't require valid keys for the pre-flight check
+        class _ShadowWrapper:
+            def __init__(self, cfg): self.config = cfg
+            async def get_usdc_balance_and_allowance(self): return {"ok": True, "balance_usdc": 1000.0, "allowance_usdc": 1000.0}
+            async def get_open_orders(self): return []
+            async def get_balance(self, tid): return 0.0
+        return _ShadowWrapper(poly_cfg)
+
     private_key = os.getenv("POLY_WALLET_PRIVATE_KEY")
     if not private_key:
         raise RuntimeError("POLY_WALLET_PRIVATE_KEY missing")
+
 
     api_key = os.getenv("POLY_API_KEY")
     api_secret = os.getenv("POLY_API_SECRET")
