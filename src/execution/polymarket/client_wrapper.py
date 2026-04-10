@@ -378,7 +378,12 @@ class PolymarketClientWrapper:
             logger.info(
                 f"[SHADOW] Post Order: {side.upper()} {qty} @ {price} (token={token_id}, type={order_type})"
             )
-            return {"status": "success", "tx_hash": "shadow_tx", "shadow": True}
+            return {
+                "status": "success",
+                "tx_hash": "shadow_tx",
+                "order_id": f"shadow_{int(time.time()*1000)}",
+                "shadow": True
+            }
 
         side_val = side.upper()
         if side_val not in ("BUY", "SELL"):
