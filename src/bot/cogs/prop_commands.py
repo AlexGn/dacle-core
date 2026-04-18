@@ -32,17 +32,27 @@ class PropCommands(commands.Cog):
         except Exception:
             return None
 
+    def _resolve_focus_channel_id(self) -> Optional[int]:
+        cid = os.getenv("DISCORD_FOCUS_CHANNEL_ID", "").strip()
+        if cid.isdigit():
+            return int(cid)
+        try:
+            return int(get_discord_channel_contract().id_for("focus"))
+        except Exception:
+            return None
+
     def _is_authorized(self, interaction: discord.Interaction) -> bool:
         # Allow owner always
         owner_id = os.getenv("DISCORD_OWNER_ID")
         is_owner = str(interaction.user.id) == owner_id
         if is_owner:
             return True
-            
-        # Or allow in #prop-firm
-        if self.prop_firm_channel_id is not None and interaction.channel_id == self.prop_firm_channel_id:
+
+        # Allow in #prop-firm or #focus channels
+        allowed_channels = [self.prop_firm_channel_id, self._resolve_focus_channel_id()]
+        if interaction.channel_id in allowed_channels:
             return True
-            
+
         return False
 
     def _report_dir(self) -> Path:
@@ -172,7 +182,7 @@ class PropCommands(commands.Cog):
         """Run the Top 50 scanner on demand."""
         if not self._is_authorized(interaction):
             await interaction.response.send_message(
-                "❌ You are not authorized to run `/show` outside of the prop-firm channel.",
+                "❌ You are not authorized to run `/show` outside of the #prop-firm or #focus channels.",
                 ephemeral=True
             )
             return
