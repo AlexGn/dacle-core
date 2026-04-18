@@ -195,6 +195,13 @@ class DACLEBot(commands.Bot):
         except Exception as e:
             logger.error(f"❌ Failed to load prop_commands cog: {e}")
 
+        # Phase D3: Load Loss Digest Cog (/loss_digest, /loss_attribution)
+        try:
+            await self.load_extension("src.bot.cogs.loss_digest_cog")
+            logger.info("✅ Loaded loss_digest_cog")
+        except Exception as e:
+            logger.error(f"❌ Failed to load loss_digest_cog: {e}")
+
         # Log app commands discovered (sync happens on_ready when guild is available)
         app_commands_list = list(self.tree.get_commands())
         logger.info(f"🔎 App commands discovered: {len(app_commands_list)}")
