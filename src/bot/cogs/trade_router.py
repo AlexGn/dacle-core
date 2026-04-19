@@ -27,6 +27,24 @@ TARGET_PATTERN = re.compile(r"(?:final\s*target|target|tp1|tp)\s*:\s*\$?([0-9]*\
 # Score card patterns
 SCORE_CARD_HEADER_PATTERN = re.compile(r"^\s*\$?([A-Z0-9]{2,10})\s+(SHORT|LONG)\b", re.IGNORECASE | re.MULTILINE)
 ENTRY_SCORE_PATTERN = re.compile(r"entry(?:\s*score)?\s*:?\s*([0-9]+(?:\.[0-9]+)?)\s*\/\s*10", re.IGNORECASE | re.MULTILINE)
+
+# Additional patterns
+LIFECYCLE_ID_PATTERN = re.compile(r"<!--.*?lifecycle:(LC_[A-Za-z0-9_]+).*?-->", re.DOTALL)
+STRICT_SETUP_TAKE_PATTERN = re.compile(r"TAKE\s+(SHORT|LONG)\s+\$([A-Z0-9]{2,10})", re.IGNORECASE)
+STRICT_SETUP_ENTRY_PATTERN = re.compile(r"ENTRY\s*:\s*\$?([0-9]*\.?[0-9]+)", re.IGNORECASE)
+STRICT_SETUP_SL_PATTERN = re.compile(r"(?:SL|STOP\s*LOSS)\s*:\s*\$?([0-9]*\.?[0-9]+)", re.IGNORECASE)
+STRICT_SETUP_TARGET_PATTERN = re.compile(r"(?:TARGET|FINAL\s*TARGET|TP1|TP)\s*:\s*\$?([0-9]*\.?[0-9]+)", re.IGNORECASE)
+SCORE_CARD_PAIR_PATTERN = re.compile(r"\$?([A-Z0-9]{2,10})/(?:USDT|USD|USDC)\s+(SHORT|LONG)", re.IGNORECASE)
+SCORE_CARD_TAKE_PATTERN = re.compile(r"TAKE\s+(SHORT|LONG)\s+\$?([A-Z0-9]{2,10})", re.IGNORECASE)
+BQ_OVERALL_PATTERN = re.compile(r"breakout\s+quality\s*:?\s*([0-9]+(?:\.?[0-9]+)?)\s*/\s*([0-9]+(?:\.?[0-9]+)?)", re.IGNORECASE)
+
+# Full stopwords set
+SCORE_CARD_HEADER_STOPWORDS = {
+    "DACLE", "ENTRY", "BASE", "TA", "TARGET", "POSITION", "BREAKOUT",
+    "QUALITY", "STRONG", "BUY", "SELL", "COPY", "SETUP", "MONITOR",
+    "EDGE", "CONFLUENCE", "LEVELS", "RATING"
+}
+
 RR_SCORE_PATTERN = re.compile(r"r:r\s*([0-9]+(?:\.[0-9]+)?)\s*:\s*1", re.IGNORECASE | re.MULTILINE)
 
 def _get_trades_channel_id() -> int:
@@ -631,9 +649,18 @@ class TradeRouter(commands.Cog):
             ),
         )
 
-    # NOTE: on_message listener removed — trade setup detection is handled by
-    # Node.js trade-router (deploy/openclaw/trade-router/index.js) per Session 408.
-    # This cog provides /rerun, /setup, and /levels slash commands.
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """SHADOW MODE: Parse trade setups and log only."""
+        if message.channel.id != _get_trades_channel_id():
+            return
+        if message.author.bot:
+            return
+        if not message.content:
+            return
+        setup = self.parse_setup(message.content)
+        if setup:
+            logger.info(f"[SHADOW] Setup: {setup}")
 
     @app_commands.command(name="levels", description="Set manual entry/SL/TP levels with confluence validation")
     @app_commands.describe(
