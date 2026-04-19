@@ -466,6 +466,9 @@ class LighterRealClient:
             sdk_expiry = getattr(SignerClient, "DEFAULT_28_DAY_ORDER_EXPIRY", default_expiry)
             if sdk_expiry < 0:
                 sdk_expiry = default_expiry
+            # DEBUG: Log expiry value
+            import logging
+            logging.getLogger(__name__).warning(f"[DEBUG] POST_ONLY expiry: sdk_expiry={sdk_expiry}, default_expiry={default_expiry}, sdk_constant={getattr(SignerClient, 'DEFAULT_28_DAY_ORDER_EXPIRY', 'MISSING')}")
 
         last_error = "unknown signer-client failure"
         for api_url in self.api_urls:
