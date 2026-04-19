@@ -242,35 +242,12 @@ data/macro/btc_structure_levels.json
 data/macro/external_indices.json
 data/macro/sherlock_macro_levels.json
 
-data/learning_effectiveness.json
-data/shadow_journal.json
-data/validation_artifact.json
-
-# Platform runtime state
-data/runtime/cloudflare_tunnel.json
-data/runtime/*_heartbeat
-
-# News and Polymariate Runtime State (Session 527 Cleanup)
-data/seen_headlines.json
-data/rss_seen_articles.json
-data/polymarket_learning_feedback.json
-data/polymarket/audit/learning_feedback.json
-data/runtime/polymarket/
-data/shadow_profit_audit.json
-data/polymarket_logic_graph.json
-data/watchlist.json
-data/lighter_market_map.json
-data/sniper_state.json
-data/post_tge_state.json
-data/macro/btc_structure_levels.json
-data/macro/external_indices.json
-data/macro/sherlock_macro_levels.json
-
 # Prevent claude-mem from creating CLAUDE.md stubs everywhere (Session 382)
 # Only allow root CLAUDE.md (project changelog)
 **/CLAUDE.md
 !/CLAUDE.md
 !/scripts/ops/CLAUDE.md
+poly-automaton/
 .env.lock
 data/polymarket/
 .env.secret.bin
