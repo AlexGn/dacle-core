@@ -461,14 +461,8 @@ class LighterRealClient:
         else:  # POST_ONLY
             sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
             sdk_tif = getattr(SignerClient, "ORDER_TIME_IN_FORCE_POST_ONLY", 2)
-            # Calculate proper 28-day expiry if constant not available
-            default_expiry = int(time.time()) + (28 * 24 * 60 * 60)
-            sdk_expiry = getattr(SignerClient, "DEFAULT_28_DAY_ORDER_EXPIRY", default_expiry)
-            if sdk_expiry < 0:
-                sdk_expiry = default_expiry
-            # DEBUG: Log expiry value
-            import logging
-            logging.getLogger(__name__).warning(f"[DEBUG] POST_ONLY expiry: sdk_expiry={sdk_expiry}, default_expiry={default_expiry}, sdk_constant={getattr(SignerClient, 'DEFAULT_28_DAY_ORDER_EXPIRY', 'MISSING')}")
+            # Use SDK default expiry (-1 means use exchange default)
+            sdk_expiry = -1
 
         last_error = "unknown signer-client failure"
         for api_url in self.api_urls:
