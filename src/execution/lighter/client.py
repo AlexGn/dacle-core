@@ -287,7 +287,7 @@ class LighterRealClient:
         if self.enforce_account_tier_match and self._account_tier_mismatch:
             return self._account_tier_mismatch_error(context="auth_refresh")
 
-        api_key_index = self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=0)
+        api_key_index = self.api_key_index if self.api_key_index is not None else 2
         token_ttl_sec = self._to_int(os.getenv("SCALPER_AUTH_TOKEN_TTL_SEC"), default=None)
         if token_ttl_sec is None:
             token_ttl_sec = max(600, int(self.auth_refresh_interval_sec) + 120)
@@ -453,11 +453,19 @@ class LighterRealClient:
         elif order_type_u == "LIMIT":
             sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
             sdk_tif = getattr(SignerClient, "ORDER_TIME_IN_FORCE_GOOD_TILL_TIME", 1)
-            sdk_expiry = getattr(SignerClient, "DEFAULT_28_DAY_ORDER_EXPIRY", -1)
+            # Calculate proper 28-day expiry if constant not available
+            default_expiry = int(time.time()) + (28 * 24 * 60 * 60)
+            sdk_expiry = getattr(SignerClient, "DEFAULT_28_DAY_ORDER_EXPIRY", default_expiry)
+            if sdk_expiry < 0:
+                sdk_expiry = default_expiry
         else:  # POST_ONLY
             sdk_order_type = SignerClient.ORDER_TYPE_LIMIT
             sdk_tif = getattr(SignerClient, "ORDER_TIME_IN_FORCE_POST_ONLY", 2)
-            sdk_expiry = getattr(SignerClient, "DEFAULT_28_DAY_ORDER_EXPIRY", -1)
+            # Calculate proper 28-day expiry if constant not available
+            default_expiry = int(time.time()) + (28 * 24 * 60 * 60)
+            sdk_expiry = getattr(SignerClient, "DEFAULT_28_DAY_ORDER_EXPIRY", default_expiry)
+            if sdk_expiry < 0:
+                sdk_expiry = default_expiry
 
         last_error = "unknown signer-client failure"
         for api_url in self.api_urls:
@@ -639,7 +647,8 @@ class LighterRealClient:
         if self.enable_order_deadline:
             sdk_expiry = int(time.time()) + int(self.order_deadline_sec)
         else:
-            sdk_expiry = -1 # DEFAULT_28_DAY_ORDER_EXPIRY
+            # Use proper 28-day expiry instead of -1 which fails encoding
+            sdk_expiry = int(time.time()) + (28 * 24 * 60 * 60)  # 28 days from now
             if order_type == "IOC":
                 sdk_expiry = 0 # DEFAULT_IOC_EXPIRY
 
@@ -1996,7 +2005,7 @@ class LighterRealClient:
             candidate_urls.append(str(self.api_url or "").strip().rstrip("/"))
 
         # api_key_index is needed by the /nextNonce endpoint (SDK-canonical path).
-        api_key_index = int(self._to_int(os.getenv("SCALPER_API_KEY_INDEX"), default=0) or 0)
+        api_key_index = int(self.api_key_index if self.api_key_index is not None else 2)
 
         best_result: Optional[dict] = None
         last_error: Optional[str] = None
