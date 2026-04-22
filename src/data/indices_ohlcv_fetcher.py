@@ -57,9 +57,12 @@ TIER2_INDICES = {
     "SOLANA.C":  "CRYPTOCAP:SOLANA.C",
 }
 
-# Tier 3: macro
+# Tier 3: macro + token price proxies (BTC/ETH/SOL via TradingView)
 TIER3_INDICES = {
     "DXY": "ECONOMICS:DXY",
+    "BTC": "BINANCE:BTCUSDT",
+    "ETH": "BINANCE:ETHUSDT",
+    "SOL": "BINANCE:SOLUSDT",
 }
 
 ALL_INDICES = {**TIER1_INDICES, **TIER2_INDICES, **TIER3_INDICES}

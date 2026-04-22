@@ -289,12 +289,15 @@ def _score_btc_trend_mtf(
     return SignalResult("BTC Trend", w, score, price, label, emoji)
 
 
-def _score_btc_ma200(price: float, ma200: Optional[float]) -> SignalResult:
+def _score_btc_ma200(price: float, ma200: Optional[float], uptrend: bool = False) -> SignalResult:
     """BTC MA 200 (Daily) — Institutional Regime Filter.
 
     Price > MA 200: Bullish (+1.0)
     Price < MA 200: Bearish (-1.0)
     Proximity modifier: score is attenuated when very close to the level.
+    Uptrend override: if BTC is in clear uptrend (all EMAs aligned), cap
+    bearish score at -0.3 instead of -1.0 to avoid false bearish bias
+    during recovery phases below MA200.
     """
     w = load_weights().get("btc_ma200", 0.10)
     if not price or not ma200:
@@ -310,8 +313,14 @@ def _score_btc_ma200(price: float, ma200: Optional[float]) -> SignalResult:
     else:
         # Full bearish if > 2% below, else partial
         score = max(dist_pct / 2.0, -1.0) if dist_pct > -2.0 else -1.0
-        label = f"BELOW MA 200 ({dist_pct:+.1f}%)"
-        emoji = "🔴"
+        # Uptrend override: recovery below MA200 is not a full bearish regime
+        if uptrend and score < -0.3:
+            score = -0.3
+            label = f"BELOW MA 200 ({dist_pct:+.1f}%) — Uptrend Override"
+            emoji = "🟡"
+        else:
+            label = f"BELOW MA 200 ({dist_pct:+.1f}%)"
+            emoji = "🔴"
 
     return SignalResult("BTC MA 200", w, round(score, 3), round(ma200, 1), label, emoji)
 
@@ -1373,9 +1382,12 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     else:
         funding_signal = _score_funding(funding_rate_pct)
 
+    # Determine if BTC is in clear uptrend for MA200 attenuation
+    btc_uptrend = btc_trend_signal.score >= 1.0
+
     signals = [
         btc_trend_signal,
-        _score_btc_ma200(btc_price or 0, btc_ma200_1d),
+        _score_btc_ma200(btc_price or 0, btc_ma200_1d, uptrend=btc_uptrend),
         _score_btc_halving(),
         _score_btc_rsi(btc_rsi),
         _score_btcdom(btcdom_change_24h, btcdom_value),
@@ -1408,6 +1420,10 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     if cipher_composite:
         signals.append(cipher_composite)
 
+    btc_price_cipher = _score_btc_price_cipher()
+    if btc_price_cipher:
+        signals.append(btc_price_cipher)
+
     # ---- Context indicators (weight=0, informational) ----
     context_signals = [
         _context_total1(total1_t, total1_change),
@@ -1424,10 +1440,22 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
     if composite > 0.30:
         bias = DirectionBias.BULLISH
         # Institutional Veto (Gap E): Cap BULLISH bias if BTC < MA 200
+        # Relaxed: allow BULLISH if composite is strong (>=0.40) OR BTC is in uptrend
         if btc_ma200_1d and btc_price and btc_price < btc_ma200_1d:
-            bias = DirectionBias.NEUTRAL
-            composite = min(composite, 0.25)
-            logger.info(f"VETO: BULLISH bias capped at NEUTRAL because BTC (${btc_price:,.0f}) < MA 200 (${btc_ma200_1d:,.0f})")
+            if composite >= 0.40:
+                logger.info(
+                    f"VETO OVERRIDDEN: BTC (${btc_price:,.0f}) < MA 200 (${btc_ma200_1d:,.0f}) "
+                    f"but composite={composite:.3f} is strongly bullish — allowing BULLISH"
+                )
+            elif btc_uptrend and composite >= 0.32:
+                logger.info(
+                    f"VETO OVERRIDDEN: BTC (${btc_price:,.0f}) < MA 200 (${btc_ma200_1d:,.0f}) "
+                    f"but uptrend + composite={composite:.3f} — allowing BULLISH"
+                )
+            else:
+                bias = DirectionBias.NEUTRAL
+                composite = min(composite, 0.25)
+                logger.info(f"VETO: BULLISH bias capped at NEUTRAL because BTC (${btc_price:,.0f}) < MA 200 (${btc_ma200_1d:,.0f})")
     elif composite < -0.30:
         bias = DirectionBias.BEARISH
     else:
@@ -1619,6 +1647,51 @@ def _score_cipher_composite() -> Optional[SignalResult]:
         return SignalResult("Cipher Composite", w, round(score, 3), None, label, emoji)
     except Exception as e:
         logger.debug(f"Cipher composite signal unavailable: {e}")
+        return None
+
+
+def _score_btc_price_cipher() -> Optional[SignalResult]:
+    """BTC Price Cipher — direct 4H WaveTrend/MFI momentum from BTC price action.
+
+    Reads from the BTC 4H cipher snapshot (populated by cipher_rotation_monitor).
+    This signal reflects actual BTC price momentum, not dominance metrics.
+    Weight is intentionally higher than cipher_composite because BTC price
+    is the primary driver of scalper market direction.
+    """
+    try:
+        from src.data.cipher_cache_service import get_cipher_snapshot
+        snap = get_cipher_snapshot("BTC", resolution="4H")
+        if not snap or snap.error:
+            return None
+
+        w = load_weights().get("btc_price_cipher", 0.12)
+        sig = snap.signal
+        conf = snap.confidence
+
+        if sig == "REVERSAL_UP":
+            score = 1.0
+            label = f"BTC Cipher REVERSAL UP ({conf:.0%} conf)"
+            emoji = "🟢"
+        elif sig == "BULLISH_MOMENTUM":
+            score = 0.85
+            label = f"BTC Cipher Bullish Momentum ({conf:.0%} conf)"
+            emoji = "🟢"
+        elif sig == "REVERSAL_DOWN":
+            score = -1.0
+            label = f"BTC Cipher REVERSAL DOWN ({conf:.0%} conf)"
+            emoji = "🔴"
+        elif sig == "BEARISH_MOMENTUM":
+            score = -0.85
+            label = f"BTC Cipher Bearish Momentum ({conf:.0%} conf)"
+            emoji = "🔴"
+        else:
+            score = 0.0
+            label = f"BTC Cipher Neutral ({conf:.0%} conf)"
+            emoji = "🟡"
+
+        return SignalResult("BTC Price Cipher", w, round(score, 3), None, label, emoji)
+    except Exception as e:
+        logger.debug(f"BTC price cipher signal unavailable: {e}")
         return None
 
 

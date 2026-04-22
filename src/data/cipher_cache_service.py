@@ -296,7 +296,7 @@ def compute_and_cache_token_snapshot(
 
 def get_cipher_composite_score(resolution: str = "4H") -> float:
     """
-    Aggregate cipher momentum across Tier 1 indices into a single score [-1, +1].
+    Aggregate cipher momentum across Tier 1 indices + key token prices into a single score [-1, +1].
 
     Used by market_direction_scorer as signal #16 (cipher_composite).
 
@@ -307,11 +307,12 @@ def get_cipher_composite_score(resolution: str = "4H") -> float:
       BEARISH_MOMENTUM → -0.6 × confidence
       CHOPPY / NEUTRAL → 0.0
     """
-    tier1_keys = list(TIER1_INDICES.keys())
+    # Include both Tier 1 macro indices and key token price momentum
+    target_keys = list(TIER1_INDICES.keys()) + ["BTC", "ETH", "SOL"]
     snapshots = get_all_cipher_snapshots(resolution=resolution)
 
     scores = []
-    for key in tier1_keys:
+    for key in target_keys:
         snap = snapshots.get(key)
         if snap is None or snap.error:
             continue
