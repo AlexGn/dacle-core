@@ -23,18 +23,44 @@ from src.analysis.technical_patterns import (
     PatternResult,
 )
 
-from src.analysis.market_structure import (
-    MarketStructureAnalyzer,
-    SwingPoint,
-    StructureBreak,
-    FairValueGap,
-    TrendlineAnalysis,
-    LiquiditySweep,
-    OrderBlock,
-    EqualLevel,
-    Equilibrium,
-    EntryTimingConfirmation,
-)
+# Lazy imports: market_structure imports ccxt which crashes on ARM Mac
+# These are exposed as module-level functions that defer import until first call.
+_market_structure_cache = None
+
+def _get_market_structure():
+    global _market_structure_cache
+    if _market_structure_cache is None:
+        from src.analysis.market_structure import (
+            MarketStructureAnalyzer,
+            SwingPoint,
+            StructureBreak,
+            FairValueGap,
+            TrendlineAnalysis,
+            LiquiditySweep,
+            OrderBlock,
+            EqualLevel,
+            Equilibrium,
+            EntryTimingConfirmation,
+        )
+        _market_structure_cache = {
+            'MarketStructureAnalyzer': MarketStructureAnalyzer,
+            'SwingPoint': SwingPoint,
+            'StructureBreak': StructureBreak,
+            'FairValueGap': FairValueGap,
+            'TrendlineAnalysis': TrendlineAnalysis,
+            'LiquiditySweep': LiquiditySweep,
+            'OrderBlock': OrderBlock,
+            'EqualLevel': EqualLevel,
+            'Equilibrium': Equilibrium,
+            'EntryTimingConfirmation': EntryTimingConfirmation,
+        }
+    return _market_structure_cache
+
+def __getattr__(name):
+    cache = _get_market_structure()
+    if name in cache:
+        return cache[name]
+    raise AttributeError(f"module 'src.analysis' has no attribute '{name}'")
 
 from src.analysis.support_resistance_detector import (
     SupportResistanceDetector,

@@ -37,6 +37,7 @@ def to_heikin_ashi(
             "is_bullish": list[bool],  # True when ha_close >= ha_open
             "latest_is_bullish": bool, # Trend of the most recent candle
             "bullish_streak": int,     # Consecutive bullish HA candles at end
+            "bearish_streak": int,     # Consecutive bearish HA candles at end
         }
     """
     n = len(closes)
@@ -49,6 +50,7 @@ def to_heikin_ashi(
             "is_bullish": [],
             "latest_is_bullish": False,
             "bullish_streak": 0,
+        "bearish_streak": 0,
         }
 
     ha_close: List[float] = []
@@ -71,11 +73,18 @@ def to_heikin_ashi(
 
     is_bullish = [ha_close[i] >= ha_open[i] for i in range(n)]
 
-    # Consecutive bullish streak at the end
+    # Consecutive bullish/bearish streaks at the end
     streak = 0
     for bull in reversed(is_bullish):
         if bull:
             streak += 1
+        else:
+            break
+
+    bearish_streak = 0
+    for bull in reversed(is_bullish):
+        if not bull:
+            bearish_streak += 1
         else:
             break
 
@@ -87,4 +96,5 @@ def to_heikin_ashi(
         "is_bullish": is_bullish,
         "latest_is_bullish": is_bullish[-1] if is_bullish else False,
         "bullish_streak": streak,
+        "bearish_streak": bearish_streak,
     }
