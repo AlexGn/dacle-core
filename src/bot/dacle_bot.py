@@ -320,14 +320,17 @@ class DACLEBot(commands.Bot):
                 # 2. Accelerated Cipher Seeding (Every hour at :30, auto-disables)
                 if now.minute >= 30 and now.minute < 34:
                     import os as _os
-                    _seeded_flag = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "data", "state", "cache_seeded.flag")
+                    from pathlib import Path as _Path
+                    _project_root = _Path(__file__).parent.parent.parent
+                    _seeded_flag = str(_project_root / "data" / "state" / "cache_seeded.flag")
                     if not _os.path.exists(_seeded_flag):
                         logger.info("🛡️ SENTINEL: Accelerated cipher seeding (pre-48h)...")
                         subprocess.Popen([
                             "python3", "-c",
                             "from src.data.indices_ohlcv_fetcher import fetch_and_cache_all; "
                             "from src.data.cipher_cache_service import refresh_cipher_cache; "
-                            "import os; flag=os.path.join('data','state','cache_seeded.flag'); "
+                            "import os; from pathlib import Path; "
+                            "flag=str(Path.cwd()/'data'/'state'/'cache_seeded.flag'); "
                             "r=fetch_and_cache_all(tiers=[1,2,3]); "
                             "s=refresh_cipher_cache(tiers=[1,2,3],skip_fetch=True); "
                             "ok=sum(1 for v in r.values() if v.get('success')); "
@@ -336,7 +339,8 @@ class DACLEBot(commands.Bot):
                             "tier2=['MEME.C','AI.C','LAYER1.C','DEPIN.C','RWA.C','SOLANA.C']; "
                             "all_seeded=all(get_series_length(k,'4H')>=48 for k in tier2); "
                             "if all_seeded: "
-                            "  open(flag,'w').write('{"seeded_at":"'+__import__('datetime').datetime.now().strftime('%Y-%m-%dT%H:%MZ')+'"}'); "
+                            "  Path('data/state').mkdir(parents=True,exist_ok=True); "
+                            "  Path(flag).write_text('{\"seeded_at\":\"'+__import__('datetime').datetime.now().strftime('%Y-%m-%dT%H:%MZ')+'\"}'); "
                             "  print(f'Cache seeded, created {flag}')"
                         ])
                 
