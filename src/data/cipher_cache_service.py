@@ -187,6 +187,10 @@ def _load_cache(resolution: str = "4H") -> Dict[str, CipherSnapshot]:
         return {}
 
 
+def get_cache_age_seconds(resolution: str = "4H") -> Optional[float]:
+    """Return age of cache in seconds, or None if cache doesn't exist."""
+    return _cache_age_seconds(resolution)
+
 def _cache_age_seconds(resolution: str = "4H") -> Optional[float]:
     """Return age of cache in seconds, or None if cache doesn't exist."""
     if not CIPHER_CACHE_PATH.exists():
@@ -199,6 +203,56 @@ def _cache_age_seconds(resolution: str = "4H") -> Optional[float]:
         return time.time() - ts
     except Exception:
         return None
+
+
+def get_cache_freshness(resolution: str = "4H") -> dict:
+    """Return cache freshness summary.
+
+    Returns:
+        {
+            "age_hours": float,
+            "is_stale": bool,       # age > 5h
+            "severely_stale": bool,  # age > 24h
+            "stale_at_hours": 5,
+            "last_updated_iso": str | None,
+        }
+    """
+    age_sec = _cache_age_seconds(resolution)
+    if age_sec is None:
+        return {
+            "age_hours": -1,
+            "is_stale": True,
+            "severely_stale": True,
+            "stale_at_hours": 5,
+            "last_updated_iso": None,
+        }
+    age_h = age_sec / 3600
+    return {
+        "age_hours": round(age_h, 1),
+        "is_stale": age_h > 5,
+        "severely_stale": age_h > 24,
+        "stale_at_hours": 5,
+        "last_updated_iso": __import__("datetime").datetime.fromtimestamp(
+            __import__("time").time() - age_sec
+        ).strftime("%Y-%m-%dT%H:%MZ"),
+    }
+
+
+def get_missing_indices(
+    resolution: str = "4H",
+    tiers: Optional[List[int]] = None,
+) -> List[str]:
+    """Return list of index keys with no cached data for the given resolution."""
+    from src.data.indices_ohlcv_fetcher import TIER1_INDICES, TIER2_INDICES, TIER3_INDICES
+    target = {}
+    if tiers is None or 1 in tiers:
+        target.update(TIER1_INDICES)
+    if tiers is None or 2 in tiers:
+        target.update(TIER2_INDICES)
+    if tiers is None or 3 in tiers:
+        target.update(TIER3_INDICES)
+    from src.data.indices_ohlcv_fetcher import get_series_length
+    return [k for k in target if get_series_length(k, resolution) == 0]
 
 
 def get_cipher_snapshot(

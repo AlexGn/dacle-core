@@ -113,7 +113,7 @@ def build_market_direction_embed(
     level_lines: list[str] = []
     btc_levels = key_levels.get("btc") if isinstance(key_levels.get("btc"), list) else []
     if btc_levels:
-        if btc_price is not None:
+        if btc_price is not None and btc_price > 0:
             level_lines.append(f"**BTC** ${btc_price:,.0f}:")
         for lv in btc_levels:
             if not isinstance(lv, dict):

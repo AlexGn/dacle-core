@@ -25,6 +25,10 @@ from typing import Dict, List, Optional
 
 from src.ta.indicators.wavetrend import calculate_wavetrend
 from src.ta.indicators.mfi import calculate_dacle_mfi
+from src.ta.indicators.mfi_vw import calculate_mfi_vw
+from src.ta.indicators.heikin_ashi import to_heikin_ashi
+from src.ta.indicators.rsi import calculate_rsi
+from src.analysis.momentum_indicators import calculate_macd, calculate_stochastic, detect_rsi_divergence
 from src.ta.indicators.vwap_oscillator import calculate_vwap_oscillator
 from src.ta.indicators.cvd import calculate_cvd
 from src.ta.indicators.choppiness import calculate_choppiness
@@ -128,6 +132,26 @@ class CipherSnapshot:
     stochastic: Optional[StochasticSnapshot] = None
     momentum: Optional[MomentumSnapshot] = None
     choppiness: Optional[float] = None
+
+    # Gold Signal (WT1 < -80 extreme oversold)
+    gold_signal: bool = False
+    gold_signal_price: Optional[float] = None
+
+    # Volume-weighted MFI
+    mfi_vw: Optional[float] = None
+    mfi_vw_is_bullish: bool = False
+
+    # WaveTrend fractal divergence
+    wt_divergence: Optional[str] = None       # "bullish" | "bearish" | None
+    wt_divergence_strength: float = 0.0
+
+    # RSI divergence
+    rsi_divergence: Optional[str] = None       # "bullish" | "bearish" | None
+    rsi_divergence_strength: str = "none"
+
+    # Heikin Ashi streak
+    ha_bullish_streak: int = 0
+    ha_bearish_streak: int = 0
 
     # Composite output
     signal: str = CompositeSignal.NEUTRAL
@@ -263,6 +287,62 @@ def compute_cipher_snapshot(
         except Exception as e:
             logger.warning(f"[cipher_engine] Choppiness failed for {index_key}/{resolution}: {e}")
 
+    # --- Heikin Ashi ---
+    try:
+        ha = to_heikin_ashi(opens, highs, lows, closes)
+        snap.ha_bullish_streak = ha.get("bullish_streak", 0)
+        snap.ha_bearish_streak = ha.get("bearish_streak", 0)
+    except Exception as e:
+        logger.warning(f"[cipher_engine] Heikin Ashi failed for {index_key}/{resolution}: {e}")
+
+    # --- RSI divergence ---
+    try:
+        if n >= 35:
+            # Compute RSI as a series for divergence detection
+            rsi_series: List[float] = []
+            # Calculate RSI for each window to build a series
+            for i in range(14, n):
+                window = closes[i - 14:i + 1]
+                gains = []
+                losses = []
+                for j in range(1, len(window)):
+                    chg = window[j] - window[j - 1]
+                    if chg > 0:
+                        gains.append(chg)
+                        losses.append(0)
+                    else:
+                        gains.append(0)
+                        losses.append(abs(chg))
+                if len(gains) >= 14:
+                    avg_g = sum(gains[-14:]) / 14
+                    avg_l = sum(losses[-14:]) / 14
+                    rsi_val = 100 - (100 / (1 + avg_g / avg_l)) if avg_l > 0 else 100.0
+                    rsi_series.append(rsi_val)
+            if len(rsi_series) >= 20:
+                rsi_div = detect_rsi_divergence(closes[-len(rsi_series):], rsi_series, direction="BOTH", lookback=20)
+                snap.rsi_divergence = rsi_div.get("type")
+                snap.rsi_divergence_strength = rsi_div.get("strength", "none")
+    except Exception as e:
+        logger.warning(f"[cipher_engine] RSI divergence failed for {index_key}/{resolution}: {e}")
+
+    # --- WaveTrend fractal divergence ---
+    if wt is not None and wt.get("wt1_series"):
+        try:
+            wt1_series = wt["wt1_series"]
+            div = detect_wt_fractal_divergence(closes, wt1_series, lookback=20)
+            snap.wt_divergence = div.get("type")
+            snap.wt_divergence_strength = div.get("strength", 0.0)
+        except Exception as e:
+            logger.warning(f"[cipher_engine] WT fractal divergence failed for {index_key}/{resolution}: {e}")
+
+    # --- Volume-weighted MFI ---
+    try:
+        mfi_vw_result = calculate_mfi_vw(highs, lows, closes, opens, volumes, length=14)
+        snap.mfi_vw = mfi_vw_result.get("latest_value")
+        snap.mfi_vw_is_bullish = mfi_vw_result.get("is_bullish", False)
+    except Exception as e:
+        logger.warning(f"[cipher_engine] VW-MFI failed for {index_key}/{resolution}: {e}")
+
     # --- Composite Signal ---
     if wt is not None:
         snap.momentum = _build_momentum_snapshot(wt)
@@ -300,10 +380,16 @@ def _build_momentum_snapshot(wt: dict) -> Optional[MomentumSnapshot]:
 
 
 def _compute_composite(snap: CipherSnapshot):
-    """
+    '''
     Derive composite signal from indicator results.
-    Returns (signal, confidence, reasons).
-    """
+
+    Uses multiplicative confirmation scoring:
+      base 0.25 * 1.25^aligned * 0.75^conflicting
+    clamped to [0.0, 1.0].
+
+    Gold Signal (WT1 < -80 with WT2 rising) bypasses the chop gate
+    because extreme oversold is actionable even in ranging markets.
+    '''
     reasons = []
     signal = CompositeSignal.NEUTRAL
     confidence = 0.0
@@ -315,87 +401,142 @@ def _compute_composite(snap: CipherSnapshot):
     macd = snap.macd
     chop = snap.choppiness
 
-    # Chop gate — if choppy, stop here regardless of other signals
+    # Step 0: Gold Signal -- pre-chop check, extreme oversold is actionable
+    if wt is not None and wt.wt1 is not None and wt.wt1 < -80:
+        if snap.momentum is not None and snap.momentum.wt_delta > 0:
+            snap.gold_signal = True
+            reasons.append(
+                f"GOLD SIGNAL: WT1={wt.wt1:.1f} < -80 extreme oversold, WT2 rising"
+            )
+            return CompositeSignal.REVERSAL_UP, 0.80, reasons
+
+    # Step 1: Chop gate
     if chop is not None and chop > CHOPPINESS_THRESHOLD:
         reasons.append(f"choppiness={chop:.1f}>{CHOPPINESS_THRESHOLD} (ranging)")
         return CompositeSignal.CHOPPY, 0.3, reasons
 
-    # Reversal signals — highest priority, require WT signal + MFI confirmation
+    # Step 2: Reversal signals -- require WT crossover
     if wt is not None:
         if wt.long_signal:
             reasons.append(f"wt_long_signal (wt1={wt.wt1:.1f} crossed up from oversold)")
-            confidence += 0.4
-            if mfi is not None and mfi.is_bullish:
-                reasons.append(f"mfi_bullish ({mfi.value:.2f})")
-                confidence += 0.25
-            if cvd is not None and cvd.available and cvd.divergence_type == "positive":
-                reasons.append(f"cvd_positive_divergence (strength={cvd.strength:.2f})")
-                confidence += 0.2
-            if macd is not None and macd.direction == "bullish":
-                reasons.append(f"macd_bullish (hist={macd.histogram:.4f})")
-                confidence += 0.15
-            if vwap is not None and vwap.crossed_above_zero:
-                reasons.append(f"vwap_crossed_above_zero (value={vwap.value:.4f})")
-                confidence += 0.15
             signal = CompositeSignal.REVERSAL_UP
-
         elif wt.short_signal:
             reasons.append(f"wt_short_signal (wt1={wt.wt1:.1f} crossed down from overbought)")
-            confidence += 0.4
-            if mfi is not None and not mfi.is_bullish:
-                reasons.append(f"mfi_bearish ({mfi.value:.2f})")
-                confidence += 0.25
-            if cvd is not None and cvd.available and cvd.divergence_type == "negative":
-                reasons.append(f"cvd_negative_divergence (strength={cvd.strength:.2f})")
-                confidence += 0.2
-            if macd is not None and macd.direction == "bearish":
-                reasons.append(f"macd_bearish (hist={macd.histogram:.4f})")
-                confidence += 0.15
-            if vwap is not None and vwap.crossed_below_zero:
-                reasons.append(f"vwap_crossed_below_zero (value={vwap.value:.4f})")
-                confidence += 0.15
             signal = CompositeSignal.REVERSAL_DOWN
 
-        else:
-            # Momentum — WT trend direction without a fresh crossover signal
-            wt_bullish = wt.wt1 > wt.wt2
-            macd_bullish = macd is not None and macd.direction == "bullish"
-            macd_bearish = macd is not None and macd.direction == "bearish"
-            mfi_bullish = mfi is not None and mfi.is_bullish
-            mfi_bearish = mfi is not None and not mfi.is_bullish
-            vwap_bullish = vwap is not None and vwap.above_zero
-            vwap_bearish = vwap is not None and not vwap.above_zero
+    # Step 3: Multiplicative confidence scoring
+    wt_bullish = wt is not None and wt.wt1 is not None and wt.wt2 is not None and wt.wt1 > wt.wt2
+    wt_bearish = wt is not None and wt.wt1 is not None and wt.wt2 is not None and wt.wt1 < wt.wt2
+    macd_bullish = macd is not None and macd.direction == "bullish"
+    macd_bearish = macd is not None and macd.direction == "bearish"
+    mfi_bullish = mfi is not None and mfi.is_bullish
+    mfi_bearish = mfi is not None and not mfi.is_bullish
+    vwap_bullish = vwap is not None and vwap.above_zero
+    vwap_bearish = vwap is not None and not vwap.above_zero
+    rsi_bullish = snap.rsi_divergence == "bullish"
+    rsi_bearish = snap.rsi_divergence == "bearish"
+    cvd_bullish = cvd is not None and cvd.available and cvd.divergence_type == "positive"
+    cvd_bearish = cvd is not None and cvd.available and cvd.divergence_type == "negative"
+    wt_div_bullish = snap.wt_divergence == "bullish"
+    wt_div_bearish = snap.wt_divergence == "bearish"
+    ha_bullish = snap.ha_bullish_streak >= 2
+    ha_bearish = snap.ha_bearish_streak >= 2
+    mfi_vw_bullish = snap.mfi_vw_is_bullish
+    mfi_vw_bearish = snap.mfi_vw is not None and not snap.mfi_vw_is_bullish
 
-            bull_votes = sum([wt_bullish, macd_bullish, mfi_bullish, vwap_bullish])
-            bear_votes = sum([not wt_bullish, macd_bearish, mfi_bearish, vwap_bearish])
+    # Collect votes: +1 bullish, -1 bearish, 0 neutral
+    votes = [
+        1 if wt_bullish else (-1 if wt_bearish else 0),
+        1 if macd_bullish else (-1 if macd_bearish else 0),
+        1 if mfi_bullish else (-1 if mfi_bearish else 0),
+        1 if vwap_bullish else (-1 if vwap_bearish else 0),
+        1 if rsi_bullish else (-1 if rsi_bearish else 0),
+        1 if cvd_bullish else (-1 if cvd_bearish else 0),
+        1 if wt_div_bullish else (-1 if wt_div_bearish else 0),
+        1 if ha_bullish else (-1 if ha_bearish else 0),
+        1 if mfi_vw_bullish else (-1 if mfi_vw_bearish else 0),
+    ]
 
-            if bull_votes >= 2:
-                vwap_status = f"vwap_above_zero ({vwap.value:.4f})" if vwap_bullish else "vwap_neutral"
-                reasons.append(
-                    f"wt_trend_up (wt1={wt.wt1:.1f}>{wt.wt2:.1f}), "
-                    f"macd={'bullish' if macd_bullish else 'neutral'}, "
-                    f"mfi={'bullish' if mfi_bullish else 'neutral'}, "
-                    f"{vwap_status}"
-                )
-                signal = CompositeSignal.BULLISH_MOMENTUM
-                confidence = 0.25 + (bull_votes - 2) * 0.12
-            elif bear_votes >= 2:
-                vwap_status = f"vwap_below_zero ({vwap.value:.4f})" if vwap_bearish else "vwap_neutral"
-                reasons.append(
-                    f"wt_trend_down (wt1={wt.wt1:.1f}<{wt.wt2:.1f}), "
-                    f"macd={'bearish' if macd_bearish else 'neutral'}, "
-                    f"mfi={'bearish' if mfi_bearish else 'neutral'}, "
-                    f"{vwap_status}"
-                )
-                signal = CompositeSignal.BEARISH_MOMENTUM
-                confidence = 0.25 + (bear_votes - 2) * 0.12
-            else:
-                reasons.append("no_confluence")
-                signal = CompositeSignal.NEUTRAL
-                confidence = 0.0
+    net = sum(votes)
+    active = sum(1 for v in votes if v != 0)
 
-    confidence = min(1.0, confidence)
-    return signal, confidence, reasons
+    if signal == CompositeSignal.NEUTRAL and active >= 3 and abs(net) >= 2:
+        signal = CompositeSignal.BULLISH_MOMENTUM if net > 0 else CompositeSignal.BEARISH_MOMENTUM
+
+    if signal != CompositeSignal.NEUTRAL:
+        aligned = active
+        conflicting = 0
+        for v in votes:
+            if v != 0 and ((net > 0 and v < 0) or (net < 0 and v > 0)):
+                conflicting += 1
+                aligned -= 1
+        confidence = 0.25 * (1.25 ** max(0, aligned)) * (0.75 ** conflicting)
+        confidence = min(max(confidence, 0.0), 1.0)
+
+        dir_label = "bullish" if net > 0 else "bearish"
+        reasons.append(f"{dir_label}_votes ({aligned} aligned, {conflicting} conflicting, {active} active)")
+    else:
+        reasons.append("no_confluence")
+        confidence = 0.0
+
+    return signal, round(confidence, 4), reasons
+
+
+
+def detect_wt_fractal_divergence(
+    closes: List[float],
+    wt1_series: List[float],
+    lookback: int = 20,
+) -> dict:
+    '''Detect 4-bar fractal turning points on WT1 vs price.
+
+    Bearish: price makes higher high (HH) while WT1 makes lower high (LH).
+    Bullish: price makes lower low (LL) while WT1 makes higher low (HL).
+
+    Returns {"type": "bullish" | "bearish" | None, "strength": float}.
+    '''
+    if len(closes) < lookback or len(wt1_series) < lookback:
+        return {"type": None, "strength": 0.0}
+
+    price_slice = closes[-lookback:]
+    wt_slice = wt1_series[-lookback:]
+
+    def _find_peaks(arr):
+        peaks = []
+        for i in range(2, len(arr) - 2):
+            if arr[i] > arr[i - 1] and arr[i] > arr[i - 2] and arr[i] > arr[i + 1] and arr[i] > arr[i + 2]:
+                peaks.append((i, arr[i]))
+        return peaks
+
+    def _find_troughs(arr):
+        troughs = []
+        for i in range(2, len(arr) - 2):
+            if arr[i] < arr[i - 1] and arr[i] < arr[i - 2] and arr[i] < arr[i + 1] and arr[i] < arr[i + 2]:
+                troughs.append((i, arr[i]))
+        return troughs
+
+    price_peaks = _find_peaks(price_slice)
+    wt_peaks = _find_peaks(wt_slice)
+    price_troughs = _find_troughs(price_slice)
+    wt_troughs = _find_troughs(wt_slice)
+
+    # Bearish divergence: most recent price peak > previous, but WT peak < previous
+    if len(price_peaks) >= 2 and len(wt_peaks) >= 2:
+        pp1, pp2 = price_peaks[-2][1], price_peaks[-1][1]
+        wp1, wp2 = wt_peaks[-2][1], wt_peaks[-1][1]
+        if pp2 > pp1 and wp2 < wp1:
+            return {"type": "bearish", "strength": min(1.0, abs(wp2 - wp1) / max(abs(wp1), 0.01))}
+
+    # Bullish divergence: most recent price trough < previous, but WT trough > previous
+    if len(price_troughs) >= 2 and len(wt_troughs) >= 2:
+        pt1, pt2 = price_troughs[-2][1], price_troughs[-1][1]
+        wt1_val, wt2_val = wt_troughs[-2][1], wt_troughs[-1][1]
+        if pt2 < pt1 and wt2_val > wt1_val:
+            return {"type": "bullish", "strength": min(1.0, abs(wt2_val - wt1_val) / max(abs(wt1_val), 0.01))}
+
+    return {"type": None, "strength": 0.0}
+
+
 
 
 def run_cipher_on_series(
@@ -408,7 +549,7 @@ def run_cipher_on_series(
 
     series keys: opens, highs, lows, closes, volumes, timestamps
     """
-    return compute_cipher_snapshot(
+    snap = compute_cipher_snapshot(
         index_key=index_key,
         resolution=resolution,
         opens=series.get("opens", []),
@@ -418,3 +559,23 @@ def run_cipher_on_series(
         volumes=series.get("volumes", []),
         timestamps=series.get("timestamps", []),
     )
+
+    # Freshness penalty: reduce confidence when cache data is stale
+    try:
+        from src.data.cipher_cache_service import get_cache_age_seconds
+        age_seconds = get_cache_age_seconds(resolution)
+        if age_seconds is not None:
+            age_hours = age_seconds / 3600
+            if age_hours > 48:
+                snap.confidence = 0.0
+                snap.reasons.append(f"data {age_hours:.0f}h stale -- confidence zeroed")
+            elif age_hours > 24:
+                snap.confidence *= 0.5
+                snap.reasons.append(f"data {age_hours:.0f}h stale -- 50% penalty applied")
+            elif age_hours > 12:
+                snap.confidence *= 0.75
+                snap.reasons.append(f"data {age_hours:.0f}h stale -- 25% penalty applied")
+    except Exception:
+        pass
+
+    return snap

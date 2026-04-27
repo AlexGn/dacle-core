@@ -310,17 +310,47 @@ class DACLEBot(commands.Bot):
                     logger.info("🛡️ SENTINEL: Refreshing 10-signal macro engine...")
                     subprocess.Popen(["python3", "scripts/ops/refresh_macro_levels.py"])
                 
-                # 2. Direction Shift Sentinel (Every hour at :05)
+                # 1b. Cipher Cache Refresh (Every 4 hours at :10, offset from macro refresh)
+                if now.hour % 4 == 0 and now.minute >= 10 and now.minute < 15:
+                    logger.info("🛡️ SENTINEL: Refreshing Cipher Cache...")
+                    subprocess.Popen([
+                        "python3", "scripts/monitors/cipher_rotation_monitor.py", "--refresh-only"
+                    ])
+                
+                # 2. Accelerated Cipher Seeding (Every hour at :30, auto-disables)
+                if now.minute >= 30 and now.minute < 34:
+                    import os as _os
+                    _seeded_flag = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), "data", "state", "cache_seeded.flag")
+                    if not _os.path.exists(_seeded_flag):
+                        logger.info("🛡️ SENTINEL: Accelerated cipher seeding (pre-48h)...")
+                        subprocess.Popen([
+                            "python3", "-c",
+                            "from src.data.indices_ohlcv_fetcher import fetch_and_cache_all; "
+                            "from src.data.cipher_cache_service import refresh_cipher_cache; "
+                            "import os; flag=os.path.join('data','state','cache_seeded.flag'); "
+                            "r=fetch_and_cache_all(tiers=[1,2,3]); "
+                            "s=refresh_cipher_cache(tiers=[1,2,3],skip_fetch=True); "
+                            "ok=sum(1 for v in r.values() if v.get('success')); "
+                            "print(f'Seeding: {ok}/{len(r)} indices, {len(s)} snapshots'); "
+                            "from src.data.indices_ohlcv_fetcher import get_series_length; "
+                            "tier2=['MEME.C','AI.C','LAYER1.C','DEPIN.C','RWA.C','SOLANA.C']; "
+                            "all_seeded=all(get_series_length(k,'4H')>=48 for k in tier2); "
+                            "if all_seeded: "
+                            "  open(flag,'w').write('{"seeded_at":"'+__import__('datetime').datetime.now().strftime('%Y-%m-%dT%H:%MZ')+'"}'); "
+                            "  print(f'Cache seeded, created {flag}')"
+                        ])
+                
+                # 3. Direction Shift Sentinel (Every hour at :05)
                 if now.minute >= 5 and now.minute < 10:
                     logger.info("🛡️ SENTINEL: Checking for Macro-confirmed direction shifts...")
                     subprocess.Popen(["python3", "scripts/monitors/direction_shift_sentinel.py", "--post"])
                 
-                # 3. Nightly Synthesis (Once daily at 00:00)
+                # 4. Nightly Synthesis (Once daily at 00:00)
                 if now.hour == 0 and now.minute < 5:
                     logger.info("🛡️ SENTINEL: Starting Nightly Cognitive Synthesis...")
                     subprocess.Popen(["python3", "scripts/scheduled/nightly_synthesis.py"])
                 
-                # 4. Morning Intelligence (Once daily at 06:00)
+                # 5. Morning Intelligence (Once daily at 06:00)
                 if now.hour == 6 and now.minute < 5:
                     logger.info("🛡️ SENTINEL: Generating Macro-Aware Morning picks...")
                     subprocess.Popen(["python3", "scripts/scheduled/macro_morning_pipeline.py", "--post"])
