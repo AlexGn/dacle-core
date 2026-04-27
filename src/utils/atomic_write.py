@@ -53,6 +53,21 @@ def atomic_json_write(path: Union[str, Path], data: Any) -> None:
         raise
 
 
+def atomic_jsonl_append(path: Union[str, Path], record: Dict[str, Any]) -> None:
+    """Append a JSON line to a JSONL file atomically.
+
+    Uses per-path locking to prevent interleaved writes from concurrent threads.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, default=str) + "\n"
+    lock = _get_path_lock(path)
+    with lock:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line)
+            f.flush()
+
+
 def locked_json_update(
     path: Union[str, Path],
     updater: Callable[[Dict[str, Any]], Dict[str, Any]],
