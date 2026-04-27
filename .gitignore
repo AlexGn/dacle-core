@@ -253,3 +253,4 @@ data/polymarket/
 .env.secret.bin
 data/runtime/smc_signal_journal.jsonl
 data/entry_model_signals.jsonl
+AGENTS.md
