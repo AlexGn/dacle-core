@@ -17,7 +17,7 @@ from src.bot.utils.api_client import api_request
 
 logger = get_logger(__name__)
 
-# Patterns ported from deploy/openclaw/trade-router/index.js
+# Patterns ported from original Node.js trade-router (removed)
 SYMBOL_PATTERN = re.compile(r"\$([A-Z0-9]{2,10})|([A-Z0-9]{2,10})(?=\/(?:USDT|USD|USDC))", re.IGNORECASE)
 DIRECTION_PATTERN = re.compile(r"\b(Short|Long|SHORT|LONG)\b", re.IGNORECASE)
 ENTRY_PATTERN = re.compile(r"entry(?:\s*point)?\s*:\s*(?:entry\s*:)?\s*(?:limit\s*)?\$?([0-9]*\.?[0-9]+)", re.IGNORECASE | re.MULTILINE)

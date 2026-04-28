@@ -257,8 +257,6 @@ class DACLEBot(commands.Bot):
             self.loop.create_task(self._sync_guild_commands(private_server))
             # Start memory watchdog in background
             self.loop.create_task(self._memory_watchdog())
-            # Start legacy clawdbot process watchdog in background
-            self.loop.create_task(self._legacy_process_watchdog())
 
             # List all channels the bot can see
             logger.info(f"📋 Channels in {private_server.name}:")
@@ -403,80 +401,6 @@ class DACLEBot(commands.Bot):
                         logger.error(f"Failed to send Telegram memory alert: {e}")
             await asyncio.sleep(60)
 
-    @staticmethod
-    def _extract_legacy_clawdbot_processes(ps_output: str) -> list[str]:
-        """Return command lines that match legacy clawdbot process names."""
-        matches = []
-        for line in ps_output.splitlines():
-            if not line.strip():
-                continue
-            parts = line.split(None, 10)
-            cmd = parts[10] if len(parts) > 10 else line
-            if re.search(r"\bclawdbot[\w\-]*\b", cmd, flags=re.IGNORECASE):
-                matches.append(cmd.strip())
-        return matches
-
-    def _scan_legacy_clawdbot_processes(self) -> list[str]:
-        """Scan current process table for legacy clawdbot* processes."""
-        try:
-            proc = subprocess.run(
-                ["ps", "aux"],
-                capture_output=True,
-                text=True,
-                check=True,
-                timeout=5,
-            )
-            return self._extract_legacy_clawdbot_processes(proc.stdout)
-        except Exception as e:
-            logger.warning(f"Legacy process watchdog scan failed: {e}")
-            return []
-
-    @staticmethod
-    def _is_legacy_service_active() -> bool:
-        """Check if the masked clawdbot-gateway.service has been re-enabled.
-
-        The legitimate ClawdBot gateway runs via nohup (not systemd), so
-        process-name matching alone produces false positives.  The real
-        threat is someone unmasking and starting the systemd unit.
-        """
-        try:
-            proc = subprocess.run(
-                ["systemctl", "is-active", "clawdbot-gateway.service"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5,
-            )
-            state = proc.stdout.strip().lower()
-            return state in {"active", "activating", "reloading"}
-        except Exception:
-            return False
-
-    async def _legacy_process_watchdog(self) -> None:
-        """
-        Alert when the retired clawdbot-gateway.service systemd unit becomes
-        active.  Only fires when the *service* is running — the nohup-launched
-        ClawdBot (OpenClaw/Pi-AI) gateway is expected and not flagged.
-        """
-        interval = int(os.getenv("LEGACY_PROCESS_WATCHDOG_INTERVAL_SEC", "60"))
-        previously_active = False
-        while not self.is_closed():
-            currently_active = self._is_legacy_service_active()
-            if currently_active and not previously_active:
-                matches = self._scan_legacy_clawdbot_processes()
-                sample = "; ".join(matches[:3]) if matches else "(no ps detail)"
-                msg = (
-                    "🚨 Legacy clawdbot-gateway.service is ACTIVE. "
-                    f"Masked service was re-enabled! Processes: {sample}"
-                )
-                logger.error(msg)
-                try:
-                    from src.alerts.telegram_notifier import send_telegram_message
-                    send_telegram_message(msg, parse_mode=None)
-                except Exception as e:
-                    logger.warning(f"Failed to send legacy-service alert: {e}")
-            previously_active = currently_active
-            await asyncio.sleep(max(interval, 1))
 
     def _get_owner_id(self) -> Optional[int]:
         owner_id = os.getenv("DISCORD_OWNER_ID")
