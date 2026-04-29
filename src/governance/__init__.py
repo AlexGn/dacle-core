@@ -1,0 +1,1 @@
+"""Sovereign Wrapper — cross-pillar admission gate package."""
