@@ -54,6 +54,11 @@ class BottomSignal:
     whale_accumulation: bool = False
     sentiment_shift: bool = False
 
+    # Phase 1C new signals
+    long_lower_wick: bool = False
+    fear_greed_extreme: bool = False
+    power_law_zone: Optional[str] = None
+
     # Supporting data
     support_level: Optional[float] = None
     support_touches: int = 0
@@ -85,6 +90,11 @@ HIGH_VOLUME_MULTIPLIER = 1.5  # 1.5x average = significant
 RSI_EXTREME_OVERSOLD = 20  # Optimal entry zone (+263% recovery)
 RSI_OVERSOLD = 30  # Standard oversold
 RSI_NEUTRAL_LOW = 40  # Lower neutral
+
+# Fear & Greed thresholds (Phase 1C)
+FEAR_GREED_EXTREME_MAX = 25  # Extreme fear zone
+POWER_LAW_DEEP_BOOST = 1.3  # Confidence multiplier when in DEEP zone
+_TOTAL_SIGNALS = 7  # Total number of bottom detection signals
 
 # Support level thresholds
 MIN_SUPPORT_TOUCHES = 3  # Minimum touches for "holding"
@@ -140,6 +150,8 @@ class BottomDetector:
         price_history: Optional[List[float]] = None,
         volume_history: Optional[List[float]] = None,
         ta_data: Optional[Dict] = None,
+        fear_greed_index: Optional[int] = None,
+        power_law_zone: Optional[str] = None,
     ) -> BottomSignal:
         """
         Detect bottom formation using multiple signals.
@@ -193,8 +205,24 @@ class BottomDetector:
         if sentiment["detected"]:
             signals.append("SENTIMENT_SHIFT")
 
-        # Calculate confidence
-        confidence = len(signals) / 5.0
+        # 6. Check long lower wick (Phase 1C)
+        wick = self._check_long_lower_wick(price_history, ta_data)
+        signal_details["long_lower_wick"] = wick["detected"]
+        if wick["detected"]:
+            signals.append("LONG_LOWER_WICK")
+
+        # 7. Check Fear & Greed extreme (Phase 1C)
+        fg = self._check_fear_greed_extreme(fear_greed_index, ta_data)
+        signal_details["fear_greed_extreme"] = fg["detected"]
+        if fg["detected"]:
+            signals.append("FEAR_GREED_EXTREME")
+
+        # Calculate confidence (Phase 1C: 7-signal)
+        confidence = len(signals) / float(_TOTAL_SIGNALS)
+
+        # Zone context boost (Phase 1C)
+        if power_law_zone == "DEEP" and confidence > 0:
+            confidence = min(1.0, confidence * POWER_LAW_DEEP_BOOST)
 
         # Determine recommendation
         if confidence >= 0.6:
@@ -224,6 +252,9 @@ class BottomDetector:
             support_hold=signal_details["support_hold"],
             whale_accumulation=signal_details["whale_accumulation"],
             sentiment_shift=signal_details["sentiment_shift"],
+            long_lower_wick=signal_details.get("long_lower_wick", False),
+            fear_greed_extreme=signal_details.get("fear_greed_extreme", False),
+            power_law_zone=power_law_zone,
             support_level=support.get("level"),
             support_touches=support.get("touches", 0),
             rsi_current=ta_data.get("rsi_4h") or ta_data.get("rsi"),
@@ -233,6 +264,86 @@ class BottomDetector:
             dead_cat_score=dead_cat["score"],
             dead_cat_reasons=dead_cat["reasons"],
         )
+
+    def _check_long_lower_wick(
+        self, price_history: List[float], ta_data: Dict
+    ) -> Dict:
+        """
+        Check for long lower wick signal.
+
+        Lower wick = min(open,close) - low.
+        Long lower wick = (lower_wick/candle_range) > 0.6 AND wick >= 0.5% of range.
+        """
+        result = {"detected": False}
+
+        # 1. Explicit flag
+        if ta_data.get("long_lower_wick"):
+            result["detected"] = True
+            return result
+
+        # 2. Candle dict
+        candle = ta_data.get("candle")
+        if isinstance(candle, dict):
+            h = float(candle.get("high", 0) or 0)
+            l = float(candle.get("low", 0) or 0)
+            o = float(candle.get("open", 0) or 0)
+            c_val = float(candle.get("close", 0) or o or 0)
+            lower_body = min(o, c_val)
+            if h > l and h > 0:
+                rng = h - l
+                wick_pct = (lower_body - l) / rng if rng > 0 else 0.0
+                wick_size = lower_body - l
+                if wick_pct > 0.6 and wick_size >= rng * 0.005:
+                    result["detected"] = True
+            return result
+
+        # 3. Daily OHLCV dict
+        ohlcv = ta_data.get("daily_ohlcv") or ta_data.get("ohlcv_1d")
+        if isinstance(ohlcv, dict):
+            h = float(ohlcv.get("high", 0) or 0)
+            l = float(ohlcv.get("low", 0) or 0)
+            o = float(ohlcv.get("open", 0) or 0)
+            c_val = float(ohlcv.get("close", 0) or 0)
+            lower_body = min(o, c_val)
+            if h > l and h > 0:
+                rng = h - l
+                wick_pct = (lower_body - l) / rng if rng > 0 else 0.0
+                wick_size = lower_body - l
+                if wick_pct > 0.6 and wick_size >= rng * 0.005:
+                    result["detected"] = True
+            return result
+
+        # 4. Price history fallback
+        if len(price_history) >= 3:
+            recent = price_history[-3:]
+            h, l_val, c_val = max(recent), min(recent), recent[-1]
+            lower_body = min(recent[-1], recent[-2])
+            if h > l_val and h > 0:
+                rng = h - l_val
+                wick_pct = (lower_body - l_val) / rng if rng > 0 else 0.0
+                wick_size = lower_body - l_val
+                if wick_pct > 0.6 and wick_size >= rng * 0.005:
+                    result["detected"] = True
+        return result
+
+    def _check_fear_greed_extreme(
+        self, fear_greed_index: Optional[int] = None, ta_data: Optional[Dict] = None
+    ) -> Dict:
+        """
+        Check for extreme Fear & Greed reading.
+        F&G <= FEAR_GREED_EXTREME_MAX (25) = extreme fear.
+        """
+        result = {"detected": False}
+        fg = fear_greed_index
+        if fg is None and ta_data:
+            fg = ta_data.get("fear_greed_index")
+        if fg is not None:
+            try:
+                fg = int(fg)
+                result["detected"] = fg <= FEAR_GREED_EXTREME_MAX
+            except (ValueError, TypeError):
+                pass
+        return result
 
     def _check_capitulation_volume(
         self, volume_history: List[float], ta_data: Dict
@@ -514,11 +625,13 @@ class BottomDetector:
         Returns weights and contributions of each signal.
         """
         weights = {
-            "capitulation_volume": 0.2,
-            "rsi_divergence": 0.2,
-            "support_hold": 0.2,
-            "whale_accumulation": 0.2,
-            "sentiment_shift": 0.2,
+            "capitulation_volume": 0.20,
+            "rsi_divergence": 0.20,
+            "support_hold": 0.20,
+            "whale_accumulation": 0.05,
+            "sentiment_shift": 0.15,
+            "long_lower_wick": 0.10,
+            "fear_greed_extreme": 0.10,
         }
 
         breakdown = {}

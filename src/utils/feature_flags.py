@@ -40,6 +40,10 @@ class FeatureFlag:
     POLY_PREEMPTION_V2_ENABLED = "poly_preemption_v2_enabled"
     POLY_TERMINAL_DURABILITY_V2_ENABLED = "poly_terminal_durability_v2_enabled"
     POLYMARKET_ARB_VARIANT = "polymarket_arb_variant"
+    POWER_LAW_ZONE_DETECTION = "power_law_zone_detection"
+    INSTITUTIONAL_FLOW_DETECTION = "institutional_flow_detection"
+    CAPITULATION_DETECTION_V2 = "capitulation_detection_v2"
+    MACRO_ZONE_FILTER_LIGHTER = "macro_zone_filter_lighter"
 
 
 
