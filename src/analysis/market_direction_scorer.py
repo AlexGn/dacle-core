@@ -57,6 +57,17 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 
 _WEIGHTS_CACHE: Optional[dict] = None
 
+_BTC_PRICE_FLOOR_USD = 1000.0
+
+
+def _validate_btc_price(price: float) -> tuple:
+    """Validate a BTC price value. Returns (price_or_none, reason_string)."""
+    if price <= 0:
+        return (None, "zero" if price == 0 else "negative")
+    if price < _BTC_PRICE_FLOOR_USD:
+        return (price, "below_floor")
+    return (price, None)
+
 
 def load_weights() -> dict:
     """Load signal weights from config/market_direction_weights.json.
@@ -1054,7 +1065,16 @@ async def _calculate_direction_bias_impl(use_realism: bool = False) -> Direction
             if klines_resp.status_code == 200 and ticker_resp.status_code == 200:
                 closes = [float(k[4]) for k in klines_resp.json()]
                 ticker = ticker_resp.json()
-                btc_price = float(ticker["lastPrice"])
+                btc_price_raw = float(ticker["lastPrice"])
+                btc_price_validated, _price_reason = _validate_btc_price(btc_price_raw)
+                if btc_price_validated is None:
+                    logger.warning(
+                        "BTC price validation failed: raw=%s reason=%s — using 0.0",
+                        btc_price_raw, _price_reason,
+                    )
+                    btc_price = None
+                else:
+                    btc_price = btc_price_validated
                 btc_change_24h = float(ticker["priceChangePercent"])
 
                 # EMA20

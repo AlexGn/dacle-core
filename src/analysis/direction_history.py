@@ -65,21 +65,42 @@ class DirectionHistory:
 
     def _migrate_v1(self) -> None:
         """Import entries from v1 market_direction_history.json format."""
+        import logging
+        _log = logging.getLogger(__name__)
         try:
             v1_data = json.loads(self._v1_path.read_text())
+        except json.JSONDecodeError:
+            _log.warning(
+                "DirectionHistory: v1 migration skipped — invalid JSON in %s",
+                self._v1_path,
+            )
+            return
+        try:
             v1_entries = v1_data.get("entries", [])
-            for e in v1_entries:
-                self._entries.append({
-                    "timestamp": e.get("timestamp", ""),
-                    "bias": e.get("bias", "UNKNOWN"),
-                    "score": e.get("score", 0.0),
-                    "confidence_pct": e.get("confidence_pct", 0),
-                    "signal_count": e.get("signal_count", 0),
-                    "btc_price": e.get("btc_price", 0.0),
-                })
-            self._save()
-        except (json.JSONDecodeError, KeyError):
-            pass
+        except KeyError:
+            _log.warning(
+                "DirectionHistory: v1 migration skipped — malformed v1 data (missing entries key)"
+            )
+            return
+        missing_price = 0
+        for e in v1_entries:
+            if "btc_price" not in e:
+                missing_price += 1
+            self._entries.append({
+                "timestamp": e.get("timestamp", ""),
+                "bias": e.get("bias", "UNKNOWN"),
+                "score": e.get("score", 0.0),
+                "confidence_pct": e.get("confidence_pct", 0),
+                "signal_count": e.get("signal_count", 0),
+                "btc_price": e.get("btc_price", 0.0),
+            })
+        if missing_price:
+            _log.info(
+                "DirectionHistory: v1 migration — %d/%d entries missing btc_price (defaulting to 0.0)",
+                missing_price,
+                len(v1_entries),
+            )
+        self._save()
 
     def _save(self) -> None:
         """Persist entries atomically."""
