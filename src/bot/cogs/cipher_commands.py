@@ -625,6 +625,21 @@ def _check_signal_flip(
     return None
 
 
+def _to_float(val):
+    """Coerce to float, or None if not numeric. Use for safe comparisons on
+    cipher snapshot attrs that may be None or deserialised as str."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fnum(val, spec=".1f"):
+    """Safely format a numeric value with a float spec; 'N/A' for None/non-numeric."""
+    f = _to_float(val)
+    return format(f, spec) if f is not None else "N/A"
+
+
 def _indicator_lines(snap) -> list[str]:
     """Build detailed indicator text lines from a cipher snapshot."""
     lines: list[str] = []
@@ -641,13 +656,13 @@ def _indicator_lines(snap) -> list[str]:
         long_flag = " 🔔 LONG" if wt.long_signal else ""
         short_flag = " 🔔 SHORT" if wt.short_signal else ""
         lines.append(
-            f"WaveTrend: WT1={_fmt(wt.wt1):.2f} WT2={_fmt(wt.wt2):.2f} "
+            f"WaveTrend: WT1={_fnum(wt.wt1, '.2f')} WT2={_fnum(wt.wt2, '.2f')} "
             f"Zone={zone_e}{wt.zone}{long_flag}{short_flag}"
         )
 
     if snap.mfi:
         mfi_e = "🟢" if snap.mfi.is_bullish else "🔴"
-        lines.append(f"MFI: {mfi_e} {_fmt(snap.mfi.value):.3f}")
+        lines.append(f"MFI: {mfi_e} {_fnum(snap.mfi.value, '.3f')}")
 
     if snap.macd:
         macd_e = (
@@ -656,7 +671,7 @@ def _indicator_lines(snap) -> list[str]:
             else "🔴" if snap.macd.direction == "bearish" else "🟡"
         )
         lines.append(
-            f"MACD: {macd_e} {snap.macd.direction} (hist={_fmt(snap.macd.histogram):.4f})"
+            f"MACD: {macd_e} {snap.macd.direction} (hist={_fnum(snap.macd.histogram, '.4f')})"
         )
 
     if snap.stochastic:
@@ -665,13 +680,14 @@ def _indicator_lines(snap) -> list[str]:
             "🟢" if st.zone == "oversold" else "🔴" if st.zone == "overbought" else "🟡"
         )
         lines.append(
-            f"Stochastic: {st_e} K={_fmt(st.k):.1f} D={_fmt(st.d):.1f} ({st.zone})"
+            f"Stochastic: {st_e} K={_fnum(st.k, '.1f')} D={_fnum(st.d, '.1f')} ({st.zone})"
         )
 
-    if snap.choppiness is not None:
-        chop_e = "⚪" if snap.choppiness > 61.8 else "🟢"
-        chop_label = "CHOPPY (ranging)" if snap.choppiness > 61.8 else "TRENDING"
-        lines.append(f"Choppiness: {chop_e} {_fmt(snap.choppiness):.1f} — {chop_label}")
+    chop_f = _to_float(snap.choppiness)
+    if chop_f is not None:
+        chop_e = "⚪" if chop_f > 61.8 else "🟢"
+        chop_label = "CHOPPY (ranging)" if chop_f > 61.8 else "TRENDING"
+        lines.append(f"Choppiness: {chop_e} {_fnum(chop_f, '.1f')} — {chop_label}")
 
     gold_signal = getattr(snap, "gold_signal", False)
     if gold_signal:
@@ -720,7 +736,7 @@ def _build_checklist(snap) -> list[str]:
     if wt:
         dot_ok = wt.long_signal or wt.short_signal
         lines.append(
-            f"{'🟢' if dot_ok else '🔴'} Green/Red Dot  (WT1={wt.wt1:.1f} WT2={wt.wt2:.1f})"
+            f"{'🟢' if dot_ok else '🔴'} Green/Red Dot  (WT1={_fnum(wt.wt1, '.1f')} WT2={_fnum(wt.wt2, '.1f')})"
         )
     else:
         lines.append("⚪ Green/Red Dot  (no data)")
@@ -737,9 +753,10 @@ def _build_checklist(snap) -> list[str]:
 
     st = getattr(snap, "stochastic", None)
     if st:
-        sto_ok = st.k > 50
+        k_f = _to_float(st.k)
+        sto_ok = k_f is not None and k_f > 50
         lines.append(
-            f"{'🟢' if sto_ok else '🔴'} STO {'> 50' if sto_ok else '< 50'}  (K={st.k:.1f})"
+            f"{'🟢' if sto_ok else '🔴'} STO {'> 50' if sto_ok else '< 50'}  (K={_fnum(st.k, '.1f')})"
         )
     else:
         lines.append("⚪ STO  (no data)")
@@ -747,7 +764,7 @@ def _build_checklist(snap) -> list[str]:
     mfi = getattr(snap, "mfi", None)
     if mfi:
         lines.append(
-            f"{'🟢' if mfi.is_bullish else '🔴'} MFI {'bullish' if mfi.is_bullish else 'bearish'}  ({mfi.value:.1f})"
+            f"{'🟢' if mfi.is_bullish else '🔴'} MFI {'bullish' if mfi.is_bullish else 'bearish'}  ({_fnum(mfi.value, '.1f')})"
         )
     else:
         lines.append("⚪ MFI  (no data)")
@@ -755,16 +772,17 @@ def _build_checklist(snap) -> list[str]:
     vwap = getattr(snap, "vwap", None)
     if vwap:
         lines.append(
-            f"{'🟢' if vwap.above_zero else '🔴'} VWAP {'above' if vwap.above_zero else 'below'} zero  ({vwap.value:.1f})"
+            f"{'🟢' if vwap.above_zero else '🔴'} VWAP {'above' if vwap.above_zero else 'below'} zero  ({_fnum(vwap.value, '.1f')})"
         )
     else:
         lines.append("⚪ VWAP  (no data)")
 
     chop = getattr(snap, "choppiness", None)
-    if chop is not None:
-        trending = chop < 61.8
+    chop_f = _to_float(chop)
+    if chop_f is not None:
+        trending = chop_f < 61.8
         lines.append(
-            f"{'🟢' if trending else '🔴'} Choppiness {'< 61.8 (trending)' if trending else '> 61.8 (ranging)'}  ({chop:.1f})"
+            f"{'🟢' if trending else '🔴'} Choppiness {'< 61.8 (trending)' if trending else '> 61.8 (ranging)'}  ({_fnum(chop_f, '.1f')})"
         )
     else:
         lines.append("⚪ Choppiness  (no data)")
@@ -975,7 +993,8 @@ def _build_setup_embed(
 
     # Choppiness
     chop = getattr(snap_4h, "choppiness", None)
-    is_choppy = chop is not None and chop > 61.8
+    chop_f = _to_float(chop)
+    is_choppy = chop_f is not None and chop_f > 61.8
 
     # Direction consensus
     token_bullish = snap_4h.signal in bullish or sc_4h["category"] in (
@@ -1239,10 +1258,10 @@ def _build_overview_embed(snapshots: dict) -> discord.Embed:
             )
             wt_str = ""
             if snap.wavetrend:
-                wt_str = f" WT1={snap.wavetrend.wt1:.1f}"
+                wt_str = f" WT1={_fnum(snap.wavetrend.wt1, '.1f')}"
             chop_str = ""
             if snap.choppiness:
-                chop_str = f" Chop={snap.choppiness:.0f}"
+                chop_str = f" Chop={_fnum(snap.choppiness, '.0f')}"
             lines.append(
                 f"{emoji} `{key:<10}` **{snap.signal}** ({conf_pct}%){score_str}{wt_str}{chop_str}"
             )
@@ -1301,13 +1320,13 @@ def _build_detail_embed(index_key: str, snap) -> discord.Embed:
         short_flag = " 🔔 SHORT SIGNAL" if wt.short_signal else ""
         embed.add_field(
             name="WaveTrend",
-            value=f"WT1={wt.wt1:.2f}  WT2={wt.wt2:.2f}  Zone={zone_e}{wt.zone}{long_flag}{short_flag}",
+            value=f"WT1={_fnum(wt.wt1, '.2f')}  WT2={_fnum(wt.wt2, '.2f')}  Zone={zone_e}{wt.zone}{long_flag}{short_flag}",
             inline=False,
         )
 
     if snap.mfi:
         mfi_e = "🟢" if snap.mfi.is_bullish else "🔴"
-        embed.add_field(name="MFI", value=f"{mfi_e} {snap.mfi.value:.3f}", inline=True)
+        embed.add_field(name="MFI", value=f"{mfi_e} {_fnum(snap.mfi.value, '.3f')}", inline=True)
 
     if snap.macd:
         macd_e = (
@@ -1317,7 +1336,7 @@ def _build_detail_embed(index_key: str, snap) -> discord.Embed:
         )
         embed.add_field(
             name="MACD",
-            value=f"{macd_e} {snap.macd.direction} (hist={snap.macd.histogram:.4f})",
+            value=f"{macd_e} {snap.macd.direction} (hist={_fnum(snap.macd.histogram, '.4f')})",
             inline=True,
         )
 
@@ -1328,16 +1347,17 @@ def _build_detail_embed(index_key: str, snap) -> discord.Embed:
         )
         embed.add_field(
             name="Stochastic",
-            value=f"{st_e} K={st.k:.1f} D={st.d:.1f} ({st.zone})",
+            value=f"{st_e} K={_fnum(st.k, '.1f')} D={_fnum(st.d, '.1f')} ({st.zone})",
             inline=True,
         )
 
-    if snap.choppiness is not None:
-        chop_e = "⚪" if snap.choppiness > 61.8 else "🟢"
-        chop_label = "CHOPPY (ranging)" if snap.choppiness > 61.8 else "TRENDING"
+    chop_f = _to_float(snap.choppiness)
+    if chop_f is not None:
+        chop_e = "⚪" if chop_f > 61.8 else "🟢"
+        chop_label = "CHOPPY (ranging)" if chop_f > 61.8 else "TRENDING"
         embed.add_field(
             name="Choppiness",
-            value=f"{chop_e} {snap.choppiness:.1f} — {chop_label}",
+            value=f"{chop_e} {_fnum(chop_f, '.1f')} — {chop_label}",
             inline=True,
         )
 
@@ -1390,7 +1410,7 @@ def _build_detail_embed(index_key: str, snap) -> discord.Embed:
         div_e = "🟢" if snap.cvd.divergence_type == "positive" else "🔴"
         embed.add_field(
             name="CVD Divergence",
-            value=f"{div_e} {snap.cvd.divergence_type} (str={snap.cvd.strength:.2f})",
+            value=f"{div_e} {snap.cvd.divergence_type} (str={_fnum(snap.cvd.strength, '.2f')})",
             inline=True,
         )
 
@@ -1885,14 +1905,14 @@ class CipherCommands(commands.Cog):
             )
 
     @app_commands.command(
-        name="setup",
+        name="cipher-setup",
         description="Full GO/NO-GO setup card for a token: cipher + macro context + verdict",
     )
     @app_commands.describe(symbol="Token symbol e.g. BTC, ETH, SOL, ARB")
     async def setup(self, interaction: discord.Interaction, symbol: str):
         """Unified setup decision card combining token + macro + risk guards."""
         await safe_defer(
-            interaction, ephemeral=False, command_name="setup", logger=logger
+            interaction, ephemeral=False, command_name="cipher-setup", logger=logger
         )
 
         try:
@@ -2056,7 +2076,7 @@ class CipherCommands(commands.Cog):
             if len(series.get("closes", [])) < 35:
                 await safe_send(
                     interaction,
-                    command_name="setup",
+                    command_name="cipher-setup",
                     logger=logger,
                     content=(
                         f"Could not load enough data for `{symbol}`: only {len(series.get('closes', []))} bars "
@@ -2111,14 +2131,14 @@ class CipherCommands(commands.Cog):
                 symbol, snap_4h, snap_1d, price, macro_snaps, cached_close=cached_close
             )
             await safe_send(
-                interaction, command_name="setup", logger=logger, embed=embed
+                interaction, command_name="cipher-setup", logger=logger, embed=embed
             )
 
         except Exception as e:
             logger.error("[setup] Command error: %s", e, exc_info=True)
             await safe_send(
                 interaction,
-                command_name="setup",
+                command_name="cipher-setup",
                 logger=logger,
                 content=f"Failed to build setup card for `{symbol}`. Error: {e}",
             )
