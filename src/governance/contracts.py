@@ -8,7 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict
+
+from pydantic import BaseModel, Field
 
 KEY_SOVEREIGN_KILL = "sovereign:kill:v1"
 KEY_SOVEREIGN_TIER = "sovereign:tier:v1"
@@ -90,3 +92,17 @@ class SovereignDecision:
             "override_applied": self.override_applied,
             "ts": self.ts,
         }
+
+
+class KillSwitch(BaseModel):
+    """
+    Immediate Halt Contract.
+    Written by: OpenClaw (Discord) or Safety Supervisor.
+    Read by: Scalper Daemon (Hot Loop).
+    """
+
+    active: bool = False
+    ts: datetime = Field(default_factory=datetime.utcnow)
+    actor: str
+    reason: str
+    ttl_sec: int = 3600
