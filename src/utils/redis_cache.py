@@ -41,18 +41,20 @@ Session 263 Optimization Impact:
 - Cost: $0 (Redis already deployed)
 """
 
+import functools
 import json
 import logging
-import functools
-from typing import Any, Callable, Optional, Union
+import os
 from datetime import timedelta
 from enum import Enum
+from typing import Any, Callable, Optional, Union
 
 logger = logging.getLogger(__name__)
 
 # Try to import redis
 try:
     import redis
+
     REDIS_AVAILABLE = True
 except ImportError:
     redis = None  # type: ignore
@@ -73,10 +75,10 @@ class RedisCache:
 
     def __init__(
         self,
-        host: str = 'localhost',
+        host: str = "localhost",
         port: int = 6379,
         db: int = 0,
-        key_prefix: str = 'dacle'
+        key_prefix: Optional[str] = None,
     ):
         """
         Initialize Redis cache.
@@ -85,13 +87,18 @@ class RedisCache:
             host: Redis server host
             port: Redis server port
             db: Redis database number (0-15)
-            key_prefix: Global prefix for all keys (default: 'dacle')
+            key_prefix: Global prefix for all keys. Defaults to the
+                DACLE_KEY_PREFIX env var, falling back to 'dacle' so each
+                pillar repo can namespace its keys (see
+                docs/plans/polymarket-pillar-split.md).
         """
-        self.key_prefix = key_prefix
+        self.key_prefix = key_prefix or os.getenv("DACLE_KEY_PREFIX", "dacle")
         self.enabled = REDIS_AVAILABLE
 
         if not REDIS_AVAILABLE:
-            logger.warning("⚠️ Redis not available - caching disabled (install: pip install redis)")
+            logger.warning(
+                "⚠️ Redis not available - caching disabled (install: pip install redis)"
+            )
             self.client = None
             return
 
@@ -102,7 +109,7 @@ class RedisCache:
                 port=port,
                 db=db,
                 decode_responses=True,  # Auto-decode bytes to strings
-                max_connections=10
+                max_connections=10,
             )
             self.client = redis.Redis(connection_pool=pool)
 
@@ -133,10 +140,7 @@ class RedisCache:
         return ":".join(parts)
 
     def get(
-        self,
-        key: str,
-        namespace: Optional[str] = None,
-        default: Any = None
+        self, key: str, namespace: Optional[str] = None, default: Any = None
     ) -> Any:
         """
         Get value from cache.
@@ -172,7 +176,7 @@ class RedisCache:
         value: Any,
         ttl_seconds: Optional[int] = None,
         namespace: Optional[str] = None,
-        ttl: Optional[int] = None
+        ttl: Optional[int] = None,
     ) -> bool:
         """
         Set value in cache with optional TTL.
@@ -356,20 +360,19 @@ class RedisCache:
             return {"enabled": False}
 
         try:
-            info = self.client.info('stats')
-            memory = self.client.info('memory')
+            info = self.client.info("stats")
+            memory = self.client.info("memory")
 
             return {
                 "enabled": True,
                 "total_keys": self.client.dbsize(),
-                "hits": info.get('keyspace_hits', 0),
-                "misses": info.get('keyspace_misses', 0),
+                "hits": info.get("keyspace_hits", 0),
+                "misses": info.get("keyspace_misses", 0),
                 "hit_rate": self._calculate_hit_rate(
-                    info.get('keyspace_hits', 0),
-                    info.get('keyspace_misses', 0)
+                    info.get("keyspace_hits", 0), info.get("keyspace_misses", 0)
                 ),
-                "memory_used_mb": memory.get('used_memory', 0) / (1024 * 1024),
-                "memory_peak_mb": memory.get('used_memory_peak', 0) / (1024 * 1024)
+                "memory_used_mb": memory.get("used_memory", 0) / (1024 * 1024),
+                "memory_peak_mb": memory.get("used_memory_peak", 0) / (1024 * 1024),
             }
 
         except Exception as e:
@@ -400,7 +403,7 @@ def with_redis_cache(
     ttl_seconds: int = 300,
     key_prefix: str = "",
     namespace: Optional[str] = None,
-    ttl: Optional[int] = None
+    ttl: Optional[int] = None,
 ):
     """
     Decorator to cache function results in Redis.
@@ -453,6 +456,7 @@ def with_redis_cache(
             return result
 
         return wrapper
+
     return decorator
 
 
@@ -480,10 +484,12 @@ if __name__ == "__main__":
     @with_redis_cache(ttl_seconds=5, namespace="test")
     def expensive_function(x: int) -> int:
         import time
+
         time.sleep(0.5)  # Simulate expensive operation
         return x * 2
 
     import time
+
     start = time.time()
     result1 = expensive_function(21)
     duration1 = time.time() - start
