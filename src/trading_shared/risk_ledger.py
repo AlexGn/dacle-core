@@ -3,14 +3,15 @@ DACLE Scalper Global Risk Ledger — Session 451 (Phase 3)
 Redis-backed atomic exposure ledger using integer cents.
 """
 
-import logging
 from typing import Any, Optional
 
 try:
     import redis.asyncio as aioredis
-except ModuleNotFoundError:  # pragma: no cover - allows import in test envs without redis installed
+except (
+    ModuleNotFoundError
+):  # pragma: no cover - allows import in test envs without redis installed
     aioredis = None
-from src.lighter.contracts import KEY_GLOBAL_EXPOSURE_CENTS_V1, GateRejectCode
+from src.trading_shared.contracts import KEY_GLOBAL_EXPOSURE_CENTS_V1, GateRejectCode
 from src.utils.logger import get_logger
 
 _LEASE_TTL_SEC = 900  # 15 minutes
@@ -49,7 +50,8 @@ class GlobalRiskLedger:
     ) -> tuple[bool, str]:
         """
         Atomically reserve notional_usd in the ledger.
-        Returns (True, CLEAR) if within cap, (False, GLOBAL_EXPOSURE_CAP_EXCEEDED) otherwise.
+        Returns (True, CLEAR) if within cap, (False,
+        GLOBAL_EXPOSURE_CAP_EXCEEDED) otherwise.
         On Redis failure, fails CLOSED.
         """
         if is_reduce_only:
