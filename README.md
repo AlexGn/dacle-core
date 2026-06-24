@@ -9,15 +9,15 @@ Shared core package for the DACLE pillar repos:
 
 This repo contains genuinely shared code consumed by both pillars:
 
-- `src/trading_shared/` — capital models, allocation, risk ledger, shared contracts, base interfaces
-- `src/utils/` — atomic writes, config, Redis, logging, network, exception handling
-- `src/governance/` — shared governance contracts (KillSwitch)
-- `src/ta/` — Market Cipher engine and shared TA primitives
-- `src/data/` — OHLCV/cache services and shared fetchers
-- `src/analysis/` — market direction cache, capital rotation detector, binary context
-- `src/execution/` — shared execution primitives (v2 models, reconciliation, venue adapter, etc.)
-- `src/monitoring/` — shared heartbeat primitives
-- `src/bot/` — minimal shared bot utilities (not cogs)
+- `dacle_core/trading_shared/` — capital models, allocation, risk ledger, shared contracts, base interfaces
+- `dacle_core/utils/` — atomic writes, config, Redis, logging, network, exception handling
+- `dacle_core/governance/` — shared governance contracts (KillSwitch)
+- `dacle_core/ta/` — Market Cipher engine and shared TA primitives
+- `dacle_core/data/` — OHLCV/cache services and shared fetchers
+- `dacle_core/analysis/` — market direction cache, capital rotation detector, binary context
+- `dacle_core/execution/` — shared execution primitives (v2 models, reconciliation, venue adapter, etc.)
+- `dacle_core/monitoring/` — shared heartbeat primitives
+- `dacle_core/bot/` — minimal shared bot utilities (not cogs)
 
 ## Usage
 
