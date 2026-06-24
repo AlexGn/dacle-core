@@ -1,7 +1,7 @@
 [project]
-name = "dacle"
-version = "2.3.3"
-description = "David's Automated Crypto Learning Engine - Second Brain Knowledge Management System"
+name = "dacle-core"
+version = "0.1.0"
+description = "Shared core package for dacle-polymarket and dacle-lighter"
 authors = [
     {name = "Alex", email = "alex@example.com"}
 ]
@@ -9,88 +9,40 @@ readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.110.0",
-    "uvicorn[standard]==0.27.1",
-    "discord.py>=2.3.2",
-    "supabase>=2.3.0",
-    "psycopg2-binary>=2.9.9",
-    "pgvector>=0.2.4",
-    "redis[hiredis]>=5.0.1",  # Async Redis with high-performance parser (Session 265)
-    "anthropic>=0.7.7",
-    "numpy>=1.26.2",
-    "scipy>=1.11.0",  # Statistical analysis (Spearman correlation, bootstrap)
-    "tenacity>=8.2.3",  # Retry logic with exponential backoff (Phase 2)
     "httpx>=0.25.2",
-    "pydantic>=2.5.2",
-    "pandas>=2.1.4",
     "python-dotenv>=1.0.0",
+    "pydantic>=2.5.2",
+    "redis[hiredis]>=5.0.1",
+    "numpy>=1.26.2",
+    "pandas>=2.1.4",
+    "scipy>=1.11.0",
+    "tenacity>=8.2.3",
     "python-dateutil>=2.8.2",
-    "python-multipart>=0.0.9",
-    "PyJWT>=2.10.1",
-    "feedparser>=6.0.10",  # For Coinbase Blog RSS parsing
-    "twikit>=2.3.3",  # Mercury Twitter/X source integration
-    "python-telegram-bot>=20.0",  # Telegram Entry Timer Bot
-    "ccxt>=4.0.0",  # Exchange integration for TA data
-    "beautifulsoup4>=4.12.0",  # Web scraping for data collection
-    "lxml>=4.9.0",  # XML/HTML parser for BeautifulSoup
-    "openai>=2.8.0",  # GPT-4o-mini for TGE research fallback + FDV validation (Session 263: Vision deprecated)
-    "notion-client>=2.2.1",  # Notion API integration for TGE database sync
-    "sentry-sdk>=1.40.0",  # Production error tracking and alerting
-    "psutil>=5.9.0",  # System resource monitoring for VPS health checks
-    "joblib>=1.3.0",  # ML model serialization (used by ml_validator.py)
-    "yfinance>=0.2.36",  # Robust Yahoo Finance data fetching (Session 348)
-    "lancedb>=0.4.0",
-    "web3>=6.0.0",
-    "eth-account>=0.8.0",
-    "websockets>=11.0",
+    "pyyaml>=6.0.1",
     "aiohttp>=3.8.0",
-    "lighter-sdk>=1.0.3",
+    "websockets>=11.0",
     "orjson>=3.9.0",
-    "py-clob-client>=0.34.6",
-    "poly-eip712-structs>=0.0.1",
-    "py-order-utils>=0.3.2",
-    "py-builder-signing-sdk>=0.0.2",
-    "python-dotenv>=1.0.1",
-    "redis[hiredis]>=5.0.1",  # Tier 4: Vector database for long-term memory (Session 402)
-    "sortedcontainers>=2.4.0",  # Session 464: L2 order book for Polymarket (polymarket_order_book.py)
+    "sortedcontainers>=2.4.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.3",
     "pytest-asyncio>=0.21.1",
-    "pytest-cov>=7.0.0",  # Coverage reporting for test suite
-    "pytest-timeout>=2.0.0",  # Test timeout enforcement (used in CI)
-    "hypothesis>=6.0.0",  # Property-based testing for TGE scorer
     "black>=23.11.0",
     "isort>=5.12.0",
     "mypy>=1.7.0",
-    "python-lsp-server[all]>=1.14.0",  # LSP for enhanced Navigator (Session 342)
 ]
-# Session 263: Removed legacy dependencies (Together AI deprecated in Session 261)
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-asyncio_mode = "auto"
-
-[tool.black]
-line-length = 88
-target-version = ['py311']
-include = '\.pyi?$'
-
-[tool.isort]
-profile = "black"
-line_length = 88
-
-[tool.mypy]
-python_version = "3.11"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = true
