@@ -22,5 +22,5 @@ Thumbs.db
 .env.secret
 *.log
 logs/
-data/
+/data/
 tmp/
